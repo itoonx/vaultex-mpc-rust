@@ -131,9 +131,13 @@ fn test_solana_rejects_secp256k1_key() {
 /// Build a minimal valid `TransactionParams` for Sui.
 ///
 /// Sui's `build_sui_transaction` reads:
-///   - `params.extra["sender"]`  → sender address
-///   - `params.to`               → recipient address
+///   - `params.extra["sender"]`  → sender address (must be `0x` + 64 hex chars)
+///   - `params.to`               → recipient address (must be `0x` + 64 hex chars)
 ///   - `params.value`            → amount (parseable as u64)
+///
+/// Default addresses used by the two-argument overload below are:
+///   sender    = `0x000...0001`
+///   recipient = `0x000...0002`
 fn sui_params(to: &str, sender: &str, value: u64) -> TransactionParams {
     TransactionParams {
         to: to.to_string(),
@@ -144,6 +148,15 @@ fn sui_params(to: &str, sender: &str, value: u64) -> TransactionParams {
     }
 }
 
+/// Convenience wrapper that supplies canonical 32-byte zero-padded Sui addresses.
+fn sui_params_default(value: u64) -> TransactionParams {
+    sui_params(
+        "0x0000000000000000000000000000000000000000000000000000000000000002",
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        value,
+    )
+}
+
 /// Test 1: sign_payload produced by build_transaction is a 32-byte Blake2b-256 hash,
 /// not all zeros.
 #[tokio::test]
@@ -151,7 +164,7 @@ async fn test_sui_sign_payload_is_blake2b_hashed() {
     let pubkey = GroupPublicKey::Ed25519(vec![1u8; 32]);
     let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(pubkey);
 
-    let params = sui_params("0xdef", "0xabc", 1000);
+    let params = sui_params_default(1000);
     let unsigned = provider
         .build_transaction(params)
         .await
@@ -175,15 +188,19 @@ async fn test_sui_sign_payload_is_blake2b_hashed() {
 /// Test 2: finalized transaction encodes the Sui wire-format signature correctly.
 ///
 /// Sui serialized-signature format: [0x00] || sig(64 bytes) || pubkey(32 bytes) = 97 bytes.
-/// The `raw_tx` field contains JSON; the 97-byte blob is hex-encoded under the
-/// "signature" key.
+/// After the BCS migration (T-S2-04), `raw_tx` IS the 97-byte raw signature directly —
+/// no JSON wrapper.
 #[tokio::test]
 async fn test_sui_finalize_has_correct_signature_format() {
     let pubkey_bytes = vec![2u8; 32];
     let pubkey = GroupPublicKey::Ed25519(pubkey_bytes.clone());
     let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(pubkey);
 
-    let params = sui_params("0xdef", "0xabc", 1000);
+    let params = sui_params(
+        "0x0000000000000000000000000000000000000000000000000000000000000002",
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        1000,
+    );
     let unsigned = provider
         .build_transaction(params)
         .await
@@ -196,37 +213,28 @@ async fn test_sui_finalize_has_correct_signature_format() {
         .finalize_transaction(&unsigned, &mpc_sig)
         .expect("finalize_transaction should succeed");
 
-    // raw_tx is JSON: {"tx_bytes": "<hex>", "signature": "<hex>"}
-    let raw_json: serde_json::Value =
-        serde_json::from_slice(&signed.raw_tx).expect("raw_tx must be valid JSON");
-
-    let sig_hex = raw_json["signature"]
-        .as_str()
-        .expect("signature field must be a string");
-
-    let sui_sig = hex::decode(sig_hex).expect("signature must be valid hex");
-
+    // raw_tx is the 97-byte Sui serialized signature directly (BCS migration)
     // 97 bytes total: flag(1) + ed25519_sig(64) + ed25519_pubkey(32)
     assert_eq!(
-        sui_sig.len(),
+        signed.raw_tx.len(),
         97,
         "Sui serialized signature must be 97 bytes, got {}",
-        sui_sig.len()
+        signed.raw_tx.len()
     );
 
     // Byte 0: Ed25519 scheme flag = 0x00
-    assert_eq!(sui_sig[0], 0x00, "first byte must be Ed25519 flag 0x00");
+    assert_eq!(signed.raw_tx[0], 0x00, "first byte must be Ed25519 flag 0x00");
 
     // Bytes 1..65: the 64-byte EdDSA signature
     assert_eq!(
-        &sui_sig[1..65],
+        &signed.raw_tx[1..65],
         &[3u8; 64],
         "bytes 1..65 must be the EdDSA signature"
     );
 
     // Bytes 65..97: the 32-byte Ed25519 public key
     assert_eq!(
-        &sui_sig[65..97],
+        &signed.raw_tx[65..97],
         pubkey_bytes.as_slice(),
         "bytes 65..97 must be the Ed25519 public key"
     );
@@ -238,7 +246,7 @@ async fn test_sui_rejects_wrong_key_type_in_build() {
     let pubkey = GroupPublicKey::Secp256k1(vec![4u8; 33]);
     let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(pubkey);
 
-    let params = sui_params("0xdef", "0xabc", 1000);
+    let params = sui_params_default(1000);
     let result = provider.build_transaction(params).await;
 
     assert!(
@@ -367,7 +375,7 @@ async fn test_sui_rejects_wrong_signature_type_in_finalize() {
     let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(pubkey);
 
     // Build a valid unsigned transaction first
-    let params = sui_params("0xdef", "0xabc", 1000);
+    let params = sui_params_default(1000);
     let unsigned = provider
         .build_transaction(params)
         .await
@@ -740,4 +748,83 @@ async fn test_sui_build_with_sender_validates_address() {
     let bad_sender = "not-a-valid-address";
     let result = provider.build_transaction_with_sender(params, bad_sender).await;
     assert!(result.is_err(), "invalid sender must return error");
+}
+
+// ============================================================================
+// Sui address validation — invalid hex characters (SEC-023 fix, LESSON-012)
+// ============================================================================
+
+/// SEC-023: validate_sui_address must reject `0x` + 64 chars that are not valid hex.
+#[test]
+fn test_sui_validate_address_invalid_hex_chars() {
+    // 0x + 64 chars but not valid hex (contains 'g')
+    let bad = "0xgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg";
+    let result = mpc_wallet_chains::sui::tx::validate_sui_address(bad);
+    assert!(result.is_err(), "address with invalid hex chars must fail: {:?}", result);
+}
+
+// ============================================================================
+// Sui BCS serialization tests (T-S2-04)
+// ============================================================================
+
+/// BCS tx → Blake2b-256 sign_payload must be exactly 32 bytes and non-zero.
+#[tokio::test]
+async fn test_sui_bcs_sign_payload_is_32_bytes() {
+    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
+        GroupPublicKey::Ed25519(vec![1u8; 32])
+    );
+    let params = TransactionParams {
+        to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
+        value: "1000000".to_string(),
+        data: None, chain_id: None,
+        extra: Some(serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"})),
+    };
+    let unsigned = provider.build_transaction(params).await.unwrap();
+    assert_eq!(unsigned.sign_payload.len(), 32, "sign_payload must be 32 bytes (Blake2b-256)");
+    assert_ne!(unsigned.sign_payload, vec![0u8; 32], "sign_payload must not be all zeros");
+}
+
+/// tx_data must be bcs_bytes || pubkey(32): last 32 bytes must equal the provider pubkey.
+///
+/// BCS encoding of SuiTransferPayload(sender[32], recipient[32], amount:u64, ref[32])
+/// is at least 32+32+8+32 = 104 bytes, so tx_data must be > 32 bytes total.
+#[tokio::test]
+async fn test_sui_bcs_tx_data_contains_bcs_plus_pubkey() {
+    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
+        GroupPublicKey::Ed25519(vec![0xAAu8; 32])
+    );
+    let params = TransactionParams {
+        to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
+        value: "500".to_string(),
+        data: None, chain_id: None,
+        extra: Some(serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"})),
+    };
+    let unsigned = provider.build_transaction(params).await.unwrap();
+    // tx_data must be at least 32 bytes longer than the BCS payload alone
+    assert!(unsigned.tx_data.len() > 32, "tx_data must contain BCS bytes + pubkey");
+    // Last 32 bytes must be the pubkey [0xAA; 32]
+    let (_, pubkey_suffix) = unsigned.tx_data.split_at(unsigned.tx_data.len() - 32);
+    assert_eq!(pubkey_suffix, &[0xAAu8; 32], "last 32 bytes of tx_data must be the pubkey");
+}
+
+/// finalize_sui_transaction must produce a 97-byte raw signature with correct layout.
+/// raw_tx = [0x00 | sig(64) | pubkey(32)] — no JSON wrapper (BCS migration).
+#[tokio::test]
+async fn test_sui_bcs_finalize_97_byte_signature() {
+    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
+        GroupPublicKey::Ed25519(vec![0xBBu8; 32])
+    );
+    let params = TransactionParams {
+        to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
+        value: "1000".to_string(),
+        data: None, chain_id: None,
+        extra: Some(serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"})),
+    };
+    let unsigned = provider.build_transaction(params).await.unwrap();
+    let sig = MpcSignature::EdDsa { signature: [0xCCu8; 64] };
+    let signed = provider.finalize_transaction(&unsigned, &sig).unwrap();
+    assert_eq!(signed.raw_tx.len(), 97, "raw_tx must be 97 bytes");
+    assert_eq!(signed.raw_tx[0], 0x00, "byte 0 must be Ed25519 flag 0x00");
+    assert_eq!(&signed.raw_tx[1..65], &[0xCCu8; 64], "bytes 1..65 must be the signature");
+    assert_eq!(&signed.raw_tx[65..97], &[0xBBu8; 32], "bytes 65..97 must be the pubkey");
 }
