@@ -27,6 +27,12 @@ impl BitcoinProvider {
             network: bitcoin::Network::Testnet,
         }
     }
+
+    pub fn signet() -> Self {
+        Self {
+            network: bitcoin::Network::Signet,
+        }
+    }
 }
 
 #[async_trait]

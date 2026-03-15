@@ -247,6 +247,50 @@ async fn test_sui_rejects_wrong_key_type_in_build() {
     );
 }
 
+// ============================================================================
+// Bitcoin testnet / signet address tests (R3b)
+// ============================================================================
+
+#[test]
+fn test_bitcoin_testnet_p2tr_address_prefix() {
+    // BitcoinProvider::testnet() address must start with "tb1p"
+    let provider = mpc_wallet_chains::bitcoin::BitcoinProvider::testnet();
+    let pubkey = GroupPublicKey::Secp256k1([2u8; 33].to_vec());
+    let addr = provider.derive_address(&pubkey).unwrap();
+    assert!(addr.starts_with("tb1p"), "testnet P2TR must start with tb1p, got: {addr}");
+}
+
+#[test]
+fn test_bitcoin_signet_p2tr_address_prefix() {
+    // BitcoinProvider::signet() address must also start with "tb1p"
+    let provider = mpc_wallet_chains::bitcoin::BitcoinProvider::signet();
+    let pubkey = GroupPublicKey::Secp256k1([2u8; 33].to_vec());
+    let addr = provider.derive_address(&pubkey).unwrap();
+    assert!(addr.starts_with("tb1p"), "signet P2TR must start with tb1p, got: {addr}");
+}
+
+#[test]
+fn test_bitcoin_mainnet_p2tr_address_prefix() {
+    // Existing mainnet address test — make sure still starts with "bc1p"
+    let provider = mpc_wallet_chains::bitcoin::BitcoinProvider::mainnet();
+    let pubkey = GroupPublicKey::Secp256k1([2u8; 33].to_vec());
+    let addr = provider.derive_address(&pubkey).unwrap();
+    assert!(addr.starts_with("bc1p"), "mainnet P2TR must start with bc1p, got: {addr}");
+}
+
+#[test]
+fn test_bitcoin_mainnet_testnet_addresses_differ() {
+    // Same pubkey should yield different addresses on mainnet vs testnet
+    let pubkey = GroupPublicKey::Secp256k1([2u8; 33].to_vec());
+    let mainnet_addr = mpc_wallet_chains::bitcoin::BitcoinProvider::mainnet()
+        .derive_address(&pubkey)
+        .unwrap();
+    let testnet_addr = mpc_wallet_chains::bitcoin::BitcoinProvider::testnet()
+        .derive_address(&pubkey)
+        .unwrap();
+    assert_ne!(mainnet_addr, testnet_addr);
+}
+
 /// Test 4: finalize_transaction rejects a non-EdDSA signature type.
 #[tokio::test]
 async fn test_sui_rejects_wrong_signature_type_in_finalize() {
