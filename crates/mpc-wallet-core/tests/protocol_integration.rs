@@ -61,13 +61,102 @@ async fn run_sign(
 }
 
 // ============================================================================
-// GG20 ECDSA tests — only compiled with `gg20-simulation` feature
+// GG20 ECDSA tests
 // ============================================================================
 
-#[cfg(feature = "gg20-simulation")]
 fn gg20_factory() -> Box<dyn MpcProtocol> {
     Box::new(mpc_wallet_core::protocol::gg20::Gg20Protocol::new())
 }
+
+// ── Distributed path (default — `gg20-simulation` OFF) ──────────────────────
+
+/// Distributed 2-of-3 keygen + sign: verify the ECDSA signature cryptographically.
+///
+/// The full private key is NEVER reconstructed.  Each party contributes only
+/// its additive share `s_i = x_i_add · r · k_inv mod n`.  Party 1 assembles
+/// the final signature as `s = hash·k_inv + Σ s_i`.
+///
+/// Structural proof that x is never assembled:
+/// - `distributed_keygen` distributes `x_i_add = λ_i · f(i)`, not `f(i)`.
+/// - `distributed_sign` computes `s_i = x_i_add · r · k_inv` — one scalar
+///   multiply.  There is no call to `lagrange_interpolate` or any code that
+///   sums all shares back into a single scalar outside of the final `s`
+///   assembly (which combines partial `s_i`, not key material).
+#[cfg(not(feature = "gg20-simulation"))]
+#[tokio::test]
+async fn test_gg20_distributed_no_key_reconstruction() {
+    use k256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+
+    let shares = run_keygen(gg20_factory, 2, 3).await;
+
+    assert_eq!(shares[0].scheme, mpc_wallet_core::types::CryptoScheme::Gg20Ecdsa);
+    let gpk = &shares[0].group_public_key;
+    for share in &shares[1..] {
+        assert_eq!(share.group_public_key.as_bytes(), gpk.as_bytes(),
+            "all parties must derive the same group public key");
+    }
+
+    // Sign with parties 1 and 2 (the coordinator is Party 1).
+    let message = b"distributed ecdsa test - no key reconstruction";
+    // sigs[0] is the coordinator's result (the canonical final signature).
+    // sigs[1] is Party 2's partial contribution sentinel.
+    let sigs = run_sign(gg20_factory, &shares, &[0, 1], message).await;
+
+    // The coordinator (Party 1 = index 0) produces the canonical signature.
+    let MpcSignature::Ecdsa { r, s, recovery_id } = &sigs[0] else {
+        panic!("expected ECDSA signature from coordinator");
+    };
+
+    // Basic sanity checks.
+    assert_eq!(r.len(), 32, "r must be 32 bytes");
+    assert_eq!(s.len(), 32, "s must be 32 bytes");
+    assert_ne!(*recovery_id, 0xff, "coordinator must return final signature, not partial sentinel");
+
+    // Cryptographic verification: the signature must verify against the group pubkey.
+    let pubkey = k256::PublicKey::from_sec1_bytes(gpk.as_bytes())
+        .expect("group pubkey must be valid SEC1 compressed point");
+    let vk = VerifyingKey::from(&pubkey);
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes[..32].copy_from_slice(r);
+    sig_bytes[32..].copy_from_slice(s);
+    let sig = Signature::from_bytes(&sig_bytes.into())
+        .expect("assembled (r,s) must form a valid DER signature");
+    vk.verify(message, &sig)
+        .expect("distributed ECDSA signature must cryptographically verify");
+}
+
+/// Verify that different signer subsets both produce valid signatures.
+#[cfg(not(feature = "gg20-simulation"))]
+#[tokio::test]
+async fn test_gg20_distributed_different_subsets() {
+    use k256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+
+    let shares = run_keygen(gg20_factory, 2, 3).await;
+    let gpk = &shares[0].group_public_key;
+    let pubkey = k256::PublicKey::from_sec1_bytes(gpk.as_bytes()).unwrap();
+    let vk = VerifyingKey::from(&pubkey);
+
+    let message = b"different subsets test";
+
+    // Subset {1, 2}
+    let sigs_12 = run_sign(gg20_factory, &shares, &[0, 1], message).await;
+    let MpcSignature::Ecdsa { r, s, .. } = &sigs_12[0] else { panic!(); };
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes[..32].copy_from_slice(r);
+    sig_bytes[32..].copy_from_slice(s);
+    vk.verify(message, &Signature::from_bytes(&sig_bytes.into()).unwrap())
+        .expect("subset {1,2} signature must verify");
+
+    // Subset {1, 3} — party 3's share index is 2 in the shares vec
+    let sigs_13 = run_sign(gg20_factory, &shares, &[0, 2], message).await;
+    let MpcSignature::Ecdsa { r, s, .. } = &sigs_13[0] else { panic!(); };
+    sig_bytes[..32].copy_from_slice(r);
+    sig_bytes[32..].copy_from_slice(s);
+    vk.verify(message, &Signature::from_bytes(&sig_bytes.into()).unwrap())
+        .expect("subset {1,3} signature must verify");
+}
+
+// ── Simulation path (`gg20-simulation` ON — backward compat) ────────────────
 
 #[cfg(feature = "gg20-simulation")]
 #[tokio::test]
@@ -112,7 +201,7 @@ async fn test_gg20_keygen_sign_verify() {
 
 #[cfg(feature = "gg20-simulation")]
 #[tokio::test]
-async fn test_gg20_different_signer_subsets() {
+async fn test_gg20_simulation_different_signer_subsets() {
     let shares = run_keygen(gg20_factory, 2, 3).await;
     let message = b"test different signers";
 

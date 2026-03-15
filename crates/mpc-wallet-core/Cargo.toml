@@ -6,8 +6,9 @@ license.workspace = true
 description = "MPC wallet core: protocols, key storage, and transport"
 
 [features]
-default = []
+default = ["gg20-distributed"]
 gg20-simulation = []
+gg20-distributed = []
 
 [dependencies]
 # MPC protocols
