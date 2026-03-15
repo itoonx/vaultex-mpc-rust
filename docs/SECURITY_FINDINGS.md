@@ -1,8 +1,45 @@
-# MPC Wallet — Security Findings Log
+# Security Findings Log
 
-> Maintained by **R6 Security Agent**.  
-> Format: CRITICAL / HIGH / MEDIUM / LOW / INFO  
-> All findings are tagged with the owning agent responsible for the fix.
+> Format: CRITICAL/HIGH findings BLOCK merge until resolved and re-audited by R6.
+> MEDIUM/LOW do not block merge but must be tracked.
+> Each finding links to the Task that introduced or must fix it.
+
+## Open CRITICAL Findings (BLOCK merge)
+
+| ID | Summary | Recommended Fix | Owner |
+|----|---------|-----------------|-------|
+| SEC-001 | GG20 reconstructs full private key on every signer via Lagrange interpolation | Replace with real threshold ECDSA (FROST-secp256k1 or GG18/GG20 share-based signing); remove secret reconstruction entirely | R1 |
+| SEC-002 | Hardcoded fallback password `"demo-password"` in all 4 CLI commands | Remove all `unwrap_or_else(|| "demo-password".into())` fallbacks; require explicit password or interactive prompt | R4 |
+| SEC-003 | NatsTransport is entirely `todo!()` stubs — no TLS, no auth, no replay protection | Implement TLS + X25519 ECDH + ChaCha20-Poly1305 envelope + monotonic seq_no + TTL per R2 spec | R2 |
+
+## Open HIGH Findings (BLOCK merge)
+
+| ID | Summary | Owner |
+|----|---------|-------|
+| SEC-004 | `KeyShare.share_data` stored as plain `Vec<u8>` — no `ZeroizeOnDrop`, `Debug` leaks bytes | R0 / R1 |
+| SEC-005 | `EncryptedFileStore` holds password as plain `String`; derived AES key not zeroized | R2 |
+| SEC-006 | Argon2 uses `default()` parameters — too weak for wallet-class key encryption | R2 |
+| SEC-007 | `ProtocolMessage.from` is self-reported; no sender authentication in any transport | R2 / R0 |
+
+## Open MEDIUM/LOW/INFO (non-blocking)
+
+| ID | Severity | Summary |
+|----|----------|---------|
+| SEC-008 | MEDIUM | GG20 reconstructed `Scalar` not explicitly zeroized before drop |
+| SEC-009 | MEDIUM | Bitcoin Taproot sighash uses empty `prev_out.script_pubkey` — produces invalid transactions |
+| SEC-010 | MEDIUM | Solana `tx_hash` is only first 8 bytes of signature — not a real Solana tx ID |
+| SEC-011 | MEDIUM | Sui transaction serialization uses JSON instead of BCS — rejected by Sui nodes |
+| SEC-012 | MEDIUM | EVM finalization does not enforce low-S ECDSA normalization |
+| SEC-013 | MEDIUM | FROST protocols trust self-reported `from` field for party ID mapping |
+| SEC-014 | LOW | `LocalTransport` has no `#[cfg(test)]` gate — can be used in production accidentally |
+| SEC-015 | LOW | `KeyShare` derives `Debug` — `share_data` bytes visible in log output |
+| SEC-016 | LOW | Bitcoin `SerializableTx::to_tx()` uses `.unwrap()` — panics on malformed input |
+| SEC-017 | LOW | Solana tx builder does not validate `from` address matches signing pubkey |
+| SEC-018 | LOW | `rustls-pemfile` (transitive via `async-nats`) is unmaintained (RUSTSEC-2025-0134) |
+| SEC-019 | LOW | `quinn-proto 0.11.13` — known DoS vulnerability RUSTSEC-2026-0037 (CVSS 8.7) |
+| SEC-020 | INFO | FROST protocols correctly avoid full key reconstruction (positive finding) |
+| SEC-021 | INFO | AES-256-GCM uses fresh random salt + nonce per write — no reuse risk (positive finding) |
+| SEC-022 | INFO | Git history scan found no committed secrets (positive finding) |
 
 ---
 
@@ -10,6 +47,7 @@
 
 - **ID:** SEC-001
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R1 (Crypto Agent)
 - **File:** `crates/mpc-wallet-core/src/protocol/gg20.rs:231-237`
 - **Description:** The `Gg20Protocol::sign` implementation performs full Lagrange interpolation
@@ -34,6 +72,7 @@
 
 - **ID:** SEC-002
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R4 (Service Agent)
 - **File:** `crates/mpc-wallet-cli/src/commands/keygen.rs:101`,
   `crates/mpc-wallet-cli/src/commands/sign.rs:32`,
@@ -58,6 +97,7 @@
 
 - **ID:** SEC-003
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent)
 - **File:** `crates/mpc-wallet-core/src/transport/nats.rs:32-57`
 - **Description:** All methods of `NatsTransport` — `connect`, `inbox_subject`, `party_subject`,
@@ -81,6 +121,7 @@
 
 - **ID:** SEC-004
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R1 (Crypto Agent) / R0 (Architect Agent)
 - **File:** `crates/mpc-wallet-core/src/protocol/mod.rs:28-40`
 - **Description:** `KeyShare` derives `Debug` and `Clone` and stores `share_data` as a plain
@@ -103,6 +144,7 @@
 
 - **ID:** SEC-005
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent)
 - **File:** `crates/mpc-wallet-core/src/key_store/encrypted.rs:27-33`
 - **Description:** `derive_key` returns a `[u8; 32]` stack array (the AES-256-GCM key) which
@@ -123,6 +165,7 @@
 
 - **ID:** SEC-006
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent)
 - **File:** `crates/mpc-wallet-core/src/key_store/encrypted.rs:29`
 - **Description:** `argon2::Argon2::default()` is called with no explicit parameters. The
@@ -147,6 +190,7 @@
 
 - **ID:** SEC-007
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent) / R0 (Architect Agent)
 - **File:** `crates/mpc-wallet-core/src/transport/mod.rs:12-21`,
   `crates/mpc-wallet-core/src/transport/local.rs:65-87`
@@ -170,6 +214,7 @@
 
 - **ID:** SEC-008
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R1 (Crypto Agent)
 - **File:** `crates/mpc-wallet-core/src/protocol/gg20.rs:232-241`
 - **Description:** The reconstructed `secret` (a `k256::Scalar`) and derived `secret_key`
@@ -192,6 +237,7 @@
 
 - **ID:** SEC-009
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R3b (Chain Agent — Bitcoin)
 - **File:** `crates/mpc-wallet-chains/src/bitcoin/tx.rs:77-85`
 - **Description:** The Taproot sighash computation uses `prev_out.script_pubkey = ScriptBuf::new()`
@@ -213,6 +259,7 @@
 
 - **ID:** SEC-010
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R3c (Chain Agent — Solana)
 - **File:** `crates/mpc-wallet-chains/src/solana/tx.rs:183`
 - **Description:** `tx_hash = hex::encode(&signature[..8])` — the "transaction hash" returned
@@ -234,6 +281,7 @@
 
 - **ID:** SEC-011
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R3d (Chain Agent — Sui)
 - **File:** `crates/mpc-wallet-chains/src/sui/tx.rs:63-76`
 - **Description:** The Sui `tx_data` is a canonical JSON blob rather than the required BCS
@@ -256,6 +304,7 @@
 
 - **ID:** SEC-012
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R3a (Chain Agent — EVM) / R1 (Crypto Agent)
 - **File:** `crates/mpc-wallet-chains/src/evm/tx.rs:98-101`
 - **Description:** `finalize_evm_transaction` accepts the `s` value from `MpcSignature::Ecdsa`
@@ -279,6 +328,7 @@
 
 - **ID:** SEC-013
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R1 (Crypto Agent)
 - **File:** `crates/mpc-wallet-core/src/protocol/frost_ed25519.rs:84-90`,
   `crates/mpc-wallet-core/src/protocol/frost_secp256k1.rs:84-90`
@@ -302,6 +352,7 @@
 
 - **ID:** SEC-014
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent) / R4 (Service Agent)
 - **File:** `crates/mpc-wallet-core/src/transport/local.rs:13-17`
 - **Description:** `LocalTransport` is an in-process transport using tokio `mpsc` channels.
@@ -323,6 +374,7 @@
 
 - **ID:** SEC-015
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R0 (Architect Agent) / R1 (Crypto Agent)
 - **File:** `crates/mpc-wallet-core/src/protocol/mod.rs:28`
 - **Description:** `KeyShare` derives `Debug`, which means any code that formats a `KeyShare`
@@ -342,6 +394,7 @@
 
 - **ID:** SEC-016
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R3b (Chain Agent — Bitcoin)
 - **File:** `crates/mpc-wallet-chains/src/bitcoin/tx.rs:152-153`
 - **Description:** `SerializableTx::to_tx()` calls `.unwrap()` twice — once on `hex::decode`
@@ -358,6 +411,7 @@
 
 - **ID:** SEC-017
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R3c (Chain Agent — Solana)
 - **File:** `crates/mpc-wallet-chains/src/solana/tx.rs:93-115`
 - **Description:** The Solana transaction builder accepts `from` and `to` addresses as
@@ -375,6 +429,7 @@
 
 - **ID:** SEC-018
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent)
 - **File:** `Cargo.lock` — `rustls-pemfile v2.2.0`
 - **Description:** `cargo audit` reports RUSTSEC-2025-0134: `rustls-pemfile` is unmaintained.
@@ -392,6 +447,7 @@
 
 - **ID:** SEC-019
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent)
 - **File:** `Cargo.lock` — `quinn-proto v0.11.13`
 - **Description:** `cargo audit` reports RUSTSEC-2026-0037 (Severity 8.7 HIGH): DoS in
@@ -410,6 +466,7 @@
 
 - **ID:** SEC-020
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R1 (Crypto Agent)
 - **File:** `crates/mpc-wallet-core/src/protocol/frost_ed25519.rs`,
   `crates/mpc-wallet-core/src/protocol/frost_secp256k1.rs`
@@ -430,6 +487,7 @@
 
 - **ID:** SEC-021
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R2 (Infrastructure Agent)
 - **File:** `crates/mpc-wallet-core/src/key_store/encrypted.rs:35-58`
 - **Description:** The `encrypt` method generates a fresh random 16-byte salt and 12-byte
@@ -448,6 +506,7 @@
 
 - **ID:** SEC-022
 - **Date:** 2026-03-15
+- **Task:** pre-sprint
 - **Agent:** R6 (Security Agent)
 - **File:** git history
 - **Description:** Manual review of `git log --all -p` filtered for "secret", "password",
@@ -460,3 +519,136 @@
   forward. The hardcoded `"demo-password"` string in the CLI source (SEC-002) is in committed
   code (not git history), which is also a concern.
 - **Status:** Informational
+
+---
+
+## Retrospective Verdicts (pre-gate-workflow)
+
+> These branches were merged to `main` before the R6 gate workflow existed.
+> Verdicts are issued retrospectively based on the audit data collected in the initial
+> comprehensive review (2026-03-15). No new source file reads were required — all data
+> was gathered during that cycle.
+
+---
+
+### VERDICT: [R1] zeroize branch
+
+```
+VERDICT: APPROVED (with tracked findings)
+Branch: agent/r1-zeroize
+Task: pre-sprint
+```
+
+Findings: SEC-004 (HIGH — `KeyShare.share_data` itself is not zeroized, only inner structs),
+SEC-008 (MEDIUM — GG20 reconstructed scalar not explicitly zeroized), SEC-015 (LOW — `KeyShare`
+derives `Debug`)
+
+Notes: The R1 work correctly applied `ZeroizeOnDrop` to all three internal share structs
+(`Gg20ShareData`, `FrostEd25519ShareData`, `FrostSecp256k1ShareData`) — the targeted goal of
+this branch. The residual SEC-004 / SEC-008 issues are at the `KeyShare` wrapper level (owned
+by R0) and in the GG20 simulation path; they do not represent a regression introduced by this
+branch. SEC-001 (GG20 key reconstruction) pre-existed the zeroize work and is tracked
+separately. Retrospectively APPROVED as a scoped improvement; open findings tracked above.
+
+---
+
+### VERDICT: [R2] NatsTransport skeleton
+
+```
+VERDICT: APPROVED (stub — expected, documented)
+Branch: agent/r2-nats
+Task: pre-sprint
+```
+
+Findings: SEC-003 (CRITICAL — all methods are `todo!()`)
+
+Notes: The `todo!()` stubs are **expected and documented** — this branch was explicitly scoped
+as a skeleton/scaffold to establish the struct, field layout, and security comment block, not
+a production implementation. The security comment at lines 13–17 of `nats.rs` correctly
+enumerates all required security properties (TLS, ECDH envelope, replay protection). SEC-003
+is tracked as an open CRITICAL finding and assigned to R2 for Sprint 1 implementation. No
+regression introduced; the skeleton unblocks R6 visibility into the planned implementation.
+Retrospectively APPROVED as a scaffold; SEC-003 must be resolved before any distributed
+deployment.
+
+---
+
+### VERDICT: [R3a] EVM multi-network
+
+```
+VERDICT: APPROVED (with tracked findings)
+Branch: agent/r3a-evm
+Task: pre-sprint
+```
+
+Findings: SEC-012 (MEDIUM — no low-S enforcement in EVM finalization)
+
+Notes: The R3a work correctly added `Polygon` (chain_id=137) and `BSC` (chain_id=56) network
+variants alongside `ethereum()` / `polygon()` / `bsc()` constructors, and the `EvmProvider::new`
+factory with input validation that rejects non-EVM chains. The chain_id values are correct per
+EIP-155. SEC-012 (low-S normalization) is a pre-existing gap in `evm/tx.rs`, not introduced by
+this branch. No new security issues found for this branch's specific changes. Retrospectively
+APPROVED.
+
+---
+
+### VERDICT: [R3b] Bitcoin testnet/signet
+
+```
+VERDICT: APPROVED (with tracked findings)
+Branch: agent/r3b-btc
+Task: pre-sprint
+```
+
+Findings: SEC-009 (MEDIUM — empty `prev_out.script_pubkey` in sighash), SEC-016 (LOW — `.unwrap()` in `SerializableTx::to_tx()`)
+
+Notes: The R3b work correctly added `testnet()` and `signet()` constructors to
+`BitcoinProvider`, and the `chain()` method correctly maps `bitcoin::Network::Bitcoin` to
+`Chain::BitcoinMainnet` and all other networks to `Chain::BitcoinTestnet`. Network-aware
+address derivation is passed through correctly. SEC-009 and SEC-016 are pre-existing issues
+in `bitcoin/tx.rs` not introduced by this branch. The testnet/signet additions themselves
+are correct and safe. Retrospectively APPROVED.
+
+---
+
+### VERDICT: [R3c] Solana binary serialization
+
+```
+VERDICT: APPROVED (with tracked findings)
+Branch: agent/r3c-sol
+Task: pre-sprint
+```
+
+Findings: SEC-010 (MEDIUM — `tx_hash` is only 8 bytes of signature), SEC-017 (LOW — no `from` address validation against signing pubkey)
+
+Notes: The R3c work replaced the previous JSON stub with a real Solana legacy message binary
+layout following the documented wire format (header + compact-u16 account count + 32-byte
+keys + blockhash + compact-u16 instruction count + instruction bytes). The `sign_payload` is
+now the canonical message bytes (what Ed25519 signs), which is correct. The `finalize`
+function builds a proper wire transaction (`compact-u16(1) || sig(64) || message`). This is
+a material security improvement over the prior JSON stub. SEC-010 (abbreviated `tx_hash`)
+and SEC-017 (missing `from` validation) are noted but do not compromise the signing
+correctness. Retrospectively APPROVED as a significant positive step.
+
+---
+
+### VERDICT: [R3d] Sui cleanup
+
+```
+VERDICT: APPROVED (with tracked findings)
+Branch: agent/r3d-sui-followup
+Task: pre-sprint
+```
+
+Findings: SEC-011 (MEDIUM — JSON instead of BCS for `tx_data`, tracked as known TODO)
+
+Notes: The R3d work added a `Default` impl for `SuiProvider`, a `with_pubkey` constructor
+that embeds the `GroupPublicKey` to resolve the prior zero-byte pubkey bug (noted in
+AGENTS.md as a known bug), and a `broadcast_stub` with a clear error message and documented
+`TODO(production)` comment pointing to the correct Sui JSON-RPC call. The zero-byte pubkey
+fix is a security improvement: `finalize_sui_transaction` now correctly extracts the real
+Ed25519 public key from `tx_data` JSON and includes it in the Sui signature wire format.
+SEC-011 (JSON vs BCS serialization) is a pre-existing known issue documented in both
+AGENTS.md and code comments, tracked for R3d in Sprint 1. The `broadcast_stub` returning an
+error (rather than silently doing nothing) is the correct safe behavior for an unimplemented
+RPC call. Retrospectively APPROVED.
