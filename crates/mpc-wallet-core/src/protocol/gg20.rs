@@ -3,6 +3,7 @@ use k256::elliptic_curve::sec1::ToEncodedPoint;
 use k256::elliptic_curve::{Field, PrimeField};
 use k256::{ProjectivePoint, Scalar, SecretKey};
 use serde::{Deserialize, Serialize};
+use zeroize::ZeroizeOnDrop;
 
 use crate::error::CoreError;
 use crate::protocol::{GroupPublicKey, KeyShare, MpcProtocol, MpcSignature};
@@ -28,7 +29,7 @@ impl Default for Gg20Protocol {
 }
 
 /// Data stored per-party in KeyShare.share_data
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ZeroizeOnDrop)]
 struct Gg20ShareData {
     /// This party's x-coordinate (1-indexed party number)
     x: u16,

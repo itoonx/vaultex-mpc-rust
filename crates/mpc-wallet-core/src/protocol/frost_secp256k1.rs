@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use frost_secp256k1_tr as frost;
 use serde::{Deserialize, Serialize};
+use zeroize::ZeroizeOnDrop;
 
 use crate::error::CoreError;
 use crate::protocol::{GroupPublicKey, KeyShare, MpcProtocol, MpcSignature};
@@ -25,7 +26,7 @@ impl Default for FrostSecp256k1TrProtocol {
 }
 
 /// Internal serializable wrapper for share data stored in KeyShare.share_data
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ZeroizeOnDrop)]
 struct FrostSecp256k1ShareData {
     key_package: Vec<u8>,
     pubkey_package: Vec<u8>,
