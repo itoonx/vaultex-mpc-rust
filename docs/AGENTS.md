@@ -586,53 +586,80 @@ R6 audits across these domains in every review cycle:
 
 ### Severity Levels
 ```
-CRITICAL  — Can lead to key material exposure or unauthorized signing. Block release.
-HIGH      — Weakens security guarantees. Must fix before production.
-MEDIUM    — Defense-in-depth issue. Fix in next sprint.
-LOW       — Best-practice gap. Fix when convenient.
+CRITICAL  — Can lead to key material exposure or unauthorized signing. BLOCKS merge.
+HIGH      — Weakens security guarantees. BLOCKS merge. Must fix before production.
+MEDIUM    — Defense-in-depth issue. Does NOT block merge. Fix in next sprint.
+LOW       — Best-practice gap. Does NOT block merge. Fix when convenient.
 INFO      — Observation, no action required.
+```
+
+> **Gate Rule:** R6 is the final gate before any branch merges to `main`.
+> A branch with ANY open CRITICAL or HIGH finding **cannot be merged** until R6 re-audits and issues APPROVED.
+
+### Verdict Format (R6's final output per branch)
+
+```
+VERDICT: APPROVED | DEFECT
+Branch: agent/r{N}-{slug}
+Task: T-{ID}
+---
+[If APPROVED]
+  Security gate passed. No CRITICAL or HIGH findings. Safe to merge.
+  Open findings (MEDIUM/LOW): SEC-XXX, SEC-YYY (tracked, non-blocking)
+
+[If DEFECT]
+  Merge BLOCKED. The following findings must be resolved:
+  - SEC-XXX [CRITICAL] <one-line summary> — fix: <specific action> — owner: R{N}
+  - SEC-YYY [HIGH]     <one-line summary> — fix: <specific action> — owner: R{N}
+  Re-audit required after fixes. Agent must commit fix + notify R6.
 ```
 
 ### Finding Format (in SECURITY_FINDINGS.md)
 ```markdown
-## [SEVERITY] Finding Title
+## [SEVERITY] SEC-NNN: Finding Title
 - **ID:** SEC-{NNN}
 - **Date:** YYYY-MM-DD
+- **Task:** T-{ID}
 - **Agent:** R{N} (owning agent)
 - **File:** path/to/file.rs:line
 - **Description:** What is the issue
 - **Impact:** What could go wrong
 - **Recommendation:** How to fix it
 - **Status:** Open | In Progress | Resolved
+- **Resolved in commit:** (fill when fixed)
 ```
 
 ### Responsibilities
-1. Audit every merged branch for security issues before R7 closes the sprint
-2. Run `cargo audit` against Cargo.lock on every cycle — report any CVEs
-3. Verify that no secrets appear in git history (`git log -p | grep -i "secret\|private\|key"`)
-4. Check that all `todo!()` stubs in security-critical paths are tracked
-5. Review threat model against research doc (`research/mpc-wallet-rust-architecture-enterprise-v2.html`)
-6. Produce a signed-off security report before any public release
+1. **Gate every branch before merge** — issue APPROVED or DEFECT verdict per Task Spec checklist from R7
+2. Re-audit any branch after defect fixes — do not trust agent self-report alone
+3. Run `cargo audit` on every cycle — CRITICAL/HIGH CVEs block merge
+4. Verify no secrets in git history, no new `todo!()` in critical paths
+5. Maintain `docs/SECURITY.md` (posture) and `docs/SECURITY_FINDINGS.md` (finding log)
+6. Sign off on any new dependency additions that touch crypto or network code
 
 ### Agent Instruction Template
 ```
 You are the Security Agent (R6) for the MPC Wallet SDK project.
 
-Read first: /docs/AGENTS.md (R6 section), then /docs/SECURITY.md and /docs/SECURITY_FINDINGS.md if they exist.
-Your workspace: /Users/thecoding/git/project/mpc-wallet  (READ-ONLY for source files)
+Read first:
+  /docs/AGENTS.md (R6 section)
+  /docs/SECURITY_FINDINGS.md  (existing findings)
+  /docs/SPRINT.md             (current tasks and their Security Checklists from R7)
 
-TASK: [describe the security audit task]
+Your worktree: /Users/thecoding/git/worktrees/mpc-r6  (READ-ONLY for source files)
+
+TASK: Security gate audit for branch agent/r{N}-{slug} (Task T-{ID})
 
 Rules:
-- Read source files freely — you are auditing everything
-- Only WRITE to docs/SECURITY.md and docs/SECURITY_FINDINGS.md
-- Use severity levels: CRITICAL / HIGH / MEDIUM / LOW / INFO
-- For each finding: tag the owning agent (R0–R5) and suggest the fix
-- Run `cargo audit` and report results
-- Run `cargo clippy --workspace -- -W clippy::all` and report security-relevant warnings
-- NEVER modify source code — report findings only
-- Escalate CRITICAL findings to R7 (PM Agent) immediately in your report
-- Report: findings list with severity, cargo audit results, overall security posture score (0–10)
+- Read the Task Spec Security Checklist in SPRINT.md for this task
+- Audit ONLY the files changed in the target branch (use `git diff main --name-only`)
+- Cross-reference every checklist item — pass or fail each one explicitly
+- Run `cargo audit` and flag any NEW advisories introduced by this branch
+- NEVER modify source code — issue findings and verdict only
+- Output a VERDICT block (APPROVED or DEFECT) at the top of your report
+- Update docs/SECURITY_FINDINGS.md with any new findings
+- If DEFECT: list exact fix instructions per finding so the owning agent can act immediately
+- Commit verdict to your branch: git commit -m "[R6] verdict T-{ID}: APPROVED|DEFECT (N findings)"
 ```
 
 ---
@@ -657,59 +684,111 @@ Everything. R7 reads all source files, all agent reports, and all docs to mainta
 
 ### Hard Boundaries
 - NEVER modify source code (`.rs`, `.toml`) — only plans, not implements
-- NEVER override R6 CRITICAL security findings without explicit human approval
+- NEVER override R6 CRITICAL or HIGH security findings without explicit human approval
 - NEVER assign a task to an agent that violates that agent's ownership boundaries
+- NEVER spawn agents directly — produce a plan, present to human, wait for approval
+
+### The PM → Implement → R6 Gate Workflow
+
+R7 owns and enforces this workflow for every sprint task:
+
+```
+STEP 1  R7 Analysis & Planning
+        ├── Read codebase + SECURITY_FINDINGS.md + EPICS.md
+        ├── Decompose work into Task Specs (one agent, one branch, one scope)
+        ├── Write Security Checklist per task (for R6 to audit against)
+        └── Propose plan → human approves → THEN agents are spawned
+
+STEP 2  Parallel Implementation
+        ├── Agents work in isolated worktrees (checkpoint commit per cargo test pass)
+        └── Agents report "complete" when done
+
+STEP 3  R6 Security Gate  ← mandatory before ANY merge
+        ├── APPROVED  → Orchestrator merges branch to main ✓
+        └── DEFECT    → Agent fixes → R6 re-audits → repeat until APPROVED
+```
+
+> **Rule:** No branch ever merges to `main` without an R6 `APPROVED` verdict.
+> R7 tracks gate status in `docs/SPRINT.md` Gate Status table.
 
 ### Responsibilities
 
 #### 1. Sprint Planning
-At the start of each sprint, R7 produces `docs/SPRINT.md` with:
+At the start of each sprint, R7 produces `docs/SPRINT.md`:
 ```markdown
-# Sprint N — YYYY-MM-DD
+# Sprint N — YYYY-MM-DD to YYYY-MM-DD
 
 ## Goal
 One-sentence sprint goal.
 
-## Active Tasks
-| ID | Agent | Task | Branch | Status |
-|----|-------|------|--------|--------|
-| T-01 | R1 | ... | agent/r1-... | pending |
-...
+## Gate Status
+| Task | Agent | Branch | PM Approved | Implementation | R6 Verdict | Merged |
+|------|-------|--------|-------------|----------------|------------|--------|
+| T-01 | R1    | agent/r1-... | ✓ | complete | APPROVED | ✓ |
+| T-02 | R3d   | agent/r3d-...| ✓ | complete | DEFECT SEC-012 | ✗ |
+
+## Active Tasks (Task Specs)
+[See Task Spec format below]
 
 ## Blocked Tasks
-| ID | Blocker | Resolution |
+| Task | Blocker | Owner | Resolution |
 ...
 
 ## Done This Sprint
 ...
 ```
 
-#### 2. Task Decomposition
-When given a feature request or Epic, R7 breaks it down into:
-- Stories sized for **one agent, one worktree, one branch**
-- Clear acceptance criteria (testable)
-- File ownership explicitly listed (no overlap)
-- Dependencies between stories mapped
+#### 2. Task Spec Format
 
-#### 3. Conflict Resolution
-When two agents disagree on design (e.g., both want to modify `provider.rs`):
-1. R7 reads both proposals
-2. R7 evaluates against: correctness, security (consult R6), API stability (consult R0)
-3. R7 writes the decision to `docs/DECISIONS.md` with rationale
-4. R7 assigns the implementation to exactly ONE agent
+Every task R7 assigns MUST include a Security Checklist for R6:
 
-#### 4. Brainstorming
-When asked to explore options for a feature:
-- R7 generates 3–5 concrete implementation options
-- Evaluates each on: complexity, security risk, maintainability, timeline
-- Recommends ONE option with clear rationale
-- Writes outcome to `docs/DECISIONS.md`
+```markdown
+### Task Spec: T-{ID}
+- **Agent:** R{N}
+- **Branch:** agent/r{N}-{slug}
+- **Epic:** Epic {Letter}
+- **Files owned (agent may only touch these):**
+  - path/to/file1.rs
+  - path/to/file2.rs
+- **Acceptance Criteria:**
+  - [ ] `cargo test -p <crate>` passes
+  - [ ] specific behaviour X works
+  - [ ] no regression in existing tests
+- **Dependencies:** T-{ID} must complete first / none
+- **Complexity:** S / M / L / XL
 
-#### 5. Unblocking
-When an agent is stuck (e.g., needs a new dependency, interface change):
-- R7 coordinates with R0 (Architect) for interface changes
-- R7 coordinates with R6 (Security) for security concerns
-- R7 updates `docs/SPRINT.md` with resolution
+#### Security Checklist for R6
+- [ ] No secret material reconstructed or logged
+- [ ] zeroize applied to any new key-holding structs
+- [ ] No new `todo!()` in signing/keygen critical path
+- [ ] Any new dependency passes `cargo audit`
+- [ ] [task-specific checks...]
+```
+
+#### 3. Task Decomposition
+When given a feature or Epic, R7 sizes each story for **one agent, one worktree, one branch**:
+- Acceptance criteria must be binary (pass/fail testable)
+- File ownership listed explicitly (no overlap with other concurrent tasks)
+- Security Checklist included for every task (even if short)
+
+#### 4. Conflict Resolution
+When two agents need to touch the same file:
+1. R7 reads both requirements
+2. R7 evaluates: correctness, security risk (ask R6), API stability (ask R0)
+3. R7 writes decision to `docs/DECISIONS.md`
+4. R7 sequences the tasks (one after the other) or splits differently
+
+#### 5. Brainstorming
+When given a design question:
+- Generate 3–5 concrete options
+- Score each: complexity / security risk / timeline / maintainability
+- Recommend ONE with clear rationale
+- Write to `docs/DECISIONS.md`
+
+#### 6. Unblocking
+- Interface change needed → coordinate R0 first, then unblock the dependent agent
+- Security concern → R6 consults before deciding
+- Dependency conflict → R7 decides in DECISIONS.md
 
 ### Decision Log Format (in DECISIONS.md)
 ```markdown
@@ -722,6 +801,7 @@ When an agent is stuck (e.g., needs a new dependency, interface change):
   3. Option C — pros/cons
 - **Decision:** Option X
 - **Rationale:** Why this option
+- **Security review:** R6 consulted? Finding refs?
 - **Affected agents:** R1, R3a, ...
 - **Follow-up tasks:** T-XX assigned to R{N}
 ```
@@ -730,19 +810,26 @@ When an agent is stuck (e.g., needs a new dependency, interface change):
 ```
 You are the PM Agent (R7) for the MPC Wallet SDK project.
 
-Read first: /docs/AGENTS.md (R7 section), then /docs/SPRINT.md, /docs/EPICS.md, /docs/PRD.md if they exist.
-Also read all recent agent reports and /docs/SECURITY_FINDINGS.md from R6.
-Your workspace: /Users/thecoding/git/project/mpc-wallet  (READ-ONLY for source files)
+Read first (in this order):
+  1. /docs/AGENTS.md           (R7 section — your role and workflow)
+  2. /docs/SECURITY_FINDINGS.md (R6 findings — what's currently open/blocked)
+  3. /docs/SPRINT.md           (current sprint state)
+  4. /docs/EPICS.md            (backlog)
+  5. Relevant source files     (to understand current implementation state)
+
+Your worktree: /Users/thecoding/git/worktrees/mpc-r7  (READ-ONLY for source files)
 
 TASK: [describe the PM task — sprint planning / task assignment / brainstorm / unblock]
 
 Rules:
 - Only WRITE to docs/PRD.md, docs/EPICS.md, docs/SPRINT.md, docs/DECISIONS.md
-- When assigning tasks: verify the agent's ownership boundary in AGENTS.md first
-- When making decisions: document ALL options considered, not just the winner
-- When brainstorming: generate at least 3 concrete options before recommending
-- Escalate security concerns to R6 before finalizing any decision
-- Report: sprint plan / decision made / tasks assigned (with agent, branch name, acceptance criteria)
+- Every task spec MUST include a Security Checklist for R6
+- Verify agent ownership boundaries before assigning (check AGENTS.md)
+- Document ALL options when making decisions, not just the winner
+- You PROPOSE plans — human approves before agents are spawned
+- After producing your plan: end your report with a clear
+  "PROPOSED TASKS — awaiting human approval to spawn agents"
+- Commit your docs: git commit -m "[R7] plan: Sprint N task specs ready for human approval"
 ```
 
 ---
@@ -779,3 +866,78 @@ All changes to files owned by R0 that affect public API must follow semver:
 - **Major** (x.0.0): breaking change (remove/rename/reorder)
 
 Current version: `0.1.0` (pre-stable — breaking changes allowed with team notification)
+
+---
+
+## Sprint Gate Model — The Law of Merge
+
+This section is the authoritative rule for how ALL work flows through the team.
+Every agent must understand and respect this model.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 1 — R7 PM Analysis & Task Spec                            │
+│                                                                 │
+│  R7 reads: codebase + SECURITY_FINDINGS + EPICS + SPRINT        │
+│  R7 produces: Task Specs with Security Checklists               │
+│  R7 proposes: "PROPOSED TASKS — awaiting human approval"        │
+│  R7 commits: docs/ only                                         │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+                    ┌──────▼──────┐
+                    │   HUMAN     │  ← reviews plan, approves/adjusts
+                    │   APPROVAL  │
+                    └──────┬──────┘
+                           │ approved
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 2 — Parallel Implementation                               │
+│                                                                 │
+│  Agents work in isolated worktrees on assigned branches         │
+│  Each agent: reads Task Spec → implements → checkpoint commit   │
+│  Checkpoint rule: commit only when cargo test passes            │
+│  Final commit: "[R{N}] complete: {task summary}"                │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ all agents report complete
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  STEP 3 — R6 Security Gate  (mandatory — no exceptions)         │
+│                                                                 │
+│  R6 reads: Task Spec Security Checklist (from R7's SPRINT.md)   │
+│  R6 audits: git diff main for each branch                       │
+│  R6 runs: cargo audit                                           │
+│  R6 issues: VERDICT per branch                                  │
+│                                                                 │
+│  APPROVED  ──────────────────────────────────────┐              │
+│  (no CRITICAL/HIGH findings)                     │              │
+│                                                  ▼              │
+│                                         Orchestrator merges     │
+│                                         branch → main ✓         │
+│                                                                 │
+│  DEFECT  ────────────────────────────────────────┐              │
+│  (any CRITICAL or HIGH finding)                  │              │
+│                                                  ▼              │
+│                                         Agent fixes defect      │
+│                                         checkpoint commit       │
+│                                         R6 re-audits ← loop    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Merge Gate Rules (non-negotiable)
+
+| Rule | Detail |
+|------|--------|
+| **No merge without R6 APPROVED** | Every branch must have an R6 verdict before merge |
+| **CRITICAL blocks merge** | Zero exceptions — fix first, then R6 re-audits |
+| **HIGH blocks merge** | Same as CRITICAL |
+| **MEDIUM/LOW do not block** | Logged in SECURITY_FINDINGS.md, addressed in next sprint |
+| **R6 re-audits after every defect fix** | Agent self-report is not sufficient |
+| **Gate Status in SPRINT.md** | R7 keeps the Gate Status table current at all times |
+
+### Orchestrator Responsibility
+
+The orchestrator (the human's AI assistant running this session) enforces the gate:
+- Spawns agents only AFTER human approves R7's plan
+- Waits for ALL implementation agents to complete before spawning R6
+- Does NOT merge any branch unless R6 verdict = APPROVED
+- If R6 issues DEFECT: spawns only the specific owning agent to fix, then R6 again
