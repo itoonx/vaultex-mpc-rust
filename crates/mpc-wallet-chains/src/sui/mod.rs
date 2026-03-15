@@ -47,6 +47,38 @@ impl Default for SuiProvider {
     }
 }
 
+impl SuiProvider {
+    /// Broadcast a signed transaction to the Sui network.
+    ///
+    /// # TODO (production)
+    /// Use the Sui JSON-RPC API: `sui_executeTransactionBlock`
+    /// - POST to `{rpc_url}` with:
+    ///   ```json
+    ///   {
+    ///     "jsonrpc": "2.0",
+    ///     "id": 1,
+    ///     "method": "sui_executeTransactionBlock",
+    ///     "params": [
+    ///       "<base64 tx_bytes>",
+    ///       ["<base64 signature>"],
+    ///       {"showEffects": true},
+    ///       "WaitForLocalExecution"
+    ///     ]
+    ///   }
+    ///   ```
+    /// Returns the transaction digest as the tx hash.
+    pub async fn broadcast_stub(
+        &self,
+        _signed: &crate::provider::SignedTransaction,
+    ) -> Result<String, mpc_wallet_core::error::CoreError> {
+        // TODO(production): implement HTTP call to Sui RPC
+        // For now, return a placeholder tx digest
+        Err(mpc_wallet_core::error::CoreError::Protocol(
+            "broadcast not yet implemented — use sui_executeTransactionBlock RPC".to_string(),
+        ))
+    }
+}
+
 #[async_trait]
 impl ChainProvider for SuiProvider {
     fn chain(&self) -> Chain {

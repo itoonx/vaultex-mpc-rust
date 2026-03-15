@@ -472,3 +472,33 @@ async fn test_evm_provider_returns_correct_chain() {
         "provider.chain() must return Chain::Bsc"
     );
 }
+
+// ============================================================================
+// SuiProvider::new() / Default + broadcast_stub tests (R3d improvements)
+// ============================================================================
+
+/// Test 5: SuiProvider::new() / Default does not panic and derive_address works.
+#[test]
+fn test_sui_provider_default_works() {
+    // SuiProvider::new() / default() should not panic
+    let provider = mpc_wallet_chains::sui::SuiProvider::new();
+    // derive_address should still work (doesn't need pubkey stored)
+    let pubkey = GroupPublicKey::Ed25519([1u8; 32].to_vec());
+    let addr = provider.derive_address(&pubkey).unwrap();
+    assert!(addr.starts_with("0x"), "Sui address must start with 0x");
+    assert_eq!(addr.len(), 66, "Sui address must be 66 chars (0x + 64 hex)");
+}
+
+/// Test 6: broadcast_stub must return Err (not yet implemented).
+#[tokio::test]
+async fn test_sui_broadcast_stub_returns_not_implemented() {
+    use mpc_wallet_chains::provider::{Chain, SignedTransaction};
+    let provider = mpc_wallet_chains::sui::SuiProvider::new();
+    let fake_signed = SignedTransaction {
+        chain: Chain::Sui,
+        raw_tx: vec![0u8; 97],
+        tx_hash: "0xdeadbeef".to_string(),
+    };
+    let result = provider.broadcast_stub(&fake_signed).await;
+    assert!(result.is_err(), "broadcast_stub must return Err until implemented");
+}
