@@ -17,6 +17,16 @@ pub struct EncryptedFileStore {
 }
 
 impl EncryptedFileStore {
+    /// Create a new `EncryptedFileStore` rooted at `base_dir`.
+    ///
+    /// Key shares are stored as AES-256-GCM encrypted files under subdirectories
+    /// of `base_dir`, one subdirectory per key group. The `password` is used
+    /// with Argon2id key derivation to produce the AES key for each encrypt/decrypt
+    /// operation. The password is stored in memory as a plain `String` for the
+    /// lifetime of this struct (see SEC-005 — zeroization not yet implemented).
+    ///
+    /// The directory is created on first `save`; it need not exist when this
+    /// constructor is called.
     pub fn new(base_dir: PathBuf, password: &str) -> Self {
         Self {
             base_dir,

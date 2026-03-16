@@ -14,6 +14,10 @@ use crate::types::{CryptoScheme, PartyId, ThresholdConfig};
 pub struct FrostSecp256k1TrProtocol;
 
 impl FrostSecp256k1TrProtocol {
+    /// Create a new `FrostSecp256k1TrProtocol` instance.
+    ///
+    /// The struct is zero-sized; all state lives in the [`crate::protocol::KeyShare`]
+    /// passed to [`crate::protocol::MpcProtocol::sign`].
     pub fn new() -> Self {
         Self
     }

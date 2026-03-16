@@ -1,4 +1,6 @@
+/// File-based encrypted key store implementation using AES-256-GCM + Argon2id.
 pub mod encrypted;
+/// Key store primitive types: [`types::KeyGroupId`] and [`types::KeyMetadata`].
 pub mod types;
 
 use async_trait::async_trait;

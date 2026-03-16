@@ -1,4 +1,6 @@
+/// In-process transport using tokio mpsc channels (for testing and single-process simulation).
 pub mod local;
+/// NATS-based transport for multi-process and multi-machine MPC deployments.
 pub mod nats;
 
 use async_trait::async_trait;
