@@ -51,6 +51,21 @@ Vaultex is a **Rust workspace** for building enterprise-grade **threshold multi-
 
 ---
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[CLI Guide](docs/CLI_GUIDE.md)** | Full command reference with examples and sample output |
+| **[Architecture](docs/ARCHITECTURE.md)** | System design, trait boundaries, module map |
+| **[Security](docs/SECURITY.md)** | Threat model, resolved findings, disclosure policy |
+| **[Contributing](docs/CONTRIBUTING.md)** | Guide for humans and LLMs/AI agents |
+| **[Changelog](CHANGELOG.md)** | Version history and release notes |
+| **[Chain Roadmap](docs/CHAIN_ROADMAP.md)** | 54-chain expansion plan: EVM L2s, Move, Substrate, TON, Cosmos |
+| **[Standards & References](docs/STANDARDS.md)** | All cryptographic standards, RFCs, EIPs, BIPs implemented |
+| **[Security Findings](docs/SECURITY_FINDINGS.md)** | Full audit trail (0 CRITICAL/HIGH open) |
+
+---
+
 ## Quickstart
 
 ```bash
@@ -150,21 +165,6 @@ cargo test --workspace     # 272 tests, ~4 seconds
 | Argon2id Derive | **72 ms** | 64MiB (intentional) |
 
 Run benchmarks: `cargo bench -p mpc-wallet-core --bench mpc_benchmarks`
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| **[CLI Guide](docs/CLI_GUIDE.md)** | Full command reference with examples and sample output |
-| **[Architecture](docs/ARCHITECTURE.md)** | System design, trait boundaries, module map |
-| **[Security](docs/SECURITY.md)** | Threat model, resolved findings, disclosure policy |
-| **[Contributing](docs/CONTRIBUTING.md)** | Guide for humans and LLMs/AI agents |
-| **[Changelog](CHANGELOG.md)** | Version history and release notes |
-| **[Chain Roadmap](docs/CHAIN_ROADMAP.md)** | 54-chain expansion plan: EVM L2s, Move, Substrate, TON, Cosmos |
-| **[Standards & References](docs/STANDARDS.md)** | All cryptographic standards, RFCs, EIPs, BIPs implemented |
-| **[Security Findings](docs/SECURITY_FINDINGS.md)** | Full audit trail (0 CRITICAL/HIGH open) |
 
 ---
 
