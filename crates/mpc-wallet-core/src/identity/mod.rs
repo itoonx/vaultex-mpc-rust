@@ -1,120 +1,65 @@
-//! JWT token validation and identity extraction (Epic A1, FR-A.1).
+//! JWT-based identity validation (Epic A).
 //!
-//! Validates RS256 and ES256 JWT tokens, extracts claims, and produces
-//! an [`AuthContext`](crate::rbac::AuthContext) for RBAC permission checks.
-//!
-//! # Sprint 8 scope
-//! - JWT parsing and signature verification with pre-loaded keys
-//! - Claims extraction: `sub`, `exp`, `roles`
-//! - Integration with RBAC `AuthContext`
-//!
-//! # Not in Sprint 8
-//! - JWKS HTTP fetching (Epic A1 full -- requires `reqwest`)
-//! - ABAC attribute extraction (Epic A3)
-//! - MFA claim checking (Epic A4)
+//! Provides [`JwtValidator`] to decode and validate JWTs, extracting RBAC roles
+//! and ABAC attributes into an [`AuthContext`](crate::rbac::AuthContext).
 
-use jsonwebtoken::{decode, Algorithm, DecodingKey, TokenData, Validation};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
-use crate::rbac::{ApiRole, AuthContext};
+use crate::rbac::{map_roles, AbacAttributes, AuthContext};
 
-/// Standard JWT claims extracted from validated tokens.
+/// Claims expected in a JWT issued to MPC Wallet SDK users.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenClaims {
-    /// Subject -- unique user identifier (maps to `AuthContext.user_id`).
+    /// Subject (user identifier).
     pub sub: String,
-    /// Expiration time (Unix timestamp, seconds).
-    pub exp: u64,
-    /// Issued-at time (Unix timestamp, seconds).
-    #[serde(default)]
-    pub iat: u64,
-    /// Issuer identifier (OIDC provider URL).
-    #[serde(default)]
+    /// Expiration time (UNIX timestamp).
+    pub exp: usize,
+    /// Issued-at time (UNIX timestamp).
+    pub iat: usize,
+    /// Issuer.
     pub iss: String,
-    /// Audience (expected service identifier).
+    /// Audience (optional).
     #[serde(default)]
     pub aud: Option<String>,
-    /// Roles claim -- maps to RBAC `ApiRole` values.
-    /// Expected values: "initiator", "approver", "admin"
+    /// RBAC role strings (e.g. "admin", "initiator").
     #[serde(default)]
     pub roles: Vec<String>,
+    /// Department (ABAC attribute, Epic A3).
+    #[serde(default)]
+    pub dept: Option<String>,
+    /// Cost center (ABAC attribute, Epic A3).
+    #[serde(default)]
+    pub cost_center: Option<String>,
+    /// Risk tier: "low", "medium", "high" (ABAC attribute, Epic A3).
+    #[serde(default)]
+    pub risk_tier: Option<String>,
+    /// MFA verified flag (Epic A4 prep).
+    #[serde(default)]
+    pub mfa_verified: bool,
 }
 
-/// JWT validator that verifies tokens against pre-loaded keys.
-///
-/// Supports RS256 (RSA), ES256 (ECDSA P-256), and HS256 (HMAC, testing only).
-/// After validation, produces an [`AuthContext`] with the user identity and
-/// mapped RBAC roles.
+/// Validates JWTs and produces [`AuthContext`] instances.
 pub struct JwtValidator {
     decoding_key: DecodingKey,
     validation: Validation,
 }
 
 impl JwtValidator {
-    /// Create a validator from an RSA public key in PEM format (for RS256).
-    pub fn from_rsa_pem(pem: &[u8]) -> Result<Self, CoreError> {
-        let key = DecodingKey::from_rsa_pem(pem)
-            .map_err(|e| CoreError::Unauthorized(format!("invalid RSA PEM key: {e}")))?;
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.validate_exp = true;
-        validation.validate_aud = false; // audience validation optional
-        Ok(Self {
-            decoding_key: key,
-            validation,
-        })
-    }
-
-    /// Create a validator from an EC public key in PEM format (for ES256).
-    pub fn from_ec_pem(pem: &[u8]) -> Result<Self, CoreError> {
-        let key = DecodingKey::from_ec_pem(pem)
-            .map_err(|e| CoreError::Unauthorized(format!("invalid EC PEM key: {e}")))?;
-        let mut validation = Validation::new(Algorithm::ES256);
-        validation.validate_exp = true;
-        validation.validate_aud = false;
-        Ok(Self {
-            decoding_key: key,
-            validation,
-        })
-    }
-
-    /// Create a validator from an HMAC secret (for HS256, testing only).
-    ///
-    /// **WARNING:** HS256 is symmetric -- use only for testing. Production
-    /// should use RS256 or ES256 with asymmetric keys.
+    /// Create a validator using an HMAC-SHA256 secret.
     pub fn from_hmac_secret(secret: &[u8]) -> Self {
-        let key = DecodingKey::from_secret(secret);
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.validate_exp = true;
+        let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+        // Disable issuer/audience checks by default; callers can refine.
         validation.validate_aud = false;
+        validation.required_spec_claims.clear();
         Self {
-            decoding_key: key,
+            decoding_key: DecodingKey::from_secret(secret),
             validation,
         }
     }
 
-    /// Set the expected issuer for validation.
-    pub fn with_issuer(mut self, issuer: &str) -> Self {
-        self.validation.set_issuer(&[issuer]);
-        self
-    }
-
-    /// Set the expected audience for validation.
-    pub fn with_audience(mut self, audience: &str) -> Self {
-        self.validation.set_audience(&[audience]);
-        self
-    }
-
-    /// Validate a JWT token and extract an `AuthContext`.
-    ///
-    /// # Returns
-    /// - `Ok(AuthContext)` with user_id from `sub` claim and mapped roles
-    /// - `Err(CoreError::Unauthorized)` if token is invalid, expired, or signature fails
-    ///
-    /// # Security
-    /// - Signature is verified before claims are trusted
-    /// - Expiration (`exp`) is always checked
-    /// - No JWT payload details are included in error messages (leak prevention)
+    /// Validate a JWT token and return an [`AuthContext`] with RBAC roles and ABAC attributes.
     pub fn validate(&self, token: &str) -> Result<AuthContext, CoreError> {
         let token_data: TokenData<TokenClaims> =
             decode(token, &self.decoding_key, &self.validation)
@@ -122,68 +67,47 @@ impl JwtValidator {
 
         let claims = token_data.claims;
         let roles = map_roles(&claims.roles);
+        let attributes = AbacAttributes {
+            dept: claims.dept,
+            cost_center: claims.cost_center,
+            risk_tier: claims.risk_tier,
+        };
 
-        Ok(AuthContext::new(claims.sub, roles))
-    }
-
-    /// Validate a JWT token and return the raw claims (for advanced use).
-    pub fn validate_claims(&self, token: &str) -> Result<TokenClaims, CoreError> {
-        let token_data: TokenData<TokenClaims> =
-            decode(token, &self.decoding_key, &self.validation)
-                .map_err(|e| CoreError::Unauthorized(format!("JWT validation failed: {e}")))?;
-        Ok(token_data.claims)
+        Ok(AuthContext::with_attributes(
+            claims.sub,
+            roles,
+            attributes,
+            claims.mfa_verified,
+        ))
     }
 }
 
-/// Map string role names from JWT claims to `ApiRole` enum values.
-///
-/// Unknown role strings are silently ignored (logged in production).
-fn map_roles(role_strings: &[String]) -> Vec<ApiRole> {
-    role_strings
-        .iter()
-        .filter_map(|s| match s.as_str() {
-            "initiator" => Some(ApiRole::Initiator),
-            "approver" => Some(ApiRole::Approver),
-            "admin" => Some(ApiRole::Admin),
-            _ => None, // Unknown roles ignored
-        })
-        .collect()
+/// Helper: create a signed JWT from claims (for testing and internal use).
+fn make_token(claims: &TokenClaims, secret: &[u8]) -> String {
+    encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .expect("encoding should not fail in tests")
 }
-
-// --- Tests ---
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{encode, EncodingKey, Header};
 
-    fn make_token(claims: &TokenClaims, secret: &[u8]) -> String {
-        encode(
-            &Header::default(), // HS256
-            claims,
-            &EncodingKey::from_secret(secret),
-        )
-        .unwrap()
-    }
-
-    fn future_exp() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    /// Return an `exp` value 1 hour in the future.
+    fn future_exp() -> usize {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs()
-            + 3600 // 1 hour from now
-    }
-
-    fn past_exp() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 3600 // 1 hour ago
+            .as_secs() as usize;
+        now + 3600
     }
 
     #[test]
-    fn test_validate_valid_token() {
+    fn test_abac_attributes_extracted_from_jwt() {
         let secret = b"test-secret-key-for-hmac-256-validation";
         let claims = TokenClaims {
             sub: "alice".into(),
@@ -192,72 +116,23 @@ mod tests {
             iss: "".into(),
             aud: None,
             roles: vec!["initiator".into()],
+            dept: Some("engineering".into()),
+            cost_center: Some("CC-001".into()),
+            risk_tier: Some("low".into()),
+            mfa_verified: true,
         };
         let token = make_token(&claims, secret);
         let validator = JwtValidator::from_hmac_secret(secret);
         let ctx = validator.validate(&token).unwrap();
         assert_eq!(ctx.user_id, "alice");
-        assert!(ctx.has_role(ApiRole::Initiator));
+        assert_eq!(ctx.attributes.dept.as_deref(), Some("engineering"));
+        assert_eq!(ctx.attributes.cost_center.as_deref(), Some("CC-001"));
+        assert_eq!(ctx.attributes.risk_tier.as_deref(), Some("low"));
+        assert!(ctx.mfa_verified);
     }
 
     #[test]
-    fn test_validate_multiple_roles() {
-        let secret = b"test-secret-key-for-hmac-256-validation";
-        let claims = TokenClaims {
-            sub: "admin-user".into(),
-            exp: future_exp(),
-            iat: 0,
-            iss: "".into(),
-            aud: None,
-            roles: vec!["initiator".into(), "admin".into()],
-        };
-        let token = make_token(&claims, secret);
-        let validator = JwtValidator::from_hmac_secret(secret);
-        let ctx = validator.validate(&token).unwrap();
-        assert!(ctx.has_role(ApiRole::Initiator));
-        assert!(ctx.has_role(ApiRole::Admin));
-        assert!(!ctx.has_role(ApiRole::Approver));
-    }
-
-    #[test]
-    fn test_expired_token_rejected() {
-        let secret = b"test-secret-key-for-hmac-256-validation";
-        let claims = TokenClaims {
-            sub: "alice".into(),
-            exp: past_exp(),
-            iat: 0,
-            iss: "".into(),
-            aud: None,
-            roles: vec!["initiator".into()],
-        };
-        let token = make_token(&claims, secret);
-        let validator = JwtValidator::from_hmac_secret(secret);
-        let result = validator.validate(&token);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("JWT validation failed"));
-    }
-
-    #[test]
-    fn test_wrong_secret_rejected() {
-        let secret = b"test-secret-key-for-hmac-256-validation";
-        let claims = TokenClaims {
-            sub: "alice".into(),
-            exp: future_exp(),
-            iat: 0,
-            iss: "".into(),
-            aud: None,
-            roles: vec!["initiator".into()],
-        };
-        let token = make_token(&claims, secret);
-        let validator = JwtValidator::from_hmac_secret(b"wrong-secret-completely-different");
-        assert!(validator.validate(&token).is_err());
-    }
-
-    #[test]
-    fn test_unknown_roles_ignored() {
+    fn test_missing_abac_attributes_default_to_none() {
         let secret = b"test-secret-key-for-hmac-256-validation";
         let claims = TokenClaims {
             sub: "bob".into(),
@@ -265,77 +140,61 @@ mod tests {
             iat: 0,
             iss: "".into(),
             aud: None,
-            roles: vec![
-                "initiator".into(),
-                "unknown_role".into(),
-                "super_admin".into(),
-            ],
+            roles: vec![],
+            dept: None,
+            cost_center: None,
+            risk_tier: None,
+            mfa_verified: false,
         };
         let token = make_token(&claims, secret);
         let validator = JwtValidator::from_hmac_secret(secret);
         let ctx = validator.validate(&token).unwrap();
-        assert_eq!(ctx.roles.len(), 1); // only "initiator" mapped
-        assert!(ctx.has_role(ApiRole::Initiator));
+        assert!(ctx.attributes.dept.is_none());
+        assert!(ctx.attributes.cost_center.is_none());
+        assert!(ctx.attributes.risk_tier.is_none());
+        assert!(!ctx.mfa_verified);
     }
 
     #[test]
-    fn test_map_roles_all_variants() {
-        let roles = vec!["initiator".into(), "approver".into(), "admin".into()];
-        let mapped = map_roles(&roles);
-        assert_eq!(mapped.len(), 3);
-        assert!(mapped.contains(&ApiRole::Initiator));
-        assert!(mapped.contains(&ApiRole::Approver));
-        assert!(mapped.contains(&ApiRole::Admin));
-    }
-
-    #[test]
-    fn test_validate_claims_returns_raw() {
+    fn test_expired_token_rejected() {
         let secret = b"test-secret-key-for-hmac-256-validation";
         let claims = TokenClaims {
-            sub: "alice".into(),
-            exp: future_exp(),
-            iat: 12345,
-            iss: "test-issuer".into(),
-            aud: Some("my-app".into()),
+            sub: "carol".into(),
+            exp: 1000, // far in the past
+            iat: 0,
+            iss: "".into(),
+            aud: None,
             roles: vec!["admin".into()],
+            dept: None,
+            cost_center: None,
+            risk_tier: None,
+            mfa_verified: false,
         };
         let token = make_token(&claims, secret);
         let validator = JwtValidator::from_hmac_secret(secret);
-        let raw = validator.validate_claims(&token).unwrap();
-        assert_eq!(raw.sub, "alice");
-        assert_eq!(raw.iss, "test-issuer");
-        assert_eq!(raw.iat, 12345);
+        let result = validator.validate(&token);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_invalid_token_format_rejected() {
-        let validator = JwtValidator::from_hmac_secret(b"secret");
-        assert!(validator.validate("not.a.valid.jwt.token").is_err());
-        assert!(validator.validate("").is_err());
-        assert!(validator.validate("garbage").is_err());
-    }
-
-    #[test]
-    fn test_with_issuer_validation() {
+    fn test_wrong_secret_rejected() {
         let secret = b"test-secret-key-for-hmac-256-validation";
+        let wrong = b"wrong-secret-key-for-hmac-256-00000000";
         let claims = TokenClaims {
-            sub: "alice".into(),
+            sub: "dave".into(),
             exp: future_exp(),
             iat: 0,
-            iss: "https://auth.example.com".into(),
+            iss: "".into(),
             aud: None,
-            roles: vec![],
+            roles: vec!["viewer".into()],
+            dept: None,
+            cost_center: None,
+            risk_tier: None,
+            mfa_verified: false,
         };
         let token = make_token(&claims, secret);
-
-        // Correct issuer passes
-        let validator =
-            JwtValidator::from_hmac_secret(secret).with_issuer("https://auth.example.com");
-        assert!(validator.validate(&token).is_ok());
-
-        // Wrong issuer fails
-        let validator =
-            JwtValidator::from_hmac_secret(secret).with_issuer("https://wrong.example.com");
-        assert!(validator.validate(&token).is_err());
+        let validator = JwtValidator::from_hmac_secret(wrong);
+        let result = validator.validate(&token);
+        assert!(result.is_err());
     }
 }

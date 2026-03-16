@@ -40,6 +40,9 @@ rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 futures = { workspace = true }
 
+# JWT
+jsonwebtoken = { workspace = true }
+
 # Utilities
 hex = { workspace = true }
 uuid = { workspace = true }
@@ -47,7 +50,6 @@ rand = { workspace = true }
 zeroize = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
