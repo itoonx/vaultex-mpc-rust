@@ -5,6 +5,7 @@
 //! Each chain has its own bech32 HRP (human-readable prefix).
 
 pub mod address;
+pub mod tx;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -120,30 +121,13 @@ impl ChainProvider for CosmosProvider {
         &self,
         params: TransactionParams,
     ) -> Result<UnsignedTransaction, CoreError> {
-        let value: u64 = params
-            .value
-            .parse()
-            .map_err(|_| CoreError::InvalidInput(format!("invalid amount: {}", params.value)))?;
-
-        // Build simplified Cosmos tx payload (Amino-like)
-        let mut payload = Vec::new();
-        payload.extend_from_slice(self.config.chain_id.as_bytes());
-        payload.extend_from_slice(params.to.as_bytes());
-        payload.extend_from_slice(self.config.denom.as_bytes());
-        payload.extend_from_slice(&value.to_le_bytes());
-        if let Some(extra) = &params.extra {
-            payload.extend_from_slice(extra.to_string().as_bytes());
-        }
-
-        // Sign payload = SHA-256(payload)
-        use sha2::{Digest, Sha256};
-        let sign_payload = Sha256::digest(&payload).to_vec();
-
-        Ok(UnsignedTransaction {
-            chain: self.config.chain,
-            sign_payload,
-            tx_data: payload,
-        })
+        tx::build_cosmos_transaction(
+            self.config.chain,
+            self.config.chain_id,
+            self.config.denom,
+            params,
+        )
+        .await
     }
 
     fn finalize_transaction(
@@ -151,32 +135,7 @@ impl ChainProvider for CosmosProvider {
         unsigned: &UnsignedTransaction,
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError> {
-        let sig_bytes = match sig {
-            MpcSignature::Ecdsa { r, s, .. } => {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(r);
-                bytes.extend_from_slice(s);
-                bytes
-            }
-            MpcSignature::EdDsa { signature } => signature.to_vec(),
-            _ => {
-                return Err(CoreError::InvalidInput(format!(
-                    "{} requires ECDSA or EdDsa signature",
-                    self.config.name
-                )))
-            }
-        };
-
-        let mut raw_tx = unsigned.tx_data.clone();
-        raw_tx.extend_from_slice(&sig_bytes);
-
-        let tx_hash = hex::encode(&unsigned.sign_payload);
-
-        Ok(SignedTransaction {
-            chain: self.config.chain,
-            raw_tx,
-            tx_hash,
-        })
+        tx::finalize_cosmos_transaction(unsigned, sig, self.config.name)
     }
 
     async fn broadcast(

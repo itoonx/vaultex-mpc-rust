@@ -5,6 +5,7 @@
 //! For MPC, we use the spend public key to derive the standard address.
 
 pub mod address;
+pub mod tx;
 
 use async_trait::async_trait;
 
@@ -49,29 +50,7 @@ impl ChainProvider for MoneroProvider {
         &self,
         params: TransactionParams,
     ) -> Result<UnsignedTransaction, CoreError> {
-        // Monero tx building requires ring signatures, decoys, and key images.
-        // This is a simplified payload hash for the MPC signing flow.
-        let value: u64 = params
-            .value
-            .parse()
-            .map_err(|_| CoreError::InvalidInput(format!("invalid amount: {}", params.value)))?;
-
-        let mut payload = Vec::new();
-        payload.extend_from_slice(params.to.as_bytes());
-        payload.extend_from_slice(&value.to_le_bytes());
-        if let Some(extra) = &params.extra {
-            payload.extend_from_slice(extra.to_string().as_bytes());
-        }
-
-        // Keccak-256 hash (Monero uses Keccak, not SHA3)
-        use sha3::{Digest, Keccak256};
-        let sign_payload = Keccak256::digest(&payload).to_vec();
-
-        Ok(UnsignedTransaction {
-            chain: Chain::Monero,
-            sign_payload,
-            tx_data: payload,
-        })
+        tx::build_monero_transaction(params).await
     }
 
     fn finalize_transaction(
@@ -79,25 +58,7 @@ impl ChainProvider for MoneroProvider {
         unsigned: &UnsignedTransaction,
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError> {
-        let sig_bytes = match sig {
-            MpcSignature::EdDsa { signature } => signature.to_vec(),
-            _ => {
-                return Err(CoreError::InvalidInput(
-                    "Monero requires EdDsa signature".into(),
-                ))
-            }
-        };
-
-        let mut raw_tx = unsigned.tx_data.clone();
-        raw_tx.extend_from_slice(&sig_bytes);
-
-        let tx_hash = hex::encode(&unsigned.sign_payload);
-
-        Ok(SignedTransaction {
-            chain: Chain::Monero,
-            raw_tx,
-            tx_hash,
-        })
+        tx::finalize_monero_transaction(unsigned, sig)
     }
 
     async fn broadcast(

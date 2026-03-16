@@ -4,6 +4,7 @@
 //! Transaction format is Protobuf-based.
 
 pub mod address;
+pub mod tx;
 
 use async_trait::async_trait;
 
@@ -44,28 +45,7 @@ impl ChainProvider for TronProvider {
         &self,
         params: TransactionParams,
     ) -> Result<UnsignedTransaction, CoreError> {
-        let value: u64 = params
-            .value
-            .parse()
-            .map_err(|_| CoreError::InvalidInput(format!("invalid amount: {}", params.value)))?;
-
-        // Build simplified tx payload
-        let mut payload = Vec::new();
-        payload.extend_from_slice(params.to.as_bytes());
-        payload.extend_from_slice(&value.to_le_bytes());
-        if let Some(extra) = &params.extra {
-            payload.extend_from_slice(extra.to_string().as_bytes());
-        }
-
-        // TRON uses SHA-256 for tx hash
-        use sha2::{Digest, Sha256};
-        let sign_payload = Sha256::digest(&payload).to_vec();
-
-        Ok(UnsignedTransaction {
-            chain: Chain::Tron,
-            sign_payload,
-            tx_data: payload,
-        })
+        tx::build_tron_transaction(params).await
     }
 
     fn finalize_transaction(
@@ -73,28 +53,7 @@ impl ChainProvider for TronProvider {
         unsigned: &UnsignedTransaction,
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError> {
-        let (r, s, recovery_id) = match sig {
-            MpcSignature::Ecdsa { r, s, recovery_id } => (r.clone(), s.clone(), *recovery_id),
-            _ => {
-                return Err(CoreError::InvalidInput(
-                    "TRON requires ECDSA signature".into(),
-                ))
-            }
-        };
-
-        // TRON signature: r(32) || s(32) || v(1)
-        let mut raw_tx = unsigned.tx_data.clone();
-        raw_tx.extend_from_slice(&r);
-        raw_tx.extend_from_slice(&s);
-        raw_tx.push(recovery_id);
-
-        let tx_hash = hex::encode(&unsigned.sign_payload);
-
-        Ok(SignedTransaction {
-            chain: Chain::Tron,
-            raw_tx,
-            tx_hash,
-        })
+        tx::finalize_tron_transaction(unsigned, sig)
     }
 
     async fn broadcast(

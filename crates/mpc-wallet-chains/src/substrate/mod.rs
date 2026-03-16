@@ -5,6 +5,7 @@
 //! is not yet available and will be added as a future protocol.
 
 pub mod address;
+pub mod tx;
 
 use async_trait::async_trait;
 
@@ -138,31 +139,7 @@ impl ChainProvider for SubstrateProvider {
         &self,
         params: TransactionParams,
     ) -> Result<UnsignedTransaction, CoreError> {
-        let value: u64 = params
-            .value
-            .parse()
-            .map_err(|_| CoreError::InvalidInput(format!("invalid amount: {}", params.value)))?;
-
-        // Simplified SCALE-like payload
-        let mut payload = Vec::new();
-        // Module + call index placeholder
-        payload.extend_from_slice(&[0x04, 0x00]); // balances.transfer
-        payload.extend_from_slice(params.to.as_bytes());
-        payload.extend_from_slice(&value.to_le_bytes());
-        if let Some(extra) = &params.extra {
-            payload.extend_from_slice(extra.to_string().as_bytes());
-        }
-
-        // Sign payload = Blake2b-256(payload)
-        use blake2::{digest::consts::U32, Blake2b, Digest};
-        type Blake2b256 = Blake2b<U32>;
-        let sign_payload = Blake2b256::digest(&payload).to_vec();
-
-        Ok(UnsignedTransaction {
-            chain: self.config.chain,
-            sign_payload,
-            tx_data: payload,
-        })
+        tx::build_substrate_transaction(self.config.chain, params).await
     }
 
     fn finalize_transaction(
@@ -170,29 +147,7 @@ impl ChainProvider for SubstrateProvider {
         unsigned: &UnsignedTransaction,
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError> {
-        let sig_bytes = match sig {
-            MpcSignature::EdDsa { signature } => signature.to_vec(),
-            _ => {
-                return Err(CoreError::InvalidInput(format!(
-                    "{} requires EdDsa signature (Ed25519)",
-                    self.config.name
-                )))
-            }
-        };
-
-        // Extrinsic: [length | signed_flag | account | sig_type(0x00=Ed25519) | sig | era | nonce | tip | call_data]
-        let mut raw_tx = Vec::new();
-        raw_tx.push(0x00); // Ed25519 signature type
-        raw_tx.extend_from_slice(&sig_bytes);
-        raw_tx.extend_from_slice(&unsigned.tx_data);
-
-        let tx_hash = hex::encode(&unsigned.sign_payload);
-
-        Ok(SignedTransaction {
-            chain: self.config.chain,
-            raw_tx,
-            tx_hash,
-        })
+        tx::finalize_substrate_transaction(unsigned, sig, self.config.name)
     }
 
     async fn broadcast(

@@ -6,6 +6,7 @@
 //! signing flow that will be connected to a future STARK MPC protocol.
 
 pub mod address;
+pub mod tx;
 
 use async_trait::async_trait;
 
@@ -49,27 +50,7 @@ impl ChainProvider for StarknetProvider {
         &self,
         params: TransactionParams,
     ) -> Result<UnsignedTransaction, CoreError> {
-        let value: u64 = params
-            .value
-            .parse()
-            .map_err(|_| CoreError::InvalidInput(format!("invalid amount: {}", params.value)))?;
-
-        // Starknet uses Pedersen hash for tx hash, simplified here
-        let mut payload = Vec::new();
-        payload.extend_from_slice(params.to.as_bytes());
-        payload.extend_from_slice(&value.to_le_bytes());
-        if let Some(extra) = &params.extra {
-            payload.extend_from_slice(extra.to_string().as_bytes());
-        }
-
-        use sha2::{Digest, Sha256};
-        let sign_payload = Sha256::digest(&payload).to_vec();
-
-        Ok(UnsignedTransaction {
-            chain: Chain::Starknet,
-            sign_payload,
-            tx_data: payload,
-        })
+        tx::build_starknet_transaction(params).await
     }
 
     fn finalize_transaction(
@@ -77,31 +58,7 @@ impl ChainProvider for StarknetProvider {
         unsigned: &UnsignedTransaction,
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError> {
-        // Accept ECDSA signature as placeholder (STARK curve uses similar r,s format)
-        let sig_bytes = match sig {
-            MpcSignature::Ecdsa { r, s, .. } => {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(r);
-                bytes.extend_from_slice(s);
-                bytes
-            }
-            _ => {
-                return Err(CoreError::InvalidInput(
-                    "Starknet requires ECDSA-compatible signature (STARK curve planned)".into(),
-                ))
-            }
-        };
-
-        let mut raw_tx = unsigned.tx_data.clone();
-        raw_tx.extend_from_slice(&sig_bytes);
-
-        let tx_hash = hex::encode(&unsigned.sign_payload);
-
-        Ok(SignedTransaction {
-            chain: Chain::Starknet,
-            raw_tx,
-            tx_hash,
-        })
+        tx::finalize_starknet_transaction(unsigned, sig)
     }
 
     async fn broadcast(
