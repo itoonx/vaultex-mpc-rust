@@ -101,6 +101,35 @@ impl Permissions {
         }
         Ok(())
     }
+
+    /// Admin + MFA: manage signing policy (Epic A4).
+    pub fn can_manage_policy_mfa(ctx: &AuthContext) -> Result<(), CoreError> {
+        Self::require_role(ctx, &[ApiRole::Admin])?;
+        require_mfa(ctx)
+    }
+
+    /// Admin + MFA: freeze/unfreeze key groups (Epic A4).
+    pub fn can_freeze_key_mfa(ctx: &AuthContext) -> Result<(), CoreError> {
+        Self::require_role(ctx, &[ApiRole::Admin])?;
+        require_mfa(ctx)
+    }
+
+    /// Admin + MFA: export audit evidence packs (Epic A4).
+    pub fn can_export_evidence_mfa(ctx: &AuthContext) -> Result<(), CoreError> {
+        Self::require_role(ctx, &[ApiRole::Admin])?;
+        require_mfa(ctx)
+    }
+}
+
+/// Require the authenticated user to have completed MFA verification (Epic A4).
+pub fn require_mfa(ctx: &AuthContext) -> Result<(), CoreError> {
+    if ctx.mfa_verified {
+        Ok(())
+    } else {
+        Err(CoreError::Unauthorized(
+            "MFA verification required for this operation".into(),
+        ))
+    }
 }
 
 /// Map raw string role names from JWT to [`ApiRole`] variants.
@@ -183,5 +212,54 @@ mod tests {
     fn test_require_role_fail() {
         let ctx = AuthContext::new("bob", vec![ApiRole::Viewer]);
         assert!(Permissions::require_role(&ctx, &[ApiRole::Admin]).is_err());
+    }
+
+    #[test]
+    fn test_require_mfa_passes() {
+        let ctx = AuthContext::with_attributes(
+            "alice", vec![ApiRole::Admin], AbacAttributes::default(), true,
+        );
+        assert!(require_mfa(&ctx).is_ok());
+    }
+
+    #[test]
+    fn test_require_mfa_fails() {
+        let ctx = AuthContext::new("alice", vec![ApiRole::Admin]);
+        assert!(require_mfa(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_admin_with_mfa_can_manage_policy() {
+        let ctx = AuthContext::with_attributes(
+            "admin", vec![ApiRole::Admin], AbacAttributes::default(), true,
+        );
+        assert!(Permissions::can_manage_policy_mfa(&ctx).is_ok());
+    }
+
+    #[test]
+    fn test_admin_without_mfa_cannot_manage_policy() {
+        let ctx = AuthContext::new("admin", vec![ApiRole::Admin]);
+        assert!(Permissions::can_manage_policy_mfa(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_non_admin_with_mfa_cannot_manage_policy() {
+        let ctx = AuthContext::with_attributes(
+            "alice", vec![ApiRole::Initiator], AbacAttributes::default(), true,
+        );
+        assert!(Permissions::can_manage_policy_mfa(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_admin_mfa_freeze_and_export() {
+        let ctx_mfa = AuthContext::with_attributes(
+            "admin", vec![ApiRole::Admin], AbacAttributes::default(), true,
+        );
+        let ctx_no_mfa = AuthContext::new("admin", vec![ApiRole::Admin]);
+
+        assert!(Permissions::can_freeze_key_mfa(&ctx_mfa).is_ok());
+        assert!(Permissions::can_freeze_key_mfa(&ctx_no_mfa).is_err());
+        assert!(Permissions::can_export_evidence_mfa(&ctx_mfa).is_ok());
+        assert!(Permissions::can_export_evidence_mfa(&ctx_no_mfa).is_err());
     }
 }
