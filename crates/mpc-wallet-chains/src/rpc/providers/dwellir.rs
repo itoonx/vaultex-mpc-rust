@@ -58,6 +58,11 @@ impl DwellirProvider {
             (Chain::OpBnb, _) => Some("opbnb"),
             (Chain::Immutable, _) => Some("immutable"),
             (Chain::MantaPacific, _) => Some("manta-pacific"),
+            // EVM — Phase 5
+            (Chain::Hyperliquid, _) => Some("hyperliquid"),
+            (Chain::Berachain, _) => Some("berachain"),
+            (Chain::MegaEth, _) => Some("megaeth"),
+            (Chain::Monad, _) => Some("monad"),
             // Move chains
             (Chain::Aptos, NetworkEnv::Testnet) => Some("aptos-testnet"),
             (Chain::Aptos, _) => Some("aptos"),
@@ -105,6 +110,10 @@ impl RpcProvider for DwellirProvider {
             Chain::OpBnb,
             Chain::Immutable,
             Chain::MantaPacific,
+            Chain::Hyperliquid,
+            Chain::Berachain,
+            Chain::MegaEth,
+            Chain::Monad,
             Chain::Aptos,
             Chain::Movement,
             Chain::Ton,

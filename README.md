@@ -12,7 +12,7 @@
 
 **Threshold MPC Wallet SDK** — No single party ever holds a complete private key.
 
-EVM (22) | Bitcoin | Solana | Sui | Aptos | TON | TRON | LTC | DOGE | ZEC | XMR | 34 chains
+EVM (26) | Bitcoin | Solana | Sui | Aptos | TON | TRON | LTC | DOGE | ZEC | XMR | 38 chains
 
 [![CI](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml)
 
@@ -84,7 +84,7 @@ cargo test --workspace     # 272 tests, ~4 seconds
 |----------|-----------|
 | **MPC Protocols** | GG20 ECDSA, FROST Ed25519, FROST Secp256k1-Taproot |
 | **Key Lifecycle** | Keygen, refresh, reshare (change threshold/add parties), freeze |
-| **34 Chains** | EVM L1/L2s, Bitcoin, Solana, Sui, Aptos, Movement, TON, TRON, LTC, DOGE, ZEC, XMR |
+| **38 Chains** | EVM L1/L2s, Bitcoin, Solana, Sui, Aptos, Movement, TON, TRON, LTC, DOGE, ZEC, XMR |
 | **RPC Registry** | Multi-provider (Dwellir, Alchemy, Infura, Blockstream, Mempool), failover, health tracking |
 | **Broadcast** | `eth_sendRawTransaction`, REST `/tx`, `sendTransaction`, `sui_executeTransactionBlock` |
 | **Transport** | NATS mTLS + per-session ECDH + SignedEnvelope replay protection |
@@ -96,7 +96,7 @@ cargo test --workspace     # 272 tests, ~4 seconds
 
 ## Supported Blockchains (32)
 
-### EVM Chains (22)
+### EVM Chains (26)
 
 | Chain | Chain ID | Type | Dwellir | Alchemy | Infura |
 |-------|----------|------|:-------:|:-------:|:------:|
@@ -122,6 +122,10 @@ cargo test --workspace     # 272 tests, ~4 seconds
 | opBNB | `204` | L2 (BNB) | :white_check_mark: | | |
 | Immutable | `13371` | L2 (zkEVM) | :white_check_mark: | | |
 | Manta Pacific | `169` | L2 (Privacy) | :white_check_mark: | | |
+| Hyperliquid | `999` | L1 (Perps DEX) | :white_check_mark: | | |
+| Berachain | `80094` | L1 (PoL) | :white_check_mark: | | |
+| MegaETH | `6342` | L2 (Real-time) | :white_check_mark: | | |
+| Monad | `143` | L1 (Parallel EVM) | :white_check_mark: | | |
 
 > All EVM chains use **GG20 ECDSA (secp256k1)** signing protocol and **EIP-1559** transaction format.
 
@@ -192,7 +196,7 @@ docs/                  ← Architecture, security, CLI guide, sprint history
 ## Metrics
 
 ```
-  Chains:    34          Tests:    272 pass
+  Chains:    38          Tests:    272 pass
   LOC:       17,000+     CI:       fmt + clippy + test + audit
   Sprints:   17          Findings: 0 CRITICAL | 0 HIGH open
 ```

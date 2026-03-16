@@ -12,7 +12,7 @@
 
 **门限 MPC 钱包 SDK** — 没有任何一方持有完整的私钥。
 
-EVM（22）| Bitcoin | Solana | Sui | Aptos | TON | TRON | LTC | DOGE | ZEC | XMR | 共 34 条链
+EVM（26）| Bitcoin | Solana | Sui | Aptos | TON | TRON | LTC | DOGE | ZEC | XMR | 共 38 条链
 
 [![CI](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml)
 
@@ -84,7 +84,7 @@ cargo test --workspace     # 272 个测试，约 4 秒
 |------|------|
 | **MPC 协议** | GG20 ECDSA、FROST Ed25519、FROST Secp256k1-Taproot |
 | **密钥生命周期** | 生成、刷新、重分享（修改阈值/增删参与方）、冻结 |
-| **34 条链** | EVM L1/L2、Bitcoin、Solana、Sui、Aptos、Movement、TON、TRON、LTC、DOGE、ZEC、XMR |
+| **38 条链** | EVM L1/L2、Bitcoin、Solana、Sui、Aptos、Movement、TON、TRON、LTC、DOGE、ZEC、XMR |
 | **RPC 注册表** | 多提供商（Dwellir、Alchemy、Infura、Blockstream、Mempool）、故障切换、健康追踪 |
 | **广播** | `eth_sendRawTransaction`、REST `/tx`、`sendTransaction`、`sui_executeTransactionBlock` |
 | **传输层** | NATS mTLS + 会话级 ECDH + SignedEnvelope 防重放 |
@@ -96,7 +96,7 @@ cargo test --workspace     # 272 个测试，约 4 秒
 
 ## 支持的区块链（32 条）
 
-### EVM 链（22 条）
+### EVM 链（26 条）
 
 | 链 | Chain ID | 类型 | Dwellir | Alchemy | Infura |
 |----|----------|------|:-------:|:-------:|:------:|
@@ -122,6 +122,10 @@ cargo test --workspace     # 272 个测试，约 4 秒
 | opBNB | `204` | L2（BNB） | :white_check_mark: | | |
 | Immutable | `13371` | L2（zkEVM） | :white_check_mark: | | |
 | Manta Pacific | `169` | L2（隐私） | :white_check_mark: | | |
+| Hyperliquid | `999` | L1（永续 DEX） | :white_check_mark: | | |
+| Berachain | `80094` | L1（PoL） | :white_check_mark: | | |
+| MegaETH | `6342` | L2（实时） | :white_check_mark: | | |
+| Monad | `143` | L1（并行 EVM） | :white_check_mark: | | |
 
 > 所有 EVM 链使用 **GG20 ECDSA (secp256k1)** 签名协议和 **EIP-1559** 交易格式。
 
@@ -192,7 +196,7 @@ docs/                  ← 架构、安全、CLI 指南、Sprint 历史
 ## 指标
 
 ```
-  链:       34           测试:     272 通过
+  链:       38           测试:     272 通过
   代码行:   17,000+      CI:       fmt + clippy + test + audit
   Sprint:   17           漏洞:     0 CRITICAL | 0 HIGH 未解决
 ```

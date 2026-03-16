@@ -102,7 +102,11 @@ impl ChainRegistry {
             | Chain::Ronin
             | Chain::OpBnb
             | Chain::Immutable
-            | Chain::MantaPacific => Box::new(EvmProvider::new(chain)?),
+            | Chain::MantaPacific
+            | Chain::Hyperliquid
+            | Chain::Berachain
+            | Chain::MegaEth
+            | Chain::Monad => Box::new(EvmProvider::new(chain)?),
             Chain::BitcoinMainnet => {
                 let p = match self.env {
                     NetworkEnv::Testnet | NetworkEnv::Devnet => BitcoinProvider::testnet(),
@@ -155,6 +159,11 @@ impl ChainRegistry {
             Chain::OpBnb,
             Chain::Immutable,
             Chain::MantaPacific,
+            // EVM — Phase 5 (Emerging)
+            Chain::Hyperliquid,
+            Chain::Berachain,
+            Chain::MegaEth,
+            Chain::Monad,
             // Move chains
             Chain::Aptos,
             Chain::Movement,
@@ -232,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_supported_chains_count() {
-        assert_eq!(ChainRegistry::supported_chains().len(), 34);
+        assert_eq!(ChainRegistry::supported_chains().len(), 38);
     }
 
     #[test]
