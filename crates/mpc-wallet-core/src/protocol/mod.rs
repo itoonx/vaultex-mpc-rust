@@ -187,30 +187,23 @@ pub trait MpcProtocol: Send + Sync {
         transport: &dyn Transport,
     ) -> Result<MpcSignature, CoreError>;
 
-    /// Run proactive key refresh (Epic H1, FR-H.1).
+    /// Proactive key refresh: generate new shares while preserving the group public key.
     ///
-    /// Generates new key shares for all participating parties while keeping
-    /// the group public key unchanged. Old shares should be zeroized after
-    /// a successful refresh.
+    /// Each participating party generates a random zero-constant polynomial,
+    /// exchanges evaluations with other parties, and adds the aggregated delta
+    /// to their existing Shamir share. The group public key remains unchanged
+    /// because all zero-constant polynomials evaluate to 0 at x=0.
     ///
-    /// # Default implementation
-    /// Returns `CoreError::Protocol("refresh not implemented")` — protocols
-    /// must override this method to support key refresh.
-    ///
-    /// # Arguments
-    /// - `key_share` — the party's current key share (will be replaced).
-    /// - `signers` — the set of parties participating in the refresh.
-    /// - `transport` — message transport for inter-party communication.
+    /// The default implementation returns an error indicating that the protocol
+    /// does not support key refresh. Override this in protocols that do.
     async fn refresh(
         &self,
-        key_share: &KeyShare,
-        signers: &[PartyId],
-        transport: &dyn Transport,
+        _key_share: &KeyShare,
+        _signers: &[PartyId],
+        _transport: &dyn Transport,
     ) -> Result<KeyShare, CoreError> {
-        let _ = (key_share, signers, transport);
-        Err(CoreError::Protocol(format!(
-            "{:?} does not support key refresh yet",
-            self.scheme()
-        )))
+        Err(CoreError::Protocol(
+            "key refresh not supported by this protocol".into(),
+        ))
     }
 }

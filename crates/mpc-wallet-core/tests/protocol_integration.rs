@@ -384,50 +384,125 @@ async fn test_frost_ed25519_different_signer_subsets() {
 }
 
 // ============================================================================
-// Trait default method tests
+// GG20 Key Refresh tests (Epic H1 — proactive re-sharing)
 // ============================================================================
 
-/// Verify that the default `refresh` implementation returns an error.
-///
-/// All three protocol impls (GG20, FROST-secp256k1, FROST-Ed25519) inherit the
-/// default `refresh` stub which returns `CoreError::Protocol`. This test
-/// confirms the default is wired correctly so that future sprints can override
-/// it without breaking existing code.
+/// Refresh shares between 2 parties in a 2-of-3 setup.
+/// Verify the group public key is unchanged and new shares differ from old.
+#[cfg(not(feature = "gg20-simulation"))]
 #[tokio::test]
-async fn test_refresh_default_returns_not_implemented() {
-    use mpc_wallet_core::protocol::KeyShare;
-    use mpc_wallet_core::protocol::GroupPublicKey;
-    use zeroize::Zeroizing;
+async fn test_gg20_refresh_preserves_group_public_key() {
+    let shares = run_keygen(gg20_factory, 2, 3).await;
+    let original_gpk_bytes = shares[0].group_public_key.as_bytes().to_vec();
 
-    let protocols: Vec<Box<dyn MpcProtocol>> = vec![
-        gg20_factory(),
-        frost_secp256k1_factory(),
-        frost_ed25519_factory(),
-    ];
-
-    let dummy_share = KeyShare {
-        scheme: mpc_wallet_core::types::CryptoScheme::Gg20Ecdsa,
-        party_id: PartyId(1),
-        config: mpc_wallet_core::types::ThresholdConfig::new(2, 3).unwrap(),
-        group_public_key: GroupPublicKey::Secp256k1(vec![2; 33]),
-        share_data: Zeroizing::new(vec![0; 32]),
-    };
-
+    // Refresh between parties 1 and 2.
+    let signers = vec![PartyId(1), PartyId(2)];
     let net = LocalTransportNetwork::new(3);
-    let transport = net.get_transport(PartyId(1));
-    let signers = [PartyId(1), PartyId(2)];
 
-    for protocol in &protocols {
-        let result = protocol
-            .refresh(&dummy_share, &signers, &*transport)
-            .await;
-        assert!(result.is_err(), "default refresh must return Err");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("refresh"),
-            "error should mention refresh: {err_msg}"
+    let share1 = shares[0].clone();
+    let share2 = shares[1].clone();
+    let t1 = net.get_transport(PartyId(1));
+    let t2 = net.get_transport(PartyId(2));
+    let signers1 = signers.clone();
+    let signers2 = signers.clone();
+
+    let h1 = tokio::spawn(async move {
+        let protocol = mpc_wallet_core::protocol::gg20::Gg20Protocol::new();
+        protocol.refresh(&share1, &signers1, &*t1).await
+    });
+    let h2 = tokio::spawn(async move {
+        let protocol = mpc_wallet_core::protocol::gg20::Gg20Protocol::new();
+        protocol.refresh(&share2, &signers2, &*t2).await
+    });
+
+    let new_share1 = h1.await.unwrap().unwrap();
+    let new_share2 = h2.await.unwrap().unwrap();
+
+    // Group public key must be unchanged.
+    assert_eq!(
+        new_share1.group_public_key.as_bytes(),
+        original_gpk_bytes.as_slice(),
+        "refreshed share 1 must preserve group public key"
+    );
+    assert_eq!(
+        new_share2.group_public_key.as_bytes(),
+        original_gpk_bytes.as_slice(),
+        "refreshed share 2 must preserve group public key"
+    );
+
+    // Share data must have changed (new random polynomial).
+    assert_ne!(
+        new_share1.share_data.as_slice(),
+        shares[0].share_data.as_slice(),
+        "refreshed share 1 must differ from original"
+    );
+    assert_ne!(
+        new_share2.share_data.as_slice(),
+        shares[1].share_data.as_slice(),
+        "refreshed share 2 must differ from original"
+    );
+}
+
+/// After refresh, signing with the refreshed shares must still produce a valid
+/// ECDSA signature verifiable against the original group public key.
+#[cfg(not(feature = "gg20-simulation"))]
+#[tokio::test]
+async fn test_gg20_refresh_then_sign_verifies() {
+    use k256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+
+    let shares = run_keygen(gg20_factory, 2, 3).await;
+    let original_gpk_bytes = shares[0].group_public_key.as_bytes().to_vec();
+
+    // Refresh all 3 parties.
+    let all_parties = vec![PartyId(1), PartyId(2), PartyId(3)];
+    let net = LocalTransportNetwork::new(3);
+
+    let mut handles = Vec::new();
+    for i in 0..3 {
+        let share = shares[i].clone();
+        let transport = net.get_transport(share.party_id);
+        let signers = all_parties.clone();
+        handles.push(tokio::spawn(async move {
+            let protocol = mpc_wallet_core::protocol::gg20::Gg20Protocol::new();
+            protocol.refresh(&share, &signers, &*transport).await
+        }));
+    }
+
+    let mut refreshed_shares = Vec::new();
+    for h in handles {
+        refreshed_shares.push(h.await.unwrap().unwrap());
+    }
+
+    // Verify group public key unchanged for all refreshed shares.
+    for rs in &refreshed_shares {
+        assert_eq!(
+            rs.group_public_key.as_bytes(),
+            original_gpk_bytes.as_slice(),
+            "all refreshed shares must preserve group public key"
         );
     }
+
+    // Sign with refreshed shares (parties 1 and 2).
+    let message = b"post-refresh signing test";
+    let sigs = run_sign(gg20_factory, &refreshed_shares, &[0, 1], message).await;
+
+    // The coordinator (Party 1 = index 0) produces the canonical signature.
+    let MpcSignature::Ecdsa { r, s, recovery_id } = &sigs[0] else {
+        panic!("expected ECDSA signature from coordinator");
+    };
+    assert_ne!(*recovery_id, 0xff, "coordinator must return final signature");
+
+    // Cryptographic verification against the original group public key.
+    let pubkey = k256::PublicKey::from_sec1_bytes(&original_gpk_bytes)
+        .expect("group pubkey must be valid");
+    let vk = VerifyingKey::from(&pubkey);
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes[..32].copy_from_slice(r);
+    sig_bytes[32..].copy_from_slice(s);
+    let sig = Signature::from_bytes(&sig_bytes.into())
+        .expect("(r,s) must form a valid ECDSA signature");
+    vk.verify(message, &sig)
+        .expect("signature with refreshed shares must verify against original group pubkey");
 }
 
 // ─── SEC-004 compile-time assertions ─────────────────────────────────────────
