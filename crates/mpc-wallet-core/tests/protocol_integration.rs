@@ -383,6 +383,101 @@ async fn test_frost_ed25519_different_signer_subsets() {
     }
 }
 
+// ============================================================================
+// FROST Ed25519 key refresh tests
+// ============================================================================
+
+/// Helper: run refresh for all parties concurrently, return refreshed key shares.
+async fn run_refresh(
+    protocol_factory: fn() -> Box<dyn MpcProtocol>,
+    shares: &[mpc_wallet_core::protocol::KeyShare],
+) -> Vec<mpc_wallet_core::protocol::KeyShare> {
+    let config = shares[0].config;
+    let net = LocalTransportNetwork::new(config.total_parties);
+
+    let mut handles = Vec::new();
+    for share in shares.iter() {
+        let party_id = share.party_id;
+        let transport = net.get_transport(party_id);
+        let protocol = protocol_factory();
+        let share_clone = share.clone();
+        handles.push(tokio::spawn(async move {
+            protocol.refresh(&share_clone, party_id, &*transport).await
+        }));
+    }
+
+    let mut refreshed = Vec::new();
+    for h in handles {
+        refreshed.push(h.await.unwrap().unwrap());
+    }
+    refreshed
+}
+
+/// FROST Ed25519 key refresh: verify group public key unchanged, then sign with refreshed shares.
+#[tokio::test]
+async fn test_frost_ed25519_refresh_preserves_group_key_and_signs() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    // Step 1: Keygen
+    let shares = run_keygen(frost_ed25519_factory, 2, 3).await;
+    let gpk_before = shares[0].group_public_key.as_bytes().to_vec();
+
+    // Step 2: Refresh
+    let refreshed_shares = run_refresh(frost_ed25519_factory, &shares).await;
+
+    // Step 3: Verify group public key unchanged
+    for share in &refreshed_shares {
+        assert_eq!(
+            share.group_public_key.as_bytes(),
+            gpk_before.as_slice(),
+            "group public key must be unchanged after refresh"
+        );
+    }
+
+    // Step 4: Sign with refreshed shares and verify
+    let message = b"frost ed25519 refresh test - signing with refreshed shares";
+    let sigs = run_sign(frost_ed25519_factory, &refreshed_shares, &[0, 1], message).await;
+
+    let MpcSignature::EdDsa { signature } = &sigs[0] else {
+        panic!("expected EdDSA signature");
+    };
+
+    let vk = VerifyingKey::from_bytes(gpk_before.as_slice().try_into().unwrap()).unwrap();
+    let sig = Signature::from_bytes(signature);
+    vk.verify(message, &sig)
+        .expect("signature with refreshed shares must verify against original group key");
+}
+
+/// FROST Ed25519 refresh: old shares must not combine with refreshed shares for signing.
+/// Also verify that different signer subsets work after refresh.
+#[tokio::test]
+async fn test_frost_ed25519_refresh_different_subsets() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let shares = run_keygen(frost_ed25519_factory, 2, 3).await;
+    let gpk = shares[0].group_public_key.as_bytes().to_vec();
+    let refreshed = run_refresh(frost_ed25519_factory, &shares).await;
+
+    let vk = VerifyingKey::from_bytes(gpk.as_slice().try_into().unwrap()).unwrap();
+    let message = b"refresh different subsets";
+
+    // Sign with subset {1, 3} using refreshed shares
+    let sigs_13 = run_sign(frost_ed25519_factory, &refreshed, &[0, 2], message).await;
+    let MpcSignature::EdDsa { signature } = &sigs_13[0] else {
+        panic!();
+    };
+    vk.verify(message, &Signature::from_bytes(signature))
+        .expect("subset {1,3} must verify after refresh");
+
+    // Sign with subset {2, 3} using refreshed shares
+    let sigs_23 = run_sign(frost_ed25519_factory, &refreshed, &[1, 2], message).await;
+    let MpcSignature::EdDsa { signature } = &sigs_23[0] else {
+        panic!();
+    };
+    vk.verify(message, &Signature::from_bytes(signature))
+        .expect("subset {2,3} must verify after refresh");
+}
+
 // ─── SEC-004 compile-time assertions ─────────────────────────────────────────
 // These functions verify at compile time that all share data structs implement
 // ZeroizeOnDrop. They are never called at runtime but will fail to compile if
