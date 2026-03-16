@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use argon2::{Algorithm, Argon2, Params, Version};
 use async_trait::async_trait;
+use zeroize::Zeroizing;
 
 use crate::error::CoreError;
 use crate::key_store::types::{KeyGroupId, KeyMetadata};
@@ -10,10 +12,22 @@ use crate::key_store::KeyStore;
 use crate::protocol::KeyShare;
 use crate::types::PartyId;
 
+/// Argon2id parameters for wallet-class key derivation (SEC-006 hardened).
+///
+/// - m_cost: 65536 KiB (64 MiB) — memory hardness
+/// - t_cost: 3 iterations
+/// - p_cost: 4 parallelism lanes
+/// - output:  32 bytes (AES-256 key)
+const ARGON2_M_COST: u32 = 65536;
+const ARGON2_T_COST: u32 = 3;
+const ARGON2_P_COST: u32 = 4;
+
 /// File-based encrypted key storage using AES-256-GCM + Argon2id.
 pub struct EncryptedFileStore {
     base_dir: PathBuf,
-    password: String,
+    /// Password is stored as `Zeroizing<String>` so it is wiped from memory
+    /// when the `EncryptedFileStore` is dropped (SEC-005 fix).
+    password: Zeroizing<String>,
 }
 
 impl EncryptedFileStore {
@@ -21,35 +35,54 @@ impl EncryptedFileStore {
     ///
     /// Key shares are stored as AES-256-GCM encrypted files under subdirectories
     /// of `base_dir`, one subdirectory per key group. The `password` is used
-    /// with Argon2id key derivation to produce the AES key for each encrypt/decrypt
-    /// operation. The password is stored in memory as a plain `String` for the
-    /// lifetime of this struct (see SEC-005 — zeroization not yet implemented).
+    /// with Argon2id key derivation (64 MiB / 3 iterations / 4 lanes) to produce
+    /// the AES key for each encrypt/decrypt operation. The password is wrapped in
+    /// `Zeroizing<String>` and is wiped from memory when this struct is dropped
+    /// (SEC-005 fix).
+    ///
+    /// **Encrypted file format** (as of T-S3-02):
+    /// `salt (32 bytes) | nonce (12 bytes) | ciphertext`
+    ///
+    /// Note: this format is incompatible with files produced before T-S3-02,
+    /// which used a 16-byte salt. All test files use `tempdir()` and are ephemeral,
+    /// so no migration is required.
     ///
     /// The directory is created on first `save`; it need not exist when this
     /// constructor is called.
     pub fn new(base_dir: PathBuf, password: &str) -> Self {
         Self {
             base_dir,
-            password: password.to_string(),
+            password: Zeroizing::new(password.to_string()),
         }
     }
 
-    fn derive_key(&self, salt: &[u8]) -> Result<[u8; 32], CoreError> {
-        let mut key = [0u8; 32];
-        argon2::Argon2::default()
-            .hash_password_into(self.password.as_bytes(), salt, &mut key)
-            .map_err(|e| CoreError::Encryption(e.to_string()))?;
-        Ok(key)
+    fn derive_key(&self, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, CoreError> {
+        // SEC-006: use hardened Argon2id parameters instead of weak defaults.
+        let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(32))
+            .map_err(|e| CoreError::Encryption(format!("Argon2 params error: {e}")))?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+        // SEC-005: wrap password bytes in Zeroizing so they are wiped after use.
+        let password_bytes = Zeroizing::new(self.password.as_bytes().to_vec());
+
+        // SEC-005: wrap derived key in Zeroizing so it is wiped after use.
+        let mut key_bytes = Zeroizing::new([0u8; 32]);
+        argon2
+            .hash_password_into(password_bytes.as_slice(), salt, key_bytes.as_mut())
+            .map_err(|e| CoreError::Encryption(format!("Key derivation failed: {e}")))?;
+
+        Ok(key_bytes)
     }
 
     fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>, CoreError> {
         use rand::RngCore;
 
-        let mut salt = [0u8; 16];
+        // SEC-006: 32-byte salt (upgraded from 16) for stronger KDF salt.
+        let mut salt = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut salt);
 
-        let key = self.derive_key(&salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key)
+        let key_bytes = self.derive_key(&salt)?;
+        let cipher = Aes256Gcm::new_from_slice(key_bytes.as_ref())
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
 
         let mut nonce_bytes = [0u8; 12];
@@ -60,8 +93,8 @@ impl EncryptedFileStore {
             .encrypt(nonce, data)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
 
-        // Format: salt (16) + nonce (12) + ciphertext
-        let mut result = Vec::with_capacity(16 + 12 + ciphertext.len());
+        // Format: salt (32) + nonce (12) + ciphertext
+        let mut result = Vec::with_capacity(32 + 12 + ciphertext.len());
         result.extend_from_slice(&salt);
         result.extend_from_slice(&nonce_bytes);
         result.extend_from_slice(&ciphertext);
@@ -69,16 +102,17 @@ impl EncryptedFileStore {
     }
 
     fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>, CoreError> {
-        if data.len() < 28 {
+        // Minimum: salt (32) + nonce (12) = 44 bytes
+        if data.len() < 44 {
             return Err(CoreError::Encryption("encrypted data too short".into()));
         }
 
-        let salt = &data[..16];
-        let nonce = Nonce::from_slice(&data[16..28]);
-        let ciphertext = &data[28..];
+        let salt = &data[..32];
+        let nonce = Nonce::from_slice(&data[32..44]);
+        let ciphertext = &data[44..];
 
-        let key = self.derive_key(salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key)
+        let key_bytes = self.derive_key(salt)?;
+        let cipher = Aes256Gcm::new_from_slice(key_bytes.as_ref())
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
 
         cipher
