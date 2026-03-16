@@ -29,7 +29,7 @@ use std::sync::RwLock;
 
 use crate::error::CoreError;
 use crate::policy::evaluator::{evaluate, EvalResult};
-pub use crate::policy::schema::{ChainPolicy, Policy, SignedPolicy, POLICY_SCHEMA_VERSION};
+pub use crate::policy::schema::{ChainPolicy, Policy, PolicyTemplate, SignedPolicy, POLICY_SCHEMA_VERSION};
 
 /// In-memory store for the active signing policy.
 ///
@@ -552,5 +552,37 @@ mod tests {
         let signed = SignedPolicy::sign(Policy::allow_all("test"), &sk);
         store.load_signed(&signed).unwrap();
         assert!(store.check("ethereum", "0xabc", 100).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    #[test]
+    fn test_exchange_template() {
+        let p = PolicyTemplate::Exchange.build();
+        assert_eq!(p.name, "exchange-hot-wallet");
+        assert!(p.chains.get("ethereum").unwrap().max_amount_per_tx.is_some());
+    }
+
+    #[test]
+    fn test_treasury_template() {
+        let p = PolicyTemplate::Treasury.build();
+        assert_eq!(p.name, "treasury");
+        assert!(p.chains.contains_key("ethereum"));
+    }
+
+    #[test]
+    fn test_custodian_template_permissive() {
+        let p = PolicyTemplate::Custodian.build();
+        assert!(p.chains.is_empty());
+    }
+
+    #[test]
+    fn test_template_loads_into_store() {
+        let store = PolicyStore::new();
+        store.load(PolicyTemplate::Exchange.build()).unwrap();
+        assert!(store.check("ethereum", "0xabc", 1000).is_ok());
     }
 }
