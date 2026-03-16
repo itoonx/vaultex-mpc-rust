@@ -63,6 +63,7 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+jsonwebtoken = "9"
 
 # Internal crates
 mpc-wallet-core = { path = "crates/mpc-wallet-core" }

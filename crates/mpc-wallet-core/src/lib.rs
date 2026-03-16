@@ -46,3 +46,13 @@ pub mod approvals;
 /// Use [`audit::AuditLedger`] to record every signing event. Call
 /// [`audit::AuditLedger::verify`] to check tamper-evident chain integrity.
 pub mod audit;
+/// Role-Based Access Control: API roles, authorization context, permission checks (Epic A).
+///
+/// Use [`rbac::AuthContext`] to represent an authenticated user and
+/// [`rbac::require_role`] / [`rbac::require_any_role`] to gate operations.
+pub mod rbac;
+/// JWT token validation and identity extraction (Epic A1, FR-A.1).
+///
+/// Use [`identity::JwtValidator`] to validate JWT tokens and extract
+/// [`rbac::AuthContext`] for permission checks.
+pub mod identity;
