@@ -276,6 +276,104 @@ async fn test_frost_secp256k1_keygen_sign_verify() {
     }
 }
 
+/// Helper: run refresh for all parties concurrently, return new key shares.
+async fn run_refresh(
+    protocol_factory: fn() -> Box<dyn MpcProtocol>,
+    shares: &[mpc_wallet_core::protocol::KeyShare],
+) -> Vec<mpc_wallet_core::protocol::KeyShare> {
+    let config = shares[0].config;
+    let net = LocalTransportNetwork::new(config.total_parties);
+
+    let mut handles = Vec::new();
+    for share in shares {
+        let s = share.clone();
+        let transport = net.get_transport(s.party_id);
+        let protocol = protocol_factory();
+        handles.push(tokio::spawn(async move {
+            let signers: Vec<_> = (1..=s.config.total_parties).map(|i| PartyId(i as u32)).collect();
+            protocol.refresh(&s, &signers, &*transport).await
+        }));
+    }
+
+    let mut new_shares = Vec::new();
+    for h in handles {
+        new_shares.push(h.await.unwrap().unwrap());
+    }
+    new_shares
+}
+
+/// FROST secp256k1-tr key refresh: group pubkey unchanged after refresh
+#[tokio::test]
+async fn test_frost_secp256k1_refresh_preserves_group_pubkey() {
+    let shares = run_keygen(frost_secp256k1_factory, 2, 3).await;
+    let original_gpk = shares[0].group_public_key.as_bytes().to_vec();
+
+    // Refresh all shares
+    let refreshed = run_refresh(frost_secp256k1_factory, &shares).await;
+
+    // Verify group public key is unchanged for all parties
+    for share in &refreshed {
+        assert_eq!(
+            share.group_public_key.as_bytes(),
+            &original_gpk[..],
+            "group public key must be preserved after refresh"
+        );
+    }
+
+    // Verify share data actually changed (shares are different after refresh)
+    for (old, new) in shares.iter().zip(refreshed.iter()) {
+        let old_bytes: &[u8] = &old.share_data;
+        let new_bytes: &[u8] = &new.share_data;
+        assert_ne!(
+            old_bytes,
+            new_bytes,
+            "share data must differ after refresh"
+        );
+    }
+}
+
+/// FROST secp256k1-tr key refresh + sign: refreshed shares can produce valid signatures
+#[tokio::test]
+async fn test_frost_secp256k1_refresh_then_sign() {
+    let shares = run_keygen(frost_secp256k1_factory, 2, 3).await;
+    let original_gpk = shares[0].group_public_key.as_bytes().to_vec();
+
+    // Refresh
+    let refreshed = run_refresh(frost_secp256k1_factory, &shares).await;
+
+    // Sign with refreshed shares (parties 1 and 2)
+    let message = b"sign after frost secp256k1 refresh";
+    let sigs = run_sign(frost_secp256k1_factory, &refreshed, &[0, 1], message).await;
+
+    // All signers produce Schnorr signature
+    for sig in &sigs {
+        match sig {
+            MpcSignature::Schnorr { signature } => {
+                assert_eq!(signature.len(), 64);
+            }
+            _ => panic!("expected Schnorr signature after refresh"),
+        }
+    }
+
+    // All signers agree on the same signature
+    let MpcSignature::Schnorr { signature: sig0 } = &sigs[0] else {
+        panic!();
+    };
+    for sig in &sigs[1..] {
+        let MpcSignature::Schnorr { signature } = sig else {
+            panic!();
+        };
+        assert_eq!(sig0, signature, "all signers must agree on signature");
+    }
+
+    // Group pubkey still matches
+    assert_eq!(
+        refreshed[0].group_public_key.as_bytes(),
+        &original_gpk[..],
+        "group pubkey must match after refresh + sign"
+    );
+}
+
 // ============================================================================
 // FROST Ed25519 tests
 // ============================================================================
