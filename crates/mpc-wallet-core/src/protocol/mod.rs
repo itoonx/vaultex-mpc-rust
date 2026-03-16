@@ -186,4 +186,26 @@ pub trait MpcProtocol: Send + Sync {
         message: &[u8],
         transport: &dyn Transport,
     ) -> Result<MpcSignature, CoreError>;
+
+    /// Run proactive key share refresh (additive re-sharing).
+    ///
+    /// Each party generates a random polynomial with zero constant term and
+    /// exchanges evaluations with all other parties.  The sum of received
+    /// deltas is added to the current signing share, producing a new
+    /// [`KeyShare`] with the **same** group public key but a fresh share.
+    ///
+    /// This ensures that an attacker who compromises a subset of shares
+    /// before and after refresh cannot combine them to reconstruct the key.
+    ///
+    /// The default implementation returns `Err(CoreError::Protocol("refresh not supported"))`.
+    async fn refresh(
+        &self,
+        key_share: &KeyShare,
+        transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        let _ = (key_share, transport);
+        Err(CoreError::Protocol(
+            "refresh not supported for this protocol".into(),
+        ))
+    }
 }

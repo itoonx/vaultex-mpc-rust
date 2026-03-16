@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use frost_secp256k1_tr as frost;
+use k256::elliptic_curve::{Field, PrimeField};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroizing, ZeroizeOnDrop};
 
@@ -283,4 +284,205 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             signature: sig_array,
         })
     }
+
+    /// Proactive key share refresh using additive re-sharing on secp256k1.
+    ///
+    /// Each party generates a random degree-(t-1) polynomial g(x) with g(0) = 0
+    /// (ensuring the group secret is unchanged). Parties exchange evaluations
+    /// g_j(i) via round 100, sum the received deltas, and add to their current
+    /// signing share. New verifying shares are broadcast on round 101 so each
+    /// party can rebuild the `PublicKeyPackage`.
+    ///
+    /// The group public key is preserved because Σ g_j(0) = 0 for all j.
+    async fn refresh(
+        &self,
+        key_share: &KeyShare,
+        transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        let config = key_share.config;
+        let party_id = key_share.party_id;
+        let my_id = party_to_identifier(party_id)?;
+
+        // Deserialize current key package and pubkey package
+        let share_data_copy = key_share.share_data.clone();
+        let share_data: FrostSecp256k1ShareData =
+            serde_json::from_slice(&share_data_copy)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let key_package: frost::keys::KeyPackage =
+            serde_json::from_slice(&share_data.key_package)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let pubkey_package: frost::keys::PublicKeyPackage =
+            serde_json::from_slice(&share_data.pubkey_package)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        // Extract current signing share scalar via serialize → k256::Scalar
+        let current_share_bytes = key_package.signing_share().serialize();
+        let current_scalar =
+            k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&current_share_bytes))
+                .into_option()
+                .ok_or_else(|| CoreError::Crypto("invalid signing share scalar".into()))?;
+
+        // === Generate refresh polynomial g(x) with g(0) = 0 ===
+        // Coefficients: [0, c1, c2, ..., c_{t-1}] — degree t-1 polynomial
+        let evaluations = {
+            let mut rng = rand::thread_rng();
+            let mut coefficients = vec![k256::Scalar::ZERO]; // g(0) = 0
+            for _ in 1..config.threshold {
+                coefficients.push(k256::Scalar::random(&mut rng));
+            }
+
+            // Evaluate g at each party's index
+            let mut evals: Vec<(u16, Vec<u8>)> = Vec::new();
+            for p in 1..=config.total_parties {
+                let x = k256::Scalar::from(p as u64);
+                let y = poly_eval_k256(&coefficients, &x);
+                evals.push((p, y.to_repr().to_vec()));
+            }
+            evals
+        };
+
+        // === Round 100: send g(j) to each party j ===
+        let mut my_eval_from_self = None;
+        for (target_party, eval_bytes) in &evaluations {
+            if *target_party == party_id.0 {
+                my_eval_from_self = Some(eval_bytes.clone());
+                continue;
+            }
+            let payload = serde_json::to_vec(eval_bytes)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            transport
+                .send(ProtocolMessage {
+                    from: party_id,
+                    to: Some(PartyId(*target_party)),
+                    round: 100,
+                    payload,
+                })
+                .await?;
+        }
+
+        // Accumulate delta: start with our own polynomial's evaluation at our index
+        let my_eval_bytes = my_eval_from_self
+            .ok_or_else(|| CoreError::Protocol("missing self-evaluation".into()))?;
+        let mut delta = k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&my_eval_bytes))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid self-evaluation scalar".into()))?;
+
+        // Collect evaluations from all other parties
+        for _ in 0..(config.total_parties - 1) {
+            let msg = transport.recv().await?;
+            let eval_bytes: Vec<u8> = serde_json::from_slice(&msg.payload)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            let eval_scalar =
+                k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&eval_bytes))
+                    .into_option()
+                    .ok_or_else(|| CoreError::Crypto("invalid peer evaluation scalar".into()))?;
+            delta += eval_scalar;
+        }
+
+        // === Compute new signing share ===
+        let new_scalar = current_scalar + delta;
+        let new_share_bytes = new_scalar.to_repr();
+
+        // Create new SigningShare via deserialization
+        let new_signing_share =
+            frost::keys::SigningShare::deserialize(new_share_bytes.as_slice())
+                .map_err(|e| CoreError::Protocol(format!("SigningShare deserialize: {e}")))?;
+
+        // Compute new verifying share: G * new_scalar (compressed SEC1 point)
+        let new_vs_point =
+            (k256::ProjectivePoint::GENERATOR * new_scalar).to_affine();
+        let new_vs_compressed = {
+            use k256::elliptic_curve::group::GroupEncoding;
+            new_vs_point.to_bytes()
+        };
+        let new_verifying_share =
+            frost::keys::VerifyingShare::deserialize(&new_vs_compressed)
+                .map_err(|e| {
+                    CoreError::Protocol(format!("VerifyingShare deserialize: {e}"))
+                })?;
+
+        // === Round 101: broadcast new verifying share so all can rebuild PublicKeyPackage ===
+        let vs_bytes = new_verifying_share
+            .serialize()
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let vs_payload = serde_json::to_vec(&vs_bytes)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        transport
+            .send(ProtocolMessage {
+                from: party_id,
+                to: None,
+                round: 101,
+                payload: vs_payload,
+            })
+            .await?;
+
+        // Collect verifying shares from all parties (including ourselves)
+        let mut new_verifying_shares: BTreeMap<frost::Identifier, frost::keys::VerifyingShare> =
+            BTreeMap::new();
+        new_verifying_shares.insert(my_id, new_verifying_share);
+
+        for _ in 0..(config.total_parties - 1) {
+            let msg = transport.recv().await?;
+            let peer_vs_bytes: Vec<u8> = serde_json::from_slice(&msg.payload)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            let peer_vs = frost::keys::VerifyingShare::deserialize(&peer_vs_bytes)
+                .map_err(|e| {
+                    CoreError::Protocol(format!("peer VerifyingShare deserialize: {e}"))
+                })?;
+            let from_id = party_to_identifier(msg.from)?;
+            new_verifying_shares.insert(from_id, peer_vs);
+        }
+
+        // Build new KeyPackage and PublicKeyPackage
+        // The verifying key (group public key) stays the same
+        let verifying_key = *pubkey_package.verifying_key();
+
+        let new_key_package = frost::keys::KeyPackage::new(
+            *key_package.identifier(),
+            new_signing_share,
+            new_verifying_share,
+            verifying_key,
+            *key_package.min_signers(),
+        );
+
+        let new_pubkey_package =
+            frost::keys::PublicKeyPackage::new(new_verifying_shares, verifying_key);
+
+        // Serialize and return new KeyShare
+        let key_pkg_bytes = serde_json::to_vec(&new_key_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let pubkey_pkg_bytes = serde_json::to_vec(&new_pubkey_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        let new_share_data = FrostSecp256k1ShareData {
+            key_package: key_pkg_bytes,
+            pubkey_package: pubkey_pkg_bytes,
+        };
+
+        let vk_bytes = verifying_key
+            .serialize()
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        Ok(KeyShare {
+            scheme: CryptoScheme::FrostSecp256k1Tr,
+            party_id,
+            config,
+            group_public_key: GroupPublicKey::Secp256k1(vk_bytes),
+            share_data: zeroize::Zeroizing::new(
+                serde_json::to_vec(&new_share_data)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?,
+            ),
+        })
+    }
+}
+
+/// Evaluate polynomial at `x`: `f(x) = c[0] + c[1]·x + c[2]·x² + …` (secp256k1 scalar)
+fn poly_eval_k256(coefficients: &[k256::Scalar], x: &k256::Scalar) -> k256::Scalar {
+    let mut result = k256::Scalar::ZERO;
+    let mut x_pow = k256::Scalar::ONE;
+    for coeff in coefficients {
+        result += coeff * &x_pow;
+        x_pow *= x;
+    }
+    result
 }
