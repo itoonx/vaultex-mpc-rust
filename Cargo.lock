@@ -3070,6 +3070,7 @@ dependencies = [
  "frost-core",
  "frost-ed25519",
  "frost-secp256k1-tr",
+ "futures",
  "hex",
  "k256",
  "rand 0.8.5",

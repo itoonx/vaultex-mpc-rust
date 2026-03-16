@@ -7,6 +7,7 @@ pub mod gg20;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::error::CoreError;
 use crate::transport::Transport;
@@ -27,8 +28,48 @@ mod serde_byte_array_64 {
     }
 }
 
+/// Custom serde helpers for `Zeroizing<Vec<u8>>`.
+///
+/// Serializes as a plain byte sequence and deserializes by wrapping in `Zeroizing::new(...)`,
+/// ensuring that deserialized key material is automatically wiped from memory on drop.
+mod serde_zeroizing_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use zeroize::Zeroizing;
+
+    /// Serialize `Zeroizing<Vec<u8>>` as a plain byte sequence.
+    pub fn serialize<S: Serializer>(
+        val: &Zeroizing<Vec<u8>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let bytes: &Vec<u8> = val.as_ref();
+        bytes.serialize(serializer)
+    }
+
+    /// Deserialize a byte sequence into `Zeroizing<Vec<u8>>`, ensuring the bytes
+    /// are wiped from heap memory when the returned value is dropped.
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Zeroizing<Vec<u8>>, D::Error> {
+        let v: Vec<u8> = Vec::deserialize(deserializer)?;
+        Ok(Zeroizing::new(v))
+    }
+}
+
 /// A share of a distributed key held by a single party.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Security
+///
+/// `share_data` contains the serialized secret key material for this party.
+/// It is wrapped in [`Zeroizing<Vec<u8>>`] so the bytes are wiped from heap
+/// memory when this `KeyShare` is dropped (SEC-004 root fix, T-S4-00).
+///
+/// **Do NOT clone this struct unnecessarily.** Every clone creates a new heap
+/// allocation of key material — though the clone is also a `Zeroizing` wrapper
+/// and will be wiped on drop.
+///
+/// **Do NOT derive `Debug` on this struct.** A manual `Debug` implementation
+/// redacts `share_data` to prevent key bytes from appearing in logs (SEC-015 fix).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KeyShare {
     /// The cryptographic scheme this key share belongs to.
     pub scheme: CryptoScheme,
@@ -38,8 +79,33 @@ pub struct KeyShare {
     pub config: ThresholdConfig,
     /// The group public key (shared across all parties).
     pub group_public_key: GroupPublicKey,
-    /// Opaque serialized key share data (protocol-specific).
-    pub share_data: Vec<u8>,
+    /// Serialized secret key share bytes (protocol-specific, zeroized on drop).
+    ///
+    /// Contains the serialized form of the inner share struct
+    /// (e.g., `Gg20DistributedShareData`, `FrostEd25519ShareData`).
+    /// The `Zeroizing` wrapper ensures bytes are cleared from heap memory
+    /// when this `KeyShare` is dropped.
+    ///
+    /// # SEC-004 status
+    /// Root fix applied in T-S4-00: field type changed from `Vec<u8>` to
+    /// `Zeroizing<Vec<u8>>`. Protocol implementations must also wrap their
+    /// keygen output in `Zeroizing::new(...)` (enforced in T-S4-01).
+    #[serde(with = "serde_zeroizing_vec")]
+    pub share_data: Zeroizing<Vec<u8>>,
+}
+
+/// Manual `Debug` implementation that redacts `share_data` to prevent secret key
+/// bytes from appearing in log output (SEC-015 fix).
+impl std::fmt::Debug for KeyShare {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyShare")
+            .field("scheme", &self.scheme)
+            .field("party_id", &self.party_id)
+            .field("config", &self.config)
+            .field("group_public_key", &self.group_public_key)
+            .field("share_data", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// The group public key derived from the distributed key generation.
@@ -97,6 +163,10 @@ pub trait MpcProtocol: Send + Sync {
     fn scheme(&self) -> CryptoScheme;
 
     /// Run distributed key generation.
+    ///
+    /// Each party calls this with its own `party_id`. Communication between parties
+    /// is coordinated via `transport`. Returns a [`KeyShare`] containing the party's
+    /// secret share (wrapped in `Zeroizing`) and the shared group public key.
     async fn keygen(
         &self,
         config: ThresholdConfig,
@@ -105,6 +175,10 @@ pub trait MpcProtocol: Send + Sync {
     ) -> Result<KeyShare, CoreError>;
 
     /// Run distributed signing.
+    ///
+    /// Signs `message` using the threshold protocol, involving `signers` parties.
+    /// No single party reconstructs the full private key. Returns the combined
+    /// [`MpcSignature`] once all required parties have contributed their share.
     async fn sign(
         &self,
         key_share: &KeyShare,
