@@ -16,6 +16,8 @@ EVM | Bitcoin | Solana | Sui
 
 [![CI](https://github.com/itoonx/rust-mpc-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/itoonx/rust-mpc-wallet/actions/workflows/ci.yml)
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 </div>
 
 ---
