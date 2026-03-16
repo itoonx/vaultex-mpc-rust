@@ -325,7 +325,8 @@ async fn distributed_keygen(
             party_id,
             config,
             group_public_key: GroupPublicKey::Secp256k1(group_pubkey_bytes),
-            share_data: share_bytes,
+            // SEC-004 root fix (T-S4-00): wrap in Zeroizing so key bytes are wiped on drop
+            share_data: zeroize::Zeroizing::new(share_bytes),
         })
     } else {
         // ── Non-dealer: receive share from Party 1 ────────────────────────
@@ -343,7 +344,8 @@ async fn distributed_keygen(
             party_id,
             config,
             group_public_key: GroupPublicKey::Secp256k1(group_pubkey_bytes),
-            share_data: share_bytes,
+            // SEC-004 root fix (T-S4-00): wrap in Zeroizing so key bytes are wiped on drop
+            share_data: zeroize::Zeroizing::new(share_bytes),
         })
     }
 }

@@ -276,7 +276,7 @@ mod tests {
             party_id: PartyId(1),
             config,
             group_public_key: GroupPublicKey::Ed25519(vec![0u8; 32]),
-            share_data: vec![1, 2, 3, 4],
+            share_data: zeroize::Zeroizing::new(vec![1, 2, 3, 4]),
         };
 
         store
@@ -286,7 +286,7 @@ mod tests {
         let loaded = store.load(&group_id, PartyId(1)).await.unwrap();
 
         assert_eq!(loaded.party_id, PartyId(1));
-        assert_eq!(loaded.share_data, vec![1, 2, 3, 4]);
+        assert_eq!(*loaded.share_data, vec![1, 2, 3, 4]);
 
         // Cleanup
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -313,7 +313,7 @@ mod tests {
                 party_id: PartyId(1),
                 config,
                 group_public_key: GroupPublicKey::Secp256k1(vec![0u8; 33]),
-                share_data: vec![],
+                share_data: zeroize::Zeroizing::new(vec![]),
             };
             store
                 .save(&group_id, &metadata, PartyId(1), &share)

@@ -74,6 +74,24 @@ pub enum CoreError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// No signing policy is loaded; a valid policy must be set before a signing
+    /// session can start. This enforces the "no policy → no sign" rule (FR-B5).
+    ///
+    /// Returned by [`crate::policy::PolicyStore::check`] when no policy has been
+    /// loaded via [`crate::policy::PolicyStore::load`]. Callers must load a policy
+    /// before creating any signing session.
+    #[error("policy required: {0}")]
+    PolicyRequired(String),
+
+    /// A signing session error (e.g. duplicate `tx_fingerprint`, invalid state
+    /// transition, or session not found). The inner string identifies the session
+    /// and the failure reason.
+    ///
+    /// Returned by [`crate::session::SessionManager`] operations when the requested
+    /// operation cannot be completed given the current session state.
+    #[error("session error: {0}")]
+    SessionError(String),
+
     /// A catch-all error variant for cases not covered by the more specific
     /// variants above. Prefer using a specific variant whenever possible so
     /// that callers can handle errors programmatically.

@@ -171,8 +171,11 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             party_id,
             config,
             group_public_key: GroupPublicKey::Secp256k1(vk_bytes),
-            share_data: serde_json::to_vec(&share_data)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?,
+            // SEC-004 root fix (T-S4-00): wrap in Zeroizing so key bytes are wiped on drop
+            share_data: zeroize::Zeroizing::new(
+                serde_json::to_vec(&share_data)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?,
+            ),
         })
     }
 
