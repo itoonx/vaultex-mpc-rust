@@ -33,20 +33,34 @@ impl Default for AptosSimulationConfig {
     }
 }
 
-/// Aptos chain provider.
+/// Move VM chain provider — supports Aptos and Movement.
+///
+/// Both chains use BCS encoding, SHA3-256 hashing, and Ed25519 signing.
+/// Movement is a Move-based L2 on Ethereum with the same VM and tx format.
 ///
 /// Holds an optional Ed25519 `GroupPublicKey` so that `build_transaction` can
 /// embed it inside the serialized `tx_data`, and `finalize_transaction` can
-/// later recover it to build the correct Aptos signature format.
+/// later recover it to build the correct signature format.
 pub struct AptosProvider {
+    chain: Chain,
     group_pubkey: Option<GroupPublicKey>,
     simulation_config: Option<AptosSimulationConfig>,
 }
 
 impl AptosProvider {
-    /// Create a provider without a pre-loaded public key (address derivation only).
+    /// Create an Aptos provider (address derivation only).
     pub fn new() -> Self {
         Self {
+            chain: Chain::Aptos,
+            group_pubkey: None,
+            simulation_config: None,
+        }
+    }
+
+    /// Create a Movement provider (address derivation only).
+    pub fn movement() -> Self {
+        Self {
+            chain: Chain::Movement,
             group_pubkey: None,
             simulation_config: None,
         }
@@ -55,6 +69,16 @@ impl AptosProvider {
     /// Create a provider pre-loaded with the group's Ed25519 public key.
     pub fn with_pubkey(group_pubkey: GroupPublicKey) -> Self {
         Self {
+            chain: Chain::Aptos,
+            group_pubkey: Some(group_pubkey),
+            simulation_config: None,
+        }
+    }
+
+    /// Create a Movement provider pre-loaded with the group's Ed25519 public key.
+    pub fn movement_with_pubkey(group_pubkey: GroupPublicKey) -> Self {
+        Self {
+            chain: Chain::Movement,
             group_pubkey: Some(group_pubkey),
             simulation_config: None,
         }
@@ -76,7 +100,7 @@ impl Default for AptosProvider {
 #[async_trait]
 impl ChainProvider for AptosProvider {
     fn chain(&self) -> Chain {
-        Chain::Aptos
+        self.chain
     }
 
     fn derive_address(&self, group_pubkey: &GroupPublicKey) -> Result<String, CoreError> {
@@ -92,7 +116,7 @@ impl ChainProvider for AptosProvider {
                 "AptosProvider requires a GroupPublicKey — use AptosProvider::with_pubkey".into(),
             )
         })?;
-        tx::build_aptos_transaction(params, pubkey).await
+        tx::build_move_transaction(self.chain, params, pubkey).await
     }
 
     fn finalize_transaction(

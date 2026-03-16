@@ -36,6 +36,7 @@ pub enum Chain {
     MantaPacific,
     // Move chains
     Aptos,
+    Movement,
     // UTXO chains
     BitcoinMainnet,
     BitcoinTestnet,
@@ -74,6 +75,7 @@ impl std::fmt::Display for Chain {
             Chain::Immutable => write!(f, "immutable"),
             Chain::MantaPacific => write!(f, "manta-pacific"),
             Chain::Aptos => write!(f, "aptos"),
+            Chain::Movement => write!(f, "movement"),
             Chain::BitcoinMainnet => write!(f, "bitcoin-mainnet"),
             Chain::BitcoinTestnet => write!(f, "bitcoin-testnet"),
             Chain::Litecoin => write!(f, "litecoin"),
@@ -114,6 +116,7 @@ impl std::str::FromStr for Chain {
             "immutable" | "imx" => Ok(Chain::Immutable),
             "manta-pacific" | "manta" => Ok(Chain::MantaPacific),
             "aptos" | "apt" => Ok(Chain::Aptos),
+            "movement" | "move" => Ok(Chain::Movement),
             "bitcoin" | "bitcoin-mainnet" | "btc" => Ok(Chain::BitcoinMainnet),
             "bitcoin-testnet" => Ok(Chain::BitcoinTestnet),
             "litecoin" | "ltc" => Ok(Chain::Litecoin),

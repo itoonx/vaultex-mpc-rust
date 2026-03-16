@@ -110,6 +110,7 @@ impl ChainRegistry {
             }
             Chain::BitcoinTestnet => Box::new(BitcoinProvider::testnet()),
             Chain::Aptos => Box::new(AptosProvider::new()),
+            Chain::Movement => Box::new(AptosProvider::movement()),
             Chain::Litecoin => Box::new(UtxoProvider::litecoin()),
             Chain::Dogecoin => Box::new(UtxoProvider::dogecoin()),
             Chain::Zcash => Box::new(UtxoProvider::zcash()),
@@ -152,6 +153,7 @@ impl ChainRegistry {
             Chain::MantaPacific,
             // Move chains
             Chain::Aptos,
+            Chain::Movement,
             // UTXO chains
             Chain::BitcoinMainnet,
             Chain::BitcoinTestnet,
@@ -223,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_supported_chains_count() {
-        assert_eq!(ChainRegistry::supported_chains().len(), 31);
+        assert_eq!(ChainRegistry::supported_chains().len(), 32);
     }
 
     #[test]

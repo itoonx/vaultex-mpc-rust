@@ -60,6 +60,15 @@ pub async fn build_aptos_transaction(
     params: TransactionParams,
     group_pubkey: &GroupPublicKey,
 ) -> Result<UnsignedTransaction, CoreError> {
+    build_move_transaction(Chain::Aptos, params, group_pubkey).await
+}
+
+/// Build an unsigned Move VM transaction (Aptos or Movement).
+pub async fn build_move_transaction(
+    chain: Chain,
+    params: TransactionParams,
+    group_pubkey: &GroupPublicKey,
+) -> Result<UnsignedTransaction, CoreError> {
     // 1. Extract and validate sender
     let sender_hex = params
         .extra
@@ -138,13 +147,13 @@ pub async fn build_aptos_transaction(
     tx_data.extend_from_slice(&pubkey_bytes);
 
     Ok(UnsignedTransaction {
-        chain: Chain::Aptos,
+        chain,
         sign_payload,
         tx_data,
     })
 }
 
-/// Finalize an Aptos transaction with an EdDSA signature.
+/// Finalize an Aptos/Movement transaction with an EdDSA signature.
 ///
 /// Expects `unsigned.tx_data` in the format: `bcs_bytes || pubkey(32)`.
 ///
@@ -184,7 +193,7 @@ pub fn finalize_aptos_transaction(
     let tx_hash = hex::encode(&unsigned.sign_payload);
 
     Ok(SignedTransaction {
-        chain: Chain::Aptos,
+        chain: unsigned.chain,
         raw_tx,
         tx_hash,
     })
