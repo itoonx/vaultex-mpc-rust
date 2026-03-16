@@ -26,3 +26,8 @@ pub mod protocol;
 pub mod transport;
 /// Shared primitive types: [`types::PartyId`], [`types::ThresholdConfig`], [`types::CryptoScheme`].
 pub mod types;
+/// Signing session manager: idempotent session lifecycle with `tx_fingerprint` lock.
+///
+/// Use [`session::SessionManager`] to create and track signing sessions.
+/// Call [`session::SessionManager::create`] before initiating any MPC signing round.
+pub mod session;
