@@ -130,3 +130,118 @@ async fn test_evm_provider_returns_correct_chain() {
         "provider.chain() must return Chain::Bsc"
     );
 }
+
+// ============================================================================
+// EVM Transaction Simulation tests (T-S9-03)
+// ============================================================================
+
+#[tokio::test]
+async fn test_evm_simulation_basic_transfer() {
+    use mpc_wallet_chains::evm::{EvmProvider, EvmSimulationConfig};
+
+    let provider = EvmProvider::ethereum().with_simulation(EvmSimulationConfig::default());
+    let params = TransactionParams {
+        to: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD28".into(),
+        value: "1000000000000000000".into(), // 1 ETH
+        data: None,
+        chain_id: Some(1),
+        extra: None,
+    };
+    let result = provider.simulate_transaction(&params).await.unwrap();
+    assert!(result.success);
+    assert_eq!(result.gas_used, 21_000);
+    assert_eq!(result.risk_score, 0); // under threshold, valid address, no calldata
+}
+
+#[tokio::test]
+async fn test_evm_simulation_high_value_flagged() {
+    use mpc_wallet_chains::evm::{EvmProvider, EvmSimulationConfig};
+
+    let provider = EvmProvider::ethereum().with_simulation(EvmSimulationConfig {
+        high_value_threshold: 1_000_000, // low threshold for testing
+        ..Default::default()
+    });
+    let params = TransactionParams {
+        to: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD28".into(),
+        value: "9999999".into(), // above threshold
+        data: None,
+        chain_id: Some(1),
+        extra: None,
+    };
+    let result = provider.simulate_transaction(&params).await.unwrap();
+    assert!(result.risk_flags.contains(&"high_value".to_string()));
+    assert!(result.risk_score >= 50);
+}
+
+#[tokio::test]
+async fn test_evm_simulation_proxy_detected() {
+    use mpc_wallet_chains::evm::{EvmProvider, EvmSimulationConfig};
+
+    let proxy = "0xProxyContractAddress000000000000000000";
+    let provider = EvmProvider::ethereum().with_simulation(EvmSimulationConfig {
+        known_proxies: vec![proxy.into()],
+        ..Default::default()
+    });
+    let params = TransactionParams {
+        to: proxy.into(),
+        value: "0".into(),
+        data: None,
+        chain_id: Some(1),
+        extra: None,
+    };
+    let result = provider.simulate_transaction(&params).await.unwrap();
+    assert!(result.risk_flags.contains(&"proxy_detected".to_string()));
+}
+
+#[tokio::test]
+async fn test_evm_simulation_contract_interaction() {
+    use mpc_wallet_chains::evm::{EvmProvider, EvmSimulationConfig};
+
+    let provider = EvmProvider::ethereum().with_simulation(EvmSimulationConfig::default());
+    let params = TransactionParams {
+        to: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD28".into(),
+        value: "0".into(),
+        data: Some(vec![0xa9, 0x05, 0x9c, 0xbb]), // transfer(address,uint256) selector
+        chain_id: Some(1),
+        extra: None,
+    };
+    let result = provider.simulate_transaction(&params).await.unwrap();
+    assert!(result.risk_flags.contains(&"contract_interaction".to_string()));
+}
+
+#[tokio::test]
+async fn test_evm_simulation_not_configured_returns_error() {
+    let provider = mpc_wallet_chains::evm::EvmProvider::ethereum();
+    let params = TransactionParams {
+        to: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD28".into(),
+        value: "0".into(),
+        data: None,
+        chain_id: Some(1),
+        extra: None,
+    };
+    let result = provider.simulate_transaction(&params).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_evm_simulation_combined_risk_score() {
+    use mpc_wallet_chains::evm::{EvmProvider, EvmSimulationConfig};
+
+    let proxy = "0xProxyContractAddress000000000000000000";
+    let provider = EvmProvider::ethereum().with_simulation(EvmSimulationConfig {
+        high_value_threshold: 100,
+        known_proxies: vec![proxy.into()],
+        ..Default::default()
+    });
+    let params = TransactionParams {
+        to: proxy.into(),
+        value: "999".into(),
+        data: Some(vec![1, 2, 3]),
+        chain_id: Some(1),
+        extra: None,
+    };
+    let result = provider.simulate_transaction(&params).await.unwrap();
+    // high_value(50) + proxy(30) + contract(10) + invalid_address_format(40) = 130 → saturates at 130
+    assert!(result.risk_score >= 90);
+    assert!(result.risk_flags.len() >= 3);
+}
