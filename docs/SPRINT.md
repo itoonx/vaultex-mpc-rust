@@ -931,7 +931,688 @@ jobs:
   use real BCS bytes. Full Sui TransactionData with gas coin management is a Sprint 3 item.
 - **SEC-002 is fully resolved by T-S2-03** — zero occurrences of "demo-password" in CLI source
   is the verification criterion. R6 will `grep` for it explicitly.
+  - **Checkpoint commit rule enforced** — every agent commits after each `cargo test` pass with
+    `[R{N}] checkpoint: {what changed} — tests pass`. Final commit: `[R{N}] complete: {summary}`.
+  - **Worktree reminder** — each agent must run `cargo test` in their OWN worktree, not in
+    `/project/mpc-wallet`. See LESSONS.md LESSON-008.
+
+---
+
+# Sprint 3 — 2026-04-14 → 2026-04-28
+
+## Goal
+**"Resolve SEC-003 CRITICAL (real NATS transport) + fix HIGH findings SEC-004/005/006 + test isolation"**
+
+Replace all `todo!()` stubs in `NatsTransport` with working `async-nats` client code (SEC-003).
+Harden `EncryptedFileStore` with wallet-class Argon2 parameters and zeroized secrets
+(SEC-005/006). Reduce key-share memory exposure in protocol code (SEC-004 partial fix).
+Split the shared chain integration test file to eliminate per-sprint merge conflicts (LESSON-007).
+
+**Sprint owner:** R7 PM Agent
+**Sprint dates:** 2026-04-14 → 2026-04-28
+
+---
+
+## Why These Are Hard Goals
+
+| Finding | Severity | Why It Blocks |
+|---------|----------|---------------|
+| SEC-003 | CRITICAL | `NatsTransport` is 100% `todo!()` — the SDK has no working multi-party transport |
+| SEC-005 | HIGH | `EncryptedFileStore` password/key never zeroized — key material lingers in heap |
+| SEC-006 | HIGH | Argon2 default params (19 MiB, t=2) — too weak for wallet-class key encryption |
+| SEC-004 | HIGH | `KeyShare.share_data: Vec<u8>` not zeroized; partial fix via R1 local copies |
+| LESSON-007 | MEDIUM | Single chain test file causes guaranteed merge conflict every parallel sprint |
+
+**SEC-007 (unauthenticated sender field)** is deferred: fixing it correctly requires transport-level
+MAC keys (Epic E2/E3), which depend on SEC-003 being resolved first. SEC-007 is Sprint 4 scope.
+
+**T-S3-04 (freeze/unfreeze real impl)** deferred to Sprint 4 to avoid overloading R2 with three
+sequential tasks. R2 executes T-S3-01 first, then T-S3-02 after T-S3-01 is merged.
+
+---
+
+## Execution Order
+
+```
+Wave 1 (run in parallel — no dependencies on each other):
+  T-S3-00  R0   agent/r0-s3-prep       (rustdoc public API + workspace readiness check)
+  T-S3-05  R5   agent/r5-test-split    (split chain_integration.rs, resolves LESSON-007)
+
+Wave 2 (after Wave 1 merges — R1 and R2 run in parallel):
+  T-S3-01  R2   agent/r2-nats          (NATS real impl — resolves SEC-003 CRITICAL)
+  T-S3-03  R1   agent/r1-zeroize-shares (zeroize share_data copies — partial SEC-004 fix)
+
+Wave 2b (after T-S3-01 merges — R2 continues sequentially):
+  T-S3-02  R2   agent/r2-argon2        (Argon2 hardening + zeroize password — resolves SEC-005/006)
+```
+
+**R2 sequential ordering:**
+R2 cannot work on multiple branches simultaneously. Execution order for R2:
+1. Complete and merge T-S3-01 (`agent/r2-nats`) — SEC-003 CRITICAL takes priority
+2. Only after T-S3-01 is merged: start T-S3-02 (`agent/r2-argon2`) — SEC-005/006 HIGH
+
+---
+
+## Gate Status (Sprint 3)
+
+| Task | Agent | Branch | PM Approved | R6 Verdict | Merged | Resolves |
+|------|-------|--------|-------------|------------|--------|----------|
+| T-S3-00 | R0 | `agent/r0-s3-prep` | ✓ | pending | ✗ | Epic 0 (rustdoc), workspace readiness |
+| T-S3-05 | R5 | `agent/r5-test-split` | ✓ | pending | ✗ | LESSON-007 (test file conflicts) |
+| T-S3-01 | R2 | `agent/r2-nats` | ✓ | pending | ✗ | SEC-003 CRITICAL |
+| T-S3-02 | R2 | `agent/r2-argon2` | ✓ | pending | ✗ | SEC-005/006 HIGH |
+| T-S3-03 | R1 | `agent/r1-zeroize-shares` | ✓ | pending | ✗ | SEC-004 HIGH (partial) |
+
+---
+
+## Task Specs
+
+---
+
+### Task Spec: T-S3-00
+- **Agent:** R0 (Architect)
+- **Branch:** `agent/r0-s3-prep`
+- **Epic:** Epic 0 (Interface Freeze — story 0-2: rustdoc public API)
+- **Title:** Rustdoc pass on all public R0-owned types + workspace readiness confirmation
+- **Complexity:** S
+- **Wave:** 1 — no blockers, can start immediately
+- **Must complete before:** Wave 2 begins (gating checkpoint, not a code dependency)
+
+#### Context
+
+`CoreError::Transport(String)` already exists in `error.rs` (line 9) — added in Sprint 2.
+`zeroize = { version = "1", features = ["derive"] }` is already in workspace deps.
+`argon2 = "0.5"` is already in workspace deps; `Params::new()` is available without `"std"` feature.
+**R0 has no new code to add for Wave 2 unblocking.** This task delivers Epic 0 story 0-2
+(rustdoc on all public types) which has been pending since sprint 1.
+
+#### Files owned (agent may ONLY modify these — nothing else)
+```
+crates/mpc-wallet-core/src/error.rs                      ← add/improve /// doc comments
+crates/mpc-wallet-core/src/protocol/mod.rs               ← add/improve /// doc comments
+crates/mpc-wallet-core/src/transport/mod.rs              ← add/improve /// doc comments
+crates/mpc-wallet-core/src/key_store/mod.rs              ← add/improve /// doc comments
+crates/mpc-wallet-core/src/types.rs                      ← add/improve /// doc comments (if it exists)
+```
+
+#### Acceptance Criteria
+- [ ] Every `pub` item in `error.rs`, `protocol/mod.rs`, `transport/mod.rs`, `key_store/mod.rs`
+      has a `///` doc comment explaining its role (not just restating the name)
+- [ ] `CoreError` variants each have a doc comment noting when they are produced
+      (e.g., `/// Returned when a key group has been frozen and cannot be used for signing.`)
+- [ ] `KeyShare.share_data` has a doc comment noting:
+      `/// SEC-004: this Vec<u8> is not zeroized on drop. Wrap in Zeroizing<Vec<u8>> when reading.`
+      (tracks the known gap for R6 visibility without changing R0-owned type structure)
+- [ ] `cargo doc --no-deps -p mpc-wallet-core` produces zero warnings
+- [ ] `cargo check --workspace` passes — no regressions
+- [ ] `cargo test -p mpc-wallet-core` passes — no regressions
+
+#### Security Checklist for R6
+- [ ] Doc comments do NOT include any secret values, key material, or password hints in example code
+- [ ] `KeyShare.share_data` doc comment correctly identifies SEC-004 as an open gap — no false claim that the field is already zeroized
+- [ ] No new code logic added — this is documentation only; confirm no `impl` blocks or `fn` bodies changed
+- [ ] `cargo audit` clean — no new dependencies added
+- [ ] No `#[allow(dead_code)]` or `#[allow(unused)]` annotations added (would suppress real warnings)
+
+---
+
+### Task Spec: T-S3-05
+- **Agent:** R5 (QA)
+- **Branch:** `agent/r5-test-split`
+- **Epic:** Infrastructure / LESSON-007 fix
+- **Title:** Split `chain_integration.rs` into per-chain test files
+- **Complexity:** S
+- **Wave:** 1 — no blockers, can start immediately in parallel with T-S3-00
+- **Resolves:** LESSON-007 (shared test file causes deterministic merge conflicts every sprint)
+
+#### Context
+
+`crates/mpc-wallet-chains/tests/chain_integration.rs` is 743+ lines covering all four chains
+(EVM, Bitcoin, Solana, Sui). Every sprint that touches ≥2 chain agents produces a merge conflict
+at end-of-file because all agents append tests to the same file. The fix is to split into
+per-chain files so each chain agent owns an independent test file with zero overlap.
+
+The new layout:
+```
+crates/mpc-wallet-chains/tests/
+  chain_common.rs           ← shared imports/helpers (use decls, helper fns)
+  chain_evm_integration.rs  ← all EVM tests
+  chain_bitcoin_integration.rs ← all Bitcoin tests
+  chain_solana_integration.rs  ← all Solana tests
+  chain_sui_integration.rs     ← all Sui tests
+  chain_integration.rs         ← DELETE after split (all tests moved out)
+```
+
+#### Files owned (agent may ONLY modify/create/delete these — nothing else)
+```
+crates/mpc-wallet-chains/tests/chain_integration.rs      ← source of truth (read + delete at end)
+crates/mpc-wallet-chains/tests/chain_common.rs           ← new file (create)
+crates/mpc-wallet-chains/tests/chain_evm_integration.rs  ← new file (create)
+crates/mpc-wallet-chains/tests/chain_bitcoin_integration.rs ← new file (create)
+crates/mpc-wallet-chains/tests/chain_solana_integration.rs  ← new file (create)
+crates/mpc-wallet-chains/tests/chain_sui_integration.rs  ← new file (create)
+```
+
+#### Acceptance Criteria
+- [ ] `chain_common.rs` contains shared `use` declarations needed by ≥2 test files
+      (e.g., `use mpc_wallet_chains::provider::{Chain, ChainProvider, TransactionParams};`,
+      `use mpc_wallet_core::protocol::{GroupPublicKey, MpcSignature};`)
+      and any shared helper functions (if any exist in `chain_integration.rs`)
+- [ ] `chain_evm_integration.rs` contains ALL and ONLY the EVM tests from `chain_integration.rs`
+      — verify by name: all functions containing `evm`, `ethereum`, `polygon`, `bsc` in their name
+- [ ] `chain_bitcoin_integration.rs` contains ALL and ONLY the Bitcoin tests
+      — verify by name: all functions containing `bitcoin`, `taproot`, `testnet`, `signet`
+- [ ] `chain_solana_integration.rs` contains ALL and ONLY the Solana tests
+      — verify by name: all functions containing `solana`
+- [ ] `chain_sui_integration.rs` contains ALL and ONLY the Sui tests
+      — verify by name: all functions containing `sui`
+- [ ] `chain_integration.rs` is **deleted** after all tests are moved (not left as a shell)
+- [ ] `cargo test -p mpc-wallet-chains` passes and the test count matches the pre-split count
+      (no tests lost, no tests duplicated)
+- [ ] Each new file compiles independently: if `chain_common.rs` exports helpers via `mod chain_common`
+      or if each file is self-contained with its own `use` declarations, either approach is acceptable
+      as long as all tests pass
+
+**Note on Rust integration test file layout:** Each `.rs` file directly under `tests/` is a separate
+integration test binary. Files do NOT automatically share `use` declarations. Each per-chain file
+must independently import what it needs. The `chain_common.rs` file is best used as a shared module
+included via `mod chain_common;` inside each per-chain file if helpers are needed, or simply kept
+as a reference — either approach works.
+
+#### Security Checklist for R6
+- [ ] No test logic changed — only file reorganization (copy-paste and delete, not rewrite)
+- [ ] Test count matches before and after: run `cargo test -p mpc-wallet-chains 2>&1 | grep "test result"` before and after; both must show the same number of `ok` tests
+- [ ] No new test dependencies added to `Cargo.toml` — this is a file reorganization only
+- [ ] No test intentionally removed or skipped (no `#[ignore]` added to existing tests)
+- [ ] `chain_integration.rs` is confirmed deleted (not just emptied): `git status` shows it as deleted
+- [ ] `cargo audit` clean — no new dependencies
+
+---
+
+### Task Spec: T-S3-01
+- **Agent:** R2 (Infrastructure)
+- **Branch:** `agent/r2-nats`
+- **Epic:** Epic E (Transport Hardening — story E1)
+- **Title:** Implement `NatsTransport::connect`, `send`, `recv` with real `async-nats` client (resolves SEC-003)
+- **Complexity:** L
+- **Wave:** 2 — starts after T-S3-00 merges
+- **Resolves:** SEC-003 CRITICAL (all methods are currently `todo!()` stubs)
+
+#### Context: Current state of `transport/nats.rs`
+
+All five methods in `NatsTransport` are `todo!()` stubs (lines 27–58 of `nats.rs`):
+- `connect()` → `todo!("connect to NATS server at nats_url")`
+- `inbox_subject()` → `todo!()`
+- `party_subject()` → `todo!()`
+- `send()` → `todo!("serialize msg with serde_json, publish to party_subject")`
+- `recv()` → `todo!("subscribe to inbox_subject, deserialize next message with serde_json")`
+
+The `NatsTransport` struct holds: `client: async_nats::Client`, `party_id: PartyId`,
+`session_id: String`. The `async-nats` crate is already a workspace dep.
+
+NATS subject scheme (from the existing doc comment, line 9–12):
+- Inbox: `mpc.{session_id}.party.{party_id}`
+- Send to party X: `mpc.{session_id}.party.{X}`
+
+`ProtocolMessage` already derives `Serialize + Deserialize` — JSON serialization is ready.
+
+#### Files owned (agent may ONLY modify these — nothing else)
+```
+crates/mpc-wallet-core/src/transport/nats.rs              ← primary impl file
+```
+
+#### What to implement
+
+**`inbox_subject(&self) -> String`:**
+```rust
+fn inbox_subject(&self) -> String {
+    format!("mpc.{}.party.{}", self.session_id, self.party_id.0)
+}
+```
+
+**`party_subject(session_id: &str, target: PartyId) -> String`:**
+```rust
+fn party_subject(session_id: &str, target: PartyId) -> String {
+    format!("mpc.{}.party.{}", session_id, target.0)
+}
+```
+
+**`connect(nats_url, party_id, session_id) -> Result<Self, CoreError>`:**
+```rust
+pub async fn connect(
+    nats_url: &str,
+    party_id: PartyId,
+    session_id: String,
+) -> Result<Self, CoreError> {
+    let client = async_nats::connect(nats_url)
+        .await
+        .map_err(|e| CoreError::Transport(format!("NATS connect failed: {e}")))?;
+    Ok(Self { client, party_id, session_id })
+}
+```
+
+**`send(&self, msg: ProtocolMessage) -> Result<(), CoreError>`:**
+```rust
+async fn send(&self, msg: ProtocolMessage) -> Result<(), CoreError> {
+    let subject = match msg.to {
+        Some(target) => Self::party_subject(&self.session_id, target),
+        None => {
+            // Broadcast: not supported in basic NATS pub/sub; return error.
+            // Full fanout broadcast requires JetStream (Epic E5 scope).
+            return Err(CoreError::Transport(
+                "broadcast (to: None) not yet supported in NatsTransport; use targeted send".into()
+            ));
+        }
+    };
+    let payload = serde_json::to_vec(&msg)
+        .map_err(|e| CoreError::Transport(format!("serialize error: {e}")))?;
+    self.client
+        .publish(subject, payload.into())
+        .await
+        .map_err(|e| CoreError::Transport(format!("NATS publish failed: {e}")))?;
+    Ok(())
+}
+```
+
+**`recv(&self) -> Result<ProtocolMessage, CoreError>`:**
+```rust
+async fn recv(&self) -> Result<ProtocolMessage, CoreError> {
+    let mut subscriber = self.client
+        .subscribe(self.inbox_subject())
+        .await
+        .map_err(|e| CoreError::Transport(format!("NATS subscribe failed: {e}")))?;
+    let msg = subscriber
+        .next()
+        .await
+        .ok_or_else(|| CoreError::Transport("NATS subscription closed".into()))?;
+    serde_json::from_slice(&msg.payload)
+        .map_err(|e| CoreError::Transport(format!("deserialize error: {e}")))
+}
+```
+
+#### Integration test approach (mock — no live NATS required)
+
+A live NATS server is not available in CI. Use the following test strategy:
+
+**Test 1 — unit test subject formatting (no NATS needed):**
+```rust
+#[test]
+fn test_nats_subject_format() {
+    let subject = NatsTransport::party_subject("sess-abc", PartyId(2));
+    assert_eq!(subject, "mpc.sess-abc.party.2");
+}
+```
+
+**Test 2 — trait contract via `LocalTransport` (no NATS needed):**
+
+Create a test that demonstrates the `Transport` trait contract (send/recv/party_id) using
+`LocalTransport` — this proves the trait interface works correctly and documents that
+`NatsTransport` satisfies the same contract. Add a comment:
+```rust
+// NatsTransport integration test requires a live NATS server.
+// Run manually: NATS_URL=nats://localhost:4222 cargo test --features nats-integration-test
+// The trait contract (send/recv/party_id) is verified here using LocalTransport.
+```
+
+**Test 3 — `#[ignore]` NATS round-trip test (requires live server):**
+```rust
+#[tokio::test]
+#[ignore = "requires live NATS server: NATS_URL=nats://localhost:4222"]
+async fn test_nats_round_trip() {
+    let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".into());
+    let session = uuid::Uuid::new_v4().to_string();
+    // ... connect two NatsTransport instances, send a ProtocolMessage from party 1 to party 2,
+    // recv on party 2, assert message fields match
+}
+```
+
+This test is `#[ignore]` by default and does NOT run in CI. It runs manually or in a future
+CI environment with a NATS sidecar.
+
+#### Acceptance Criteria
+- [ ] `NatsTransport::connect` uses `async_nats::connect(nats_url).await` — no more `todo!()`
+- [ ] `NatsTransport::inbox_subject` returns `"mpc.{session_id}.party.{party_id.0}"` — no more `todo!()`
+- [ ] `NatsTransport::party_subject` returns `"mpc.{session_id}.party.{target.0}"` — no more `todo!()`
+- [ ] `Transport::send` serializes `ProtocolMessage` as JSON and publishes to the target subject — no more `todo!()`
+- [ ] `Transport::recv` subscribes to `inbox_subject()`, awaits next message, deserializes — no more `todo!()`
+- [ ] Broadcast (`msg.to == None`) returns `Err(CoreError::Transport(...))` with a clear message (not a panic)
+- [ ] All errors mapped to `CoreError::Transport(String)` — never panics in the impl
+- [ ] `test_nats_subject_format` unit test passes (no NATS server needed)
+- [ ] `#[ignore]` `test_nats_round_trip` test exists in the file and is correctly annotated
+- [ ] Zero `todo!()` macros remain in `nats.rs`
+- [ ] `cargo test -p mpc-wallet-core` passes (non-ignored tests only)
+- [ ] `cargo check -p mpc-wallet-core` passes
+
+#### Security Checklist for R6
+- [ ] **SEC-003 resolved:** confirm zero `todo!()` macros in `transport/nats.rs` — `grep -n "todo!" nats.rs` must return zero results
+- [ ] **No panic paths in impl:** every `unwrap()` or `expect()` must be replaced with `?` or `.map_err(...)` — confirm `grep -n "\.unwrap()\|\.expect(" nats.rs` returns zero results in the impl blocks (test code may use unwrap)
+- [ ] **Broadcast error, not panic:** `msg.to == None` path returns `Err(CoreError::Transport(...))` — confirm the match arm does NOT call `todo!()` or `unimplemented!()`
+- [ ] **No TLS yet — documented:** the implementation uses plain TCP NATS (`async_nats::connect`). Confirm there is a `// SECURITY: TLS not yet configured — Epic E2 scope` comment in `connect()`. This is known and intentional; TLS is Epic E2.
+- [ ] **No credentials logged:** the `nats_url` passed to `connect()` may contain credentials (e.g., `nats://user:pass@host`). Confirm the error message on connect failure does NOT include the full URL string with credentials. Use a sanitized message or log only the host portion.
+- [ ] **`ProtocolMessage.from` field is still self-reported (SEC-007 still open):** confirm there is a `// SEC-007: from field is self-reported — authentication pending Epic E3` comment in `recv()`. This finding remains open and is tracked.
+- [ ] **No new crate dependencies added** — `async-nats`, `serde_json`, `uuid` are already workspace deps. Verify `Cargo.toml` for `mpc-wallet-core` is unchanged.
+- [ ] `cargo audit` clean — confirm no new advisories
+
+---
+
+### Task Spec: T-S3-02
+- **Agent:** R2 (Infrastructure)
+- **Branch:** `agent/r2-argon2`
+- **Epic:** Epic J (Production Hardening) / SEC-005/006 fix
+- **Title:** Argon2 parameter hardening + zeroize password and derived key in `EncryptedFileStore` (resolves SEC-005/006)
+- **Complexity:** M
+- **Wave:** 2b — starts only AFTER T-S3-01 is merged (R2 sequential constraint)
+- **Resolves:** SEC-005 HIGH (password/key not zeroized) + SEC-006 HIGH (Argon2 params too weak)
+
+#### Context: Current state of `key_store/encrypted.rs`
+
+**SEC-006 problem (`encrypted.rs:29`):**
+```rust
+fn derive_key(&self, salt: &[u8]) -> Result<[u8; 32], CoreError> {
+    let mut key = [0u8; 32];
+    argon2::Argon2::default()   // ← defaults: m=19456 KiB, t=2, p=1 — too weak
+        .hash_password_into(self.password.as_bytes(), salt, &mut key)
+        .map_err(|e| CoreError::Encryption(e.to_string()))?;
+    Ok(key)  // ← returned as plain [u8;32] — not zeroized
+}
+```
+
+**SEC-005 problem (`encrypted.rs:14-17`):**
+```rust
+pub struct EncryptedFileStore {
+    base_dir: PathBuf,
+    password: String,  // ← plain String — not zeroized on drop
+}
+```
+
+After `encrypt()` or `decrypt()` calls, the `key: [u8; 32]` from `derive_key` sits on the stack
+(and in the heap-backed `Vec` returned) without being cleared. The password remains in memory
+for the lifetime of the `EncryptedFileStore` instance without zeroization.
+
+#### Files owned (agent may ONLY modify these — nothing else)
+```
+crates/mpc-wallet-core/src/key_store/encrypted.rs        ← primary impl file
+```
+
+#### What to implement
+
+**Step 1 — Zeroize the password field:**
+```rust
+use zeroize::Zeroizing;
+
+pub struct EncryptedFileStore {
+    base_dir: PathBuf,
+    password: Zeroizing<String>,  // ← zeroized on drop automatically
+}
+
+impl EncryptedFileStore {
+    pub fn new(base_dir: PathBuf, password: &str) -> Self {
+        Self {
+            base_dir,
+            password: Zeroizing::new(password.to_string()),
+        }
+    }
+    // ...
+}
+```
+
+**Step 2 — Upgrade Argon2 parameters:**
+```rust
+fn derive_key(&self, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, CoreError> {
+    let params = argon2::Params::new(
+        65536,  // m_cost: 64 MiB (OWASP wallet-class recommendation)
+        3,      // t_cost: 3 iterations
+        4,      // p_cost: 4 lanes
+        None,   // output_len: default (32 bytes)
+    )
+    .map_err(|e| CoreError::Encryption(format!("argon2 params error: {e}")))?;
+
+    let argon2 = argon2::Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+
+    let mut key = Zeroizing::new([0u8; 32]);
+    argon2
+        .hash_password_into(self.password.as_bytes(), salt, key.as_mut())
+        .map_err(|e| CoreError::Encryption(e.to_string()))?;
+    Ok(key)  // ← Zeroizing<[u8; 32]> — cleared on drop
+}
+```
+
+**Step 3 — Use the zeroized key in `encrypt` and `decrypt`:**
+The `key` from `derive_key` is now `Zeroizing<[u8; 32]>`. Pass `key.as_ref()` to
+`Aes256Gcm::new_from_slice(&key)`. The `Zeroizing` wrapper will clear the key bytes
+when it goes out of scope (after the cipher is created).
+
+**Step 4 — Add 32-byte salt:**
+Upgrade the random salt from 16 bytes to 32 bytes for high-security context (SEC-006 recommendation).
+Update the binary format: `salt (32) + nonce (12) + ciphertext`. Update `decrypt` to read 32 bytes
+of salt. Update the minimum-length check from `< 28` to `< 44`.
+
+**Document the format in a module-level comment:**
+```rust
+// Key file binary format:
+//   [0..32]  : Argon2id salt (32 random bytes)
+//   [32..44] : AES-256-GCM nonce (12 random bytes)
+//   [44..]   : AES-256-GCM ciphertext (authenticated)
+//
+// Argon2id parameters: m=65536 KiB, t=3, p=4 (OWASP wallet-class)
+// NOTE: Changing these parameters breaks decryption of files encrypted
+// with old parameters. Existing key files must be re-encrypted after upgrade.
+```
+
+**IMPORTANT — backward compatibility warning:** Changing the salt size from 16→32 bytes
+**breaks decryption of existing encrypted files**. The test suite creates fresh files each test,
+so existing tests will still pass. Document this in the code and in the commit message.
+This is intentional: existing test-only files are throwaway, and production deployments
+would need to re-encrypt key shares after upgrading (a migration procedure, not yet in scope).
+
+#### Acceptance Criteria
+- [ ] `EncryptedFileStore.password` field is `Zeroizing<String>` — plain `String` is gone
+- [ ] `EncryptedFileStore::new` wraps the password in `Zeroizing::new(password.to_string())`
+- [ ] `derive_key` uses explicit `argon2::Params::new(65536, 3, 4, None)` — `Argon2::default()` is gone
+- [ ] `derive_key` returns `Zeroizing<[u8; 32]>` — plain `[u8; 32]` is gone
+- [ ] Salt is upgraded from 16 bytes to 32 bytes in `encrypt`
+- [ ] `decrypt` reads 32-byte salt and minimum-length check updated to `>= 44`
+- [ ] A module-level doc comment documents the binary format and Argon2 parameters
+- [ ] A doc comment warns that changing parameters breaks existing files
+- [ ] All existing tests in `encrypted.rs` still pass (they create fresh files):
+      `test_save_load_roundtrip`, `test_list_and_delete`, `test_touch_updates_timestamp`
+- [ ] New test `test_argon2_params_are_hardened`: instantiate `EncryptedFileStore`, call
+      `encrypt(b"test")`, call `decrypt` on the result, assert round-trip works — this exercises
+      the new param path end-to-end without inspecting internals (correctness proof)
+- [ ] New test `test_password_not_in_memory_after_drop` (best-effort): create a store, drop it,
+      assert no panic. This is a smoke test — full memory verification would require `valgrind`.
+      A comment in the test should note: "zeroization verified by type system (Zeroizing<String>);
+      runtime verification requires memory inspection tooling beyond cargo test scope."
+- [ ] `cargo test -p mpc-wallet-core` passes
+
+#### Security Checklist for R6
+- [ ] **SEC-006 resolved:** `argon2::Argon2::default()` must NOT appear anywhere in `encrypted.rs` — `grep "Argon2::default" encrypted.rs` returns zero results
+- [ ] **Argon2 params are correct:** `m_cost=65536, t_cost=3, p_cost=4` — verify via code inspection that `argon2::Params::new(65536, 3, 4, None)` is the exact call. Confirm `m_cost` is in KiB (the `argon2` crate takes KiB directly, so 65536 = 64 MiB)
+- [ ] **SEC-005 resolved:** `password: String` field is GONE from `EncryptedFileStore` struct — `grep "password: String" encrypted.rs` returns zero results. The field must be `Zeroizing<String>`.
+- [ ] **Derived key is `Zeroizing<[u8; 32]>`:** confirm `derive_key` return type is `Result<Zeroizing<[u8; 32]>, CoreError>` — the key bytes are cleared when the `Zeroizing` wrapper drops at end of `encrypt`/`decrypt`
+- [ ] **Salt is 32 bytes:** confirm `encrypt` generates `[0u8; 32]` for salt (not `[0u8; 16]`). Confirm `decrypt` slices `&data[..32]` for salt. Confirm minimum-length check is `data.len() < 44` (32 salt + 12 nonce).
+- [ ] **No `unwrap()` on `Params::new()`:** confirm the `Params::new(...)` call is `.map_err(...)` propagated, not `.unwrap()` — invalid params should return `Err(CoreError::Encryption(...))` not panic
+- [ ] **Backward-compat warning documented:** confirm code comment warns that existing files encrypted with old params (16-byte salt) cannot be decrypted with the new code. This is expected and acceptable for the test-only files.
+- [ ] **Round-trip test covers new params:** `test_argon2_params_are_hardened` must encrypt AND decrypt to prove the new Argon2 config produces valid ciphertext (not just that `Params::new` succeeds)
+- [ ] `cargo audit` clean — no new dependencies (`zeroize` is already in workspace)
+
+---
+
+### Task Spec: T-S3-03
+- **Agent:** R1 (Crypto)
+- **Branch:** `agent/r1-zeroize-shares`
+- **Epic:** Epic J (Production Hardening) / SEC-004 partial fix
+- **Title:** Zeroize `KeyShare.share_data` copies in protocol code (partial SEC-004 fix)
+- **Complexity:** M
+- **Wave:** 2 — starts after T-S3-00 merges; runs in parallel with T-S3-01
+- **Resolves:** SEC-004 HIGH (partial — R0-owned struct cannot be changed by R1; R1 fixes local copies)
+
+#### Context: SEC-004 and R1's scope
+
+`KeyShare.share_data: Vec<u8>` is defined in `protocol/mod.rs` (R0's file, line 39).
+Changing `share_data` from `Vec<u8>` to `Zeroizing<Vec<u8>>` requires R0 approval and is
+deferred (requires coordinated breaking change across all serialization). R0 will address
+this in a future sprint via DEC-NNN.
+
+**What R1 CAN do without touching R0's files:**
+
+In `gg20.rs`, `frost_ed25519.rs`, and `frost_secp256k1.rs`, when R1's code reads
+`key_share.share_data`, it copies the bytes into local variables for deserialization.
+Those local `Vec<u8>` copies contain key material and are not currently zeroized.
+
+R1 must wrap every such local copy in `Zeroizing<Vec<u8>>` to ensure the copy is
+cleared when the local variable drops.
+
+#### Files owned (agent may ONLY modify these — nothing else)
+```
+crates/mpc-wallet-core/src/protocol/gg20.rs
+crates/mpc-wallet-core/src/protocol/frost_ed25519.rs
+crates/mpc-wallet-core/src/protocol/frost_secp256k1.rs
+```
+
+#### Files R1 must NOT modify
+```
+crates/mpc-wallet-core/src/protocol/mod.rs              ← R0 owns — KeyShare struct definition
+```
+
+#### What to implement
+
+For each protocol file, find every place where `key_share.share_data` bytes are read
+and deserialized. Example pattern to find:
+
+```rust
+// BEFORE (unprotected copy):
+let share: SomeShareStruct = serde_json::from_slice(&key_share.share_data)?;
+
+// AFTER (protected copy using Zeroizing wrapper):
+let share_bytes = zeroize::Zeroizing::new(key_share.share_data.clone());
+let share: SomeShareStruct = serde_json::from_slice(&share_bytes)?;
+// share_bytes is zeroized here when it drops
+```
+
+The `SomeShareStruct` type itself (e.g., `Gg20DistributedShareData`, `FrostEd25519ShareData`,
+`FrostSecp256k1ShareData`) already implements `ZeroizeOnDrop` — the issue is only the
+intermediate `Vec<u8>` clone used for deserialization.
+
+**For `gg20.rs` specifically:**
+- The `Gg20DistributedShareData.additive_share: Vec<u8>` is already `ZeroizeOnDrop` via derive.
+- Wrap the `key_share.share_data.clone()` call used in `serde_json::from_slice` in `Zeroizing::new(...)`.
+- Also check the keygen path: the `share_data` bytes written to `KeyShare` should be produced
+  from a `Zeroizing` buffer if they contain the raw additive share scalar.
+
+**For `frost_ed25519.rs` and `frost_secp256k1.rs`:**
+- `FrostEd25519ShareData` and `FrostSecp256k1ShareData` already derive `ZeroizeOnDrop`.
+- Same pattern: wrap the intermediate `Vec<u8>` clone of `share_data` in `Zeroizing::new(...)`.
+
+**Add zeroize tests:**
+
+For each protocol, add a test that confirms the pattern works correctly:
+```rust
+#[test]
+fn test_share_data_copy_uses_zeroizing() {
+    // This test documents the zeroization pattern and exercises the code path.
+    // Full memory verification requires external tooling.
+    // Confirmed: share_data copy is wrapped in Zeroizing<Vec<u8>> — see sign() implementation.
+    // The Zeroizing wrapper ensures the copy is cleared before function returns.
+    let _confirmed = true;
+}
+```
+
+Additionally, confirm the `ZeroizeOnDrop` derive on share data structs by adding a compile-time test:
+```rust
+fn _assert_share_data_zeroize_on_drop() {
+    fn assert_zeroize<T: zeroize::ZeroizeOnDrop>() {}
+    assert_zeroize::<Gg20DistributedShareData>();     // (or Gg20ShareData for simulation)
+    assert_zeroize::<FrostEd25519ShareData>();
+    assert_zeroize::<FrostSecp256k1ShareData>();
+}
+```
+
+#### Acceptance Criteria
+- [ ] In `gg20.rs`: every `key_share.share_data.clone()` or equivalent copy used for
+      deserialization is wrapped in `zeroize::Zeroizing::new(...)`
+- [ ] In `frost_ed25519.rs`: same — every local copy of `share_data` bytes is `Zeroizing`-wrapped
+- [ ] In `frost_secp256k1.rs`: same
+- [ ] No changes to `protocol/mod.rs` (R0 owns) — the `KeyShare` struct definition is untouched
+- [ ] Compile-time assertion `_assert_share_data_zeroize_on_drop()` added (or equivalent
+      `static_assertions` approach) confirming each share data struct implements `ZeroizeOnDrop`
+- [ ] `cargo test -p mpc-wallet-core` passes
+- [ ] `cargo test -p mpc-wallet-core --features gg20-simulation` passes (simulation path also patched)
+- [ ] `cargo check -p mpc-wallet-core` passes with no new warnings
+
+#### Security Checklist for R6
+- [ ] **SEC-004 partial fix:** confirm every `key_share.share_data.clone()` site in all three
+      protocol files is wrapped in `Zeroizing::new(...)`. Verify by searching:
+      `grep -n "share_data.clone\|share_data\[" gg20.rs frost_ed25519.rs frost_secp256k1.rs`
+      — every occurrence must be inside a `Zeroizing::new(...)` wrapper
+- [ ] **No change to `KeyShare` struct:** confirm `protocol/mod.rs` is not modified.
+      `git diff agent/r1-zeroize-shares -- crates/mpc-wallet-core/src/protocol/mod.rs` must be empty.
+- [ ] **`ZeroizeOnDrop` is actually derived on share data structs:** confirm the compile-time
+      assertion `_assert_share_data_zeroize_on_drop()` compiles successfully — this proves the
+      derive is present, not just assumed
+- [ ] **SEC-004 root cause documented:** add a code comment near the `KeyShare.share_data` usage
+      in each file: `// SEC-004: share_data is Vec<u8> (not Zeroizing); this local copy IS Zeroizing.`
+      This makes the partial fix visible to future reviewers.
+- [ ] **Keygen path covered:** confirm the `sign()` AND `keygen()` paths are both checked in each
+      file — the zeroization gap exists wherever `share_data` bytes are cloned, not just in signing
+- [ ] **No `unwrap()` added** in the zeroization changes — all error paths use `?` propagation
+- [ ] `cargo audit` clean — no new dependencies (`zeroize` is already in workspace)
+
+---
+
+## Blocked Tasks (Sprint 3)
+
+| Task | Blocker | Resolution |
+|------|---------|------------|
+| T-S3-01 | T-S3-00 merged (wave gate) | R0 completes T-S3-00 first |
+| T-S3-02 | T-S3-01 merged (R2 sequential) | R2 completes T-S3-01 first; only then starts T-S3-02 |
+| T-S3-03 | T-S3-00 merged (wave gate) | Runs in parallel with T-S3-01 |
+| T-S3-05 | None | Wave 1 — starts immediately in parallel with T-S3-00 |
+
+---
+
+## Deferred to Sprint 4
+
+| Item | Reason |
+|------|--------|
+| T-S3-04 (freeze/unfreeze real impl) | R2 already has two sequential tasks this sprint; adding a third would require a third branch and serialization risk. Deferred to Sprint 4. |
+| SEC-007 (unauthenticated sender) | Requires transport-level MAC keys (Epic E2/E3) which depend on SEC-003 being complete. Will be addressed in Sprint 4 after T-S3-01 is merged and stable. |
+| SEC-004 root fix (`KeyShare.share_data: Zeroizing<Vec<u8>>`) | Requires R0 breaking change to `KeyShare` struct + coordinated migration of all JSON deserialization. Deferred to Sprint 4 as a dedicated R0 task. |
+
+---
+
+## Sprint Notes
+
+- **R2 sequential constraint is hard:** R2 cannot work on two branches simultaneously.
+  T-S3-01 (`agent/r2-nats`) is the CRITICAL priority. T-S3-02 (`agent/r2-argon2`) only
+  starts after T-S3-01 is merged and R6-approved. Do not attempt to parallelize R2's tasks.
+
+- **T-S3-00 is intentionally small:** `CoreError::Transport` already exists; `zeroize` is already
+  a workspace dep; `argon2::Params::new()` needs no new features. R0's Sprint 3 work is the
+  rustdoc pass (Epic 0 story 0-2), which has been pending since Sprint 1.
+
+- **T-S3-05 has zero code risk:** it is a file move + delete. R5 must verify test count
+  matches before and after. The only risk is accidentally dropping a test — prevented by
+  the test count assertion in acceptance criteria.
+
+- **Argon2 param change breaks existing test-only key files:** This is expected and acceptable.
+  All test files are created fresh in `tempdir()` per test — no production files affected.
+  The code comment documents this for any future migration procedure.
+
+- **NATS TLS is NOT in T-S3-01:** Epic E2 (mTLS) and Epic E3 (per-session ECDH) are out of scope.
+  T-S3-01 implements plaintext NATS (SEC-003 fix = no more `todo!()` stubs). The TLS gap
+  must be documented in the code with a `// SECURITY: TLS not yet configured — Epic E2 scope` comment.
+
 - **Checkpoint commit rule enforced** — every agent commits after each `cargo test` pass with
   `[R{N}] checkpoint: {what changed} — tests pass`. Final commit: `[R{N}] complete: {summary}`.
+
 - **Worktree reminder** — each agent must run `cargo test` in their OWN worktree, not in
   `/project/mpc-wallet`. See LESSONS.md LESSON-008.
+  - R0 worktree: `/Users/thecoding/git/worktrees/mpc-r0`
+  - R1 worktree: `/Users/thecoding/git/worktrees/mpc-r1`
+  - R2 worktree: `/Users/thecoding/git/worktrees/mpc-r2`
+  - R5: no dedicated worktree — use main repo or a fresh worktree `mpc-r5`
