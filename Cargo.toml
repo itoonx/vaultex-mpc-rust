@@ -31,6 +31,14 @@ blake2 = "0.10"
 aes-gcm = "0.10"
 argon2 = "0.5"
 
+# ECDH + symmetric encryption (Epic E3)
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+
+# JWT validation (Epic A1)
+jsonwebtoken = "9"
+
 # Blockchain SDKs
 alloy = { version = "1.5", features = ["full"] }
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
