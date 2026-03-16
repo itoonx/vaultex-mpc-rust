@@ -225,6 +225,106 @@ pub fn can_tolerate_failures(threshold: u16, total_parties: u16, failed_parties:
     healthy >= threshold
 }
 
+// ─── Disaster Recovery (Epic H4) ─────────────────────────────────────────────
+
+/// Disaster recovery plan for key group restoration.
+///
+/// Encapsulates the information needed to assess whether a key group can be
+/// recovered and the procedural steps to do so.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryPlan {
+    /// Key group identifier.
+    pub group_id: String,
+    /// Minimum shares needed to recover (threshold).
+    pub threshold: u16,
+    /// Total shares in the group.
+    pub total_shares: u16,
+    /// Known share locations with backup status.
+    pub share_locations: Vec<ShareLocation>,
+    /// Recovery procedure steps (human-readable).
+    pub steps: Vec<String>,
+}
+
+/// Location of a key share for recovery purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareLocation {
+    /// Party that holds this share.
+    pub party_id: PartyId,
+    /// Cloud provider where the share is stored.
+    pub provider: CloudProvider,
+    /// Geographic region of the share.
+    pub region: Region,
+    /// Whether the backup has been verified recently.
+    pub backup_verified: bool,
+    /// Unix timestamp of the last backup verification.
+    pub last_backup_timestamp: u64,
+}
+
+impl RecoveryPlan {
+    /// Create a recovery plan from current node health data.
+    ///
+    /// Generates procedural steps based on how many nodes are healthy
+    /// relative to the threshold requirement.
+    pub fn from_health(group_id: &str, threshold: u16, nodes: &[NodeHealth]) -> Self {
+        let share_locations: Vec<ShareLocation> = nodes
+            .iter()
+            .map(|n| ShareLocation {
+                party_id: n.party_id,
+                provider: n.location.provider.clone(),
+                region: n.location.region.clone(),
+                backup_verified: n.status == HealthStatus::Healthy,
+                last_backup_timestamp: n.last_heartbeat,
+            })
+            .collect();
+
+        let healthy_count = nodes
+            .iter()
+            .filter(|n| n.status == HealthStatus::Healthy)
+            .count();
+
+        let mut steps = vec![format!(
+            "1. Verify {} of {} shares are accessible",
+            threshold,
+            nodes.len()
+        )];
+
+        if healthy_count < threshold as usize {
+            steps.push(format!(
+                "2. CRITICAL: Only {} healthy nodes, need {}. Initiate emergency share recovery.",
+                healthy_count, threshold
+            ));
+            steps.push("3. Contact backup custodians for offline share restoration.".into());
+        } else {
+            steps.push(
+                "2. All required shares accessible. Proceed with normal key refresh.".into(),
+            );
+            steps.push("3. After refresh, verify new shares with test signing.".into());
+        }
+        steps.push("4. Update backup records and verify all share locations.".into());
+
+        RecoveryPlan {
+            group_id: group_id.into(),
+            threshold,
+            total_shares: nodes.len() as u16,
+            share_locations,
+            steps,
+        }
+    }
+
+    /// Check if recovery is possible with current share availability.
+    ///
+    /// Returns `true` if the number of verified backup locations meets or
+    /// exceeds the threshold.
+    pub fn is_recoverable(&self) -> bool {
+        let available = self
+            .share_locations
+            .iter()
+            .filter(|s| s.backup_verified)
+            .count();
+        available >= self.threshold as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +535,64 @@ mod tests {
             RpcEndpoint { url: "c".into(), provider: "z".into(), priority: 3, healthy: true },
         ]);
         assert_eq!(pool.healthy_count(), 2);
+    // ── Disaster Recovery (RecoveryPlan) tests ───────────────────────────
+
+    fn health_node(id: u16, provider: &str, region: &str, status: HealthStatus, hb: u64) -> NodeHealth {
+        NodeHealth {
+            party_id: PartyId(id),
+            status,
+            last_heartbeat: hb,
+            location: node(id, provider, region),
+        }
     }
+
+    #[test]
+    fn test_recovery_plan_recoverable() {
+        let nodes = vec![
+            health_node(1, "aws", "us-1", HealthStatus::Healthy, 100),
+            health_node(2, "gcp", "eu-1", HealthStatus::Healthy, 100),
+            health_node(3, "azure", "ap-1", HealthStatus::Unreachable, 50),
+        ];
+        let plan = RecoveryPlan::from_health("group-1", 2, &nodes);
+        assert!(plan.is_recoverable());
+        assert_eq!(plan.threshold, 2);
+        assert_eq!(plan.total_shares, 3);
+        assert_eq!(plan.share_locations.len(), 3);
+    }
+
+    #[test]
+    fn test_recovery_plan_not_recoverable() {
+        let nodes = vec![
+            health_node(1, "aws", "us-1", HealthStatus::Healthy, 100),
+            health_node(2, "gcp", "eu-1", HealthStatus::Unreachable, 50),
+            health_node(3, "azure", "ap-1", HealthStatus::Unreachable, 50),
+        ];
+        let plan = RecoveryPlan::from_health("group-1", 2, &nodes);
+        assert!(!plan.is_recoverable());
+    }
+
+    #[test]
+    fn test_recovery_plan_critical_steps() {
+        let nodes = vec![
+            health_node(1, "aws", "us-1", HealthStatus::Healthy, 100),
+            health_node(2, "gcp", "eu-1", HealthStatus::Unreachable, 50),
+            health_node(3, "azure", "ap-1", HealthStatus::Unreachable, 50),
+        ];
+        let plan = RecoveryPlan::from_health("group-1", 2, &nodes);
+        assert!(plan.steps.iter().any(|s| s.contains("CRITICAL")));
+    }
+
+    #[test]
+    fn test_recovery_plan_normal_steps_when_healthy() {
+        let nodes = vec![
+            health_node(1, "aws", "us-1", HealthStatus::Healthy, 100),
+            health_node(2, "gcp", "eu-1", HealthStatus::Healthy, 100),
+            health_node(3, "azure", "ap-1", HealthStatus::Healthy, 100),
+        ];
+        let plan = RecoveryPlan::from_health("group-1", 2, &nodes);
+        assert!(plan.is_recoverable());
+        assert!(!plan.steps.iter().any(|s| s.contains("CRITICAL")));
+        assert!(plan.steps.iter().any(|s| s.contains("normal key refresh")));
+    }
+}
 }

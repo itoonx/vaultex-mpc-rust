@@ -622,6 +622,188 @@ async fn test_frost_ed25519_keygen_sign_verify() {
     vk.verify(message, &sig).unwrap();
 }
 
+// ── FROST Ed25519 reshare tests (Epic H2) ────────────────────────────────────
+
+/// FROST Ed25519 reshare: 2-of-3 -> 2-of-4.
+///
+/// For FROST, reshare = re-keygen with new config. This generates a new group
+/// key (FROST limitation: cannot inject a pre-existing group secret into the DKG).
+/// We verify:
+/// 1. Reshare completes without error for all new parties
+/// 2. New shares have correct config (2-of-4)
+/// 3. New shares can produce valid signatures
+#[tokio::test]
+async fn test_frost_ed25519_reshare_new_config() {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    // Step 1: Keygen 2-of-3
+    let shares = run_keygen(frost_ed25519_factory, 2, 3).await;
+
+    // Step 2: Reshare to 2-of-4
+    // For FROST, all new parties must participate in the fresh DKG.
+    // Only parties 1..=4 participate (new config).
+    let new_config = ThresholdConfig::new(2, 4).unwrap();
+    let new_parties: Vec<PartyId> = (1..=4).map(PartyId).collect();
+    let old_signers: Vec<PartyId> = vec![PartyId(1), PartyId(2), PartyId(3)];
+    let net = LocalTransportNetwork::new(4);
+
+    let mut handles = Vec::new();
+    // Old parties (1,2,3) run reshare with their existing shares
+    for i in 0..3 {
+        let share = shares[i].clone();
+        let transport = net.get_transport(share.party_id);
+        let protocol = frost_ed25519_factory();
+        let old_s = old_signers.clone();
+        let new_p = new_parties.clone();
+        handles.push(tokio::spawn(async move {
+            protocol
+                .reshare(&share, &old_s, new_config, &new_p, &*transport)
+                .await
+        }));
+    }
+    // New-only party (4) needs a dummy key share
+    {
+        let dummy_share = KeyShare {
+            scheme: CryptoScheme::FrostEd25519,
+            party_id: PartyId(4),
+            config: ThresholdConfig::new(2, 3).unwrap(),
+            group_public_key: shares[0].group_public_key.clone(),
+            share_data: zeroize::Zeroizing::new(vec![]),
+        };
+        let transport = net.get_transport(PartyId(4));
+        let protocol = frost_ed25519_factory();
+        let old_s = old_signers.clone();
+        let new_p = new_parties.clone();
+        handles.push(tokio::spawn(async move {
+            protocol
+                .reshare(&dummy_share, &old_s, new_config, &new_p, &*transport)
+                .await
+        }));
+    }
+
+    let mut new_shares = Vec::new();
+    for h in handles {
+        new_shares.push(h.await.unwrap().unwrap());
+    }
+
+    // Step 3: Verify new config
+    for share in &new_shares {
+        assert_eq!(share.config.threshold, 2);
+        assert_eq!(share.config.total_parties, 4);
+        assert_eq!(share.scheme, CryptoScheme::FrostEd25519);
+    }
+
+    // All parties must agree on the new group key
+    let new_gpk = new_shares[0].group_public_key.as_bytes().to_vec();
+    for share in &new_shares[1..] {
+        assert_eq!(share.group_public_key.as_bytes(), &new_gpk[..]);
+    }
+
+    // Step 4: Sign with new shares (parties 1 and 4)
+    let message = b"frost ed25519 reshare: sign with parties 1 and 4";
+    let sigs = run_sign(frost_ed25519_factory, &new_shares, &[0, 3], message).await;
+
+    let MpcSignature::EdDsa { signature } = &sigs[0] else {
+        panic!("expected EdDSA signature");
+    };
+
+    let vk = VerifyingKey::from_bytes(new_gpk.as_slice().try_into().unwrap()).unwrap();
+    let sig = Signature::from_bytes(signature);
+    vk.verify(message, &sig)
+        .expect("signature after FROST Ed25519 reshare must verify against new group key");
+}
+
+// ── FROST Secp256k1-tr reshare tests (Epic H2) ──────────────────────────────
+
+/// FROST Secp256k1-tr reshare: 2-of-3 -> 2-of-4.
+///
+/// Same approach as Ed25519: reshare = re-keygen. Verify new shares work.
+#[tokio::test]
+async fn test_frost_secp256k1_reshare_new_config() {
+    // Step 1: Keygen 2-of-3
+    let shares = run_keygen(frost_secp256k1_factory, 2, 3).await;
+
+    // Step 2: Reshare to 2-of-4
+    let new_config = ThresholdConfig::new(2, 4).unwrap();
+    let new_parties: Vec<PartyId> = (1..=4).map(PartyId).collect();
+    let old_signers: Vec<PartyId> = vec![PartyId(1), PartyId(2), PartyId(3)];
+    let net = LocalTransportNetwork::new(4);
+
+    let mut handles = Vec::new();
+    for i in 0..3 {
+        let share = shares[i].clone();
+        let transport = net.get_transport(share.party_id);
+        let protocol = frost_secp256k1_factory();
+        let old_s = old_signers.clone();
+        let new_p = new_parties.clone();
+        handles.push(tokio::spawn(async move {
+            protocol
+                .reshare(&share, &old_s, new_config, &new_p, &*transport)
+                .await
+        }));
+    }
+    {
+        let dummy_share = KeyShare {
+            scheme: CryptoScheme::FrostSecp256k1Tr,
+            party_id: PartyId(4),
+            config: ThresholdConfig::new(2, 3).unwrap(),
+            group_public_key: shares[0].group_public_key.clone(),
+            share_data: zeroize::Zeroizing::new(vec![]),
+        };
+        let transport = net.get_transport(PartyId(4));
+        let protocol = frost_secp256k1_factory();
+        let old_s = old_signers.clone();
+        let new_p = new_parties.clone();
+        handles.push(tokio::spawn(async move {
+            protocol
+                .reshare(&dummy_share, &old_s, new_config, &new_p, &*transport)
+                .await
+        }));
+    }
+
+    let mut new_shares = Vec::new();
+    for h in handles {
+        new_shares.push(h.await.unwrap().unwrap());
+    }
+
+    // Verify new config
+    for share in &new_shares {
+        assert_eq!(share.config.threshold, 2);
+        assert_eq!(share.config.total_parties, 4);
+        assert_eq!(share.scheme, CryptoScheme::FrostSecp256k1Tr);
+    }
+
+    // All parties agree on new group key
+    let new_gpk = new_shares[0].group_public_key.as_bytes().to_vec();
+    for share in &new_shares[1..] {
+        assert_eq!(share.group_public_key.as_bytes(), &new_gpk[..]);
+    }
+
+    // Sign with new shares (parties 1 and 4)
+    let message = b"frost secp256k1 reshare: sign with parties 1 and 4";
+    let sigs = run_sign(frost_secp256k1_factory, &new_shares, &[0, 3], message).await;
+
+    for sig in &sigs {
+        match sig {
+            MpcSignature::Schnorr { signature } => {
+                assert_eq!(signature.len(), 64);
+            }
+            _ => panic!("expected Schnorr signature after reshare"),
+        }
+    }
+
+    // All signers agree on the same signature
+    let MpcSignature::Schnorr { signature: sig0 } = &sigs[0] else {
+        panic!();
+    };
+    for sig in &sigs[1..] {
+        let MpcSignature::Schnorr { signature } = sig else {
+            panic!();
+        };
+        assert_eq!(sig0, signature, "all signers must agree on signature after reshare");
+    }
+}
+
 // ============================================================================
 // SEC-004 documentation test
 // ============================================================================

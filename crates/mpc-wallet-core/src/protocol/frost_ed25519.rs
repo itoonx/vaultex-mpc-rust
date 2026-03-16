@@ -329,6 +329,26 @@ impl MpcProtocol for FrostEd25519Protocol {
         })
     }
 
+    /// Reshare key shares to a new threshold configuration.
+    ///
+    /// For FROST Ed25519, resharing runs a fresh DKG with the new configuration.
+    /// **Note:** Unlike GG20, FROST reshare generates a new group public key
+    /// because the FROST DKG API does not expose a mechanism to constrain the
+    /// group secret to a pre-existing value. All new parties must participate.
+    async fn reshare(
+        &self,
+        key_share: &KeyShare,
+        _old_signers: &[PartyId],
+        new_config: ThresholdConfig,
+        _new_parties: &[PartyId],
+        transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        // For FROST, reshare = new DKG with new config.
+        // The group key will change (FROST limitation — no secret injection in DKG).
+        let party_id = key_share.party_id;
+        self.keygen(new_config, party_id, transport).await
+    }
+
     async fn sign(
         &self,
         key_share: &KeyShare,
