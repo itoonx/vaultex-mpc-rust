@@ -84,11 +84,11 @@ git commit -m "[R{N}] complete: {task summary}"
 
 ---
 
-## Current State (as of Sprint 6 complete)
+## Current State (as of Sprint 7 complete)
 
 ### Tests on `main`
 ```
-128 tests pass  (cargo test --workspace)  1 ignored (NATS live-server test)
+157 tests pass  (cargo test --workspace)  1 ignored (NATS live-server test)
 cargo check     clean
 .github/workflows/ci.yml  ← CI pipeline active
 ```
@@ -100,7 +100,15 @@ cargo check     clean
 - **Sprint 4:** COMPLETE — all 5 tasks merged (T-S4-00 through T-S4-04)
 - **Sprint 5:** COMPLETE — all 5 tasks merged (T-S5-00 through T-S5-04)
 - **Sprint 6:** COMPLETE — all 5 tasks merged (T-S6-00 through T-S6-04)
-- **Sprint 7:** PENDING — mTLS on NatsTransport (Epic E2), RBAC (Epic A), Solana v0 versioned tx, CLI `audit-verify` command
+- **Sprint 7:** COMPLETE — all 5 tasks merged (T-S7-00 through T-S7-04)
+- **Sprint 8:** PENDING — OIDC JWT validation (Epic A1), ABAC attributes (Epic A3), MFA step-up (Epic A4), key refresh/reshare (Epic H)
+
+### New in Sprint 7
+- `mpc_wallet_core::transport::nats` — Epic E2: mTLS support via `NatsTlsConfig` + `connect_signed_tls()`, PEM cert loading, client key zeroization (SEC-004 pattern)
+- `mpc_wallet_core::rbac` — Epic A2 (FR-A.2): RBAC permission model with `ApiRole` (initiator/approver/admin), `AuthContext`, `Permissions` guards, `CoreError::Unauthorized`
+- `mpc_wallet_chains::solana::tx` — Solana v0 versioned transactions with `0x80` version prefix, `AddressLookupTable` support, legacy backward-compatible
+- `mpc-wallet-cli` — Epic F3: `audit-verify --pack-file <path>` command using `AuditLedger::verify_pack()`
+- `mpc_wallet_core::session::state` — `Session.initiator_id` field for RBAC audit trail + SoD enforcement
 
 ### New in Sprint 6
 - `NatsTransport` — SEC-007 WIRED: SignedEnvelope on every send/recv, peer key registry, monotonic seq_no
@@ -164,6 +172,8 @@ Full findings log → `docs/SECURITY_FINDINGS.md`
 | DEC-002 | Solana: manual binary serialization + round-trip tests validate structure |
 | DEC-003 | Sui: `bcs` crate for BCS encoding — DONE Sprint 2 |
 | DEC-004 | Sprint 2 GG20 hard commitment — DELIVERED |
+| DEC-005 | Sprint 7 RBAC: Epic A2 only (roles + guards); OIDC/ABAC/MFA deferred to Sprint 8 |
+| DEC-006 | Solana v0: manual serialization continues (DEC-002 extended); no solana-sdk dependency |
 
 Full decision log → `docs/DECISIONS.md`
 
