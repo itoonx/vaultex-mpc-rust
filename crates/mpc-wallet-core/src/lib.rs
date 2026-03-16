@@ -36,3 +36,8 @@ pub mod policy;
 /// Use [`session::SessionManager`] to create and track signing sessions.
 /// Call [`session::SessionManager::create`] before initiating any MPC signing round.
 pub mod session;
+/// Append-only hash-chained audit ledger with Ed25519 service signatures (FR-F).
+///
+/// Use [`audit::AuditLedger`] to record every signing event. Call
+/// [`audit::AuditLedger::verify`] to check tamper-evident chain integrity.
+pub mod audit;
