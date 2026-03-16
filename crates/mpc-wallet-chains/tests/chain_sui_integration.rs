@@ -111,7 +111,9 @@ async fn test_sui_finalize_has_correct_signature_format() {
         .expect("build_transaction should succeed");
 
     let sig_bytes = [3u8; 64];
-    let mpc_sig = MpcSignature::EdDsa { signature: sig_bytes };
+    let mpc_sig = MpcSignature::EdDsa {
+        signature: sig_bytes,
+    };
 
     let signed = provider
         .finalize_transaction(&unsigned, &mpc_sig)
@@ -127,7 +129,10 @@ async fn test_sui_finalize_has_correct_signature_format() {
     );
 
     // Byte 0: Ed25519 scheme flag = 0x00
-    assert_eq!(signed.raw_tx[0], 0x00, "first byte must be Ed25519 flag 0x00");
+    assert_eq!(
+        signed.raw_tx[0], 0x00,
+        "first byte must be Ed25519 flag 0x00"
+    );
 
     // Bytes 1..65: the 64-byte EdDSA signature
     assert_eq!(
@@ -214,7 +219,10 @@ async fn test_sui_broadcast_stub_returns_not_implemented() {
         tx_hash: "0xdeadbeef".to_string(),
     };
     let result = provider.broadcast_stub(&fake_signed).await;
-    assert!(result.is_err(), "broadcast_stub must return Err until implemented");
+    assert!(
+        result.is_err(),
+        "broadcast_stub must return Err until implemented"
+    );
 }
 
 // ============================================================================
@@ -225,7 +233,11 @@ async fn test_sui_broadcast_stub_returns_not_implemented() {
 fn test_sui_validate_address_valid() {
     let valid = "0x0000000000000000000000000000000000000000000000000000000000000001";
     let result = mpc_wallet_chains::sui::tx::validate_sui_address(valid);
-    assert!(result.is_ok(), "valid Sui address must pass validation: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "valid Sui address must pass validation: {:?}",
+        result
+    );
     assert_eq!(result.unwrap()[31], 0x01, "last byte must be 0x01");
 }
 
@@ -246,19 +258,24 @@ fn test_sui_validate_address_wrong_length() {
 #[tokio::test]
 async fn test_sui_build_with_sender_validates_address() {
     use mpc_wallet_core::protocol::GroupPublicKey;
-    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
-        GroupPublicKey::Ed25519(vec![1u8; 32])
-    );
+    let provider =
+        mpc_wallet_chains::sui::SuiProvider::with_pubkey(GroupPublicKey::Ed25519(vec![1u8; 32]));
     let params = TransactionParams {
         to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
         value: "1000".to_string(),
-        data: None, chain_id: None, extra: None,
+        data: None,
+        chain_id: None,
+        extra: None,
     };
     let valid_sender = "0x0000000000000000000000000000000000000000000000000000000000000001";
-    let result = provider.build_transaction_with_sender(params.clone(), valid_sender).await;
+    let result = provider
+        .build_transaction_with_sender(params.clone(), valid_sender)
+        .await;
     assert!(result.is_ok(), "valid sender must succeed: {:?}", result);
     let bad_sender = "not-a-valid-address";
-    let result = provider.build_transaction_with_sender(params, bad_sender).await;
+    let result = provider
+        .build_transaction_with_sender(params, bad_sender)
+        .await;
     assert!(result.is_err(), "invalid sender must return error");
 }
 
@@ -272,7 +289,11 @@ fn test_sui_validate_address_invalid_hex_chars() {
     // 0x + 64 chars but not valid hex (contains 'g')
     let bad = "0xgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg";
     let result = mpc_wallet_chains::sui::tx::validate_sui_address(bad);
-    assert!(result.is_err(), "address with invalid hex chars must fail: {:?}", result);
+    assert!(
+        result.is_err(),
+        "address with invalid hex chars must fail: {:?}",
+        result
+    );
 }
 
 // ============================================================================
@@ -282,18 +303,28 @@ fn test_sui_validate_address_invalid_hex_chars() {
 /// BCS tx → Blake2b-256 sign_payload must be exactly 32 bytes and non-zero.
 #[tokio::test]
 async fn test_sui_bcs_sign_payload_is_32_bytes() {
-    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
-        GroupPublicKey::Ed25519(vec![1u8; 32])
-    );
+    let provider =
+        mpc_wallet_chains::sui::SuiProvider::with_pubkey(GroupPublicKey::Ed25519(vec![1u8; 32]));
     let params = TransactionParams {
         to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
         value: "1000000".to_string(),
-        data: None, chain_id: None,
-        extra: Some(serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"})),
+        data: None,
+        chain_id: None,
+        extra: Some(
+            serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"}),
+        ),
     };
     let unsigned = provider.build_transaction(params).await.unwrap();
-    assert_eq!(unsigned.sign_payload.len(), 32, "sign_payload must be 32 bytes (Blake2b-256)");
-    assert_ne!(unsigned.sign_payload, vec![0u8; 32], "sign_payload must not be all zeros");
+    assert_eq!(
+        unsigned.sign_payload.len(),
+        32,
+        "sign_payload must be 32 bytes (Blake2b-256)"
+    );
+    assert_ne!(
+        unsigned.sign_payload,
+        vec![0u8; 32],
+        "sign_payload must not be all zeros"
+    );
 }
 
 /// tx_data must be bcs_bytes || pubkey(32): last 32 bytes must equal the provider pubkey.
@@ -302,21 +333,29 @@ async fn test_sui_bcs_sign_payload_is_32_bytes() {
 /// is at least 32+32+8+32 = 104 bytes, so tx_data must be > 32 bytes total.
 #[tokio::test]
 async fn test_sui_bcs_tx_data_contains_bcs_plus_pubkey() {
-    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
-        GroupPublicKey::Ed25519(vec![0xAAu8; 32])
-    );
+    let provider =
+        mpc_wallet_chains::sui::SuiProvider::with_pubkey(GroupPublicKey::Ed25519(vec![0xAAu8; 32]));
     let params = TransactionParams {
         to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
         value: "500".to_string(),
-        data: None, chain_id: None,
-        extra: Some(serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"})),
+        data: None,
+        chain_id: None,
+        extra: Some(
+            serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"}),
+        ),
     };
     let unsigned = provider.build_transaction(params).await.unwrap();
     // tx_data must be at least 32 bytes longer than the BCS payload alone
-    assert!(unsigned.tx_data.len() > 32, "tx_data must contain BCS bytes + pubkey");
+    assert!(
+        unsigned.tx_data.len() > 32,
+        "tx_data must contain BCS bytes + pubkey"
+    );
     // Last 32 bytes must be the pubkey [0xAA; 32]
     let (_, pubkey_suffix) = unsigned.tx_data.split_at(unsigned.tx_data.len() - 32);
-    assert_eq!(pubkey_suffix, &[0xAAu8; 32], "last 32 bytes of tx_data must be the pubkey");
+    assert_eq!(
+        pubkey_suffix, &[0xAAu8; 32],
+        "last 32 bytes of tx_data must be the pubkey"
+    );
 }
 
 // ============================================================================
@@ -390,20 +429,32 @@ async fn test_sui_simulation_excessive_gas_budget() {
 /// raw_tx = [0x00 | sig(64) | pubkey(32)] — no JSON wrapper (BCS migration).
 #[tokio::test]
 async fn test_sui_bcs_finalize_97_byte_signature() {
-    let provider = mpc_wallet_chains::sui::SuiProvider::with_pubkey(
-        GroupPublicKey::Ed25519(vec![0xBBu8; 32])
-    );
+    let provider =
+        mpc_wallet_chains::sui::SuiProvider::with_pubkey(GroupPublicKey::Ed25519(vec![0xBBu8; 32]));
     let params = TransactionParams {
         to: "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
         value: "1000".to_string(),
-        data: None, chain_id: None,
-        extra: Some(serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"})),
+        data: None,
+        chain_id: None,
+        extra: Some(
+            serde_json::json!({"sender": "0x0000000000000000000000000000000000000000000000000000000000000001"}),
+        ),
     };
     let unsigned = provider.build_transaction(params).await.unwrap();
-    let sig = MpcSignature::EdDsa { signature: [0xCCu8; 64] };
+    let sig = MpcSignature::EdDsa {
+        signature: [0xCCu8; 64],
+    };
     let signed = provider.finalize_transaction(&unsigned, &sig).unwrap();
     assert_eq!(signed.raw_tx.len(), 97, "raw_tx must be 97 bytes");
     assert_eq!(signed.raw_tx[0], 0x00, "byte 0 must be Ed25519 flag 0x00");
-    assert_eq!(&signed.raw_tx[1..65], &[0xCCu8; 64], "bytes 1..65 must be the signature");
-    assert_eq!(&signed.raw_tx[65..97], &[0xBBu8; 32], "bytes 65..97 must be the pubkey");
+    assert_eq!(
+        &signed.raw_tx[1..65],
+        &[0xCCu8; 64],
+        "bytes 1..65 must be the signature"
+    );
+    assert_eq!(
+        &signed.raw_tx[65..97],
+        &[0xBBu8; 32],
+        "bytes 65..97 must be the pubkey"
+    );
 }

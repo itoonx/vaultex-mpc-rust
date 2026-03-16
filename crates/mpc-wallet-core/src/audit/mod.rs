@@ -96,7 +96,7 @@ impl LedgerEntry {
 
     /// Compute the SHA-256 hash of the canonical bytes of this entry.
     pub fn hash(&self) -> Vec<u8> {
-        Sha256::digest(&self.canonical_bytes()).to_vec()
+        Sha256::digest(self.canonical_bytes()).to_vec()
     }
 }
 
@@ -408,9 +408,7 @@ impl WormStorageConfig {
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), CoreError> {
         if self.retention_days == 0 {
-            return Err(CoreError::AuditError(
-                "retention_days must be > 0".into(),
-            ));
+            return Err(CoreError::AuditError("retention_days must be > 0".into()));
         }
         match &self.backend {
             WormBackend::S3ObjectLock { bucket, region, .. } => {
@@ -420,9 +418,7 @@ impl WormStorageConfig {
                     ));
                 }
                 if region.is_empty() {
-                    return Err(CoreError::AuditError(
-                        "S3 region cannot be empty".into(),
-                    ));
+                    return Err(CoreError::AuditError("S3 region cannot be empty".into()));
                 }
             }
             WormBackend::LocalAppendOnly { directory } => {
@@ -666,8 +662,10 @@ mod tests {
 
     #[test]
     fn test_worm_zero_retention_rejected() {
-        let mut config = WormStorageConfig::default();
-        config.retention_days = 0;
+        let config = WormStorageConfig {
+            retention_days: 0,
+            ..WormStorageConfig::default()
+        };
         assert!(config.validate().is_err());
     }
 

@@ -24,11 +24,7 @@ pub trait KeyStore: Send + Sync {
     ) -> Result<(), CoreError>;
 
     /// Load a key share for a party in a key group.
-    async fn load(
-        &self,
-        group_id: &KeyGroupId,
-        party_id: PartyId,
-    ) -> Result<KeyShare, CoreError>;
+    async fn load(&self, group_id: &KeyGroupId, party_id: PartyId) -> Result<KeyShare, CoreError>;
 
     /// List all key groups with metadata.
     async fn list(&self) -> Result<Vec<KeyMetadata>, CoreError>;

@@ -89,11 +89,17 @@ async fn test_gg20_distributed_no_key_reconstruction() {
 
     let shares = run_keygen(gg20_factory, 2, 3).await;
 
-    assert_eq!(shares[0].scheme, mpc_wallet_core::types::CryptoScheme::Gg20Ecdsa);
+    assert_eq!(
+        shares[0].scheme,
+        mpc_wallet_core::types::CryptoScheme::Gg20Ecdsa
+    );
     let gpk = &shares[0].group_public_key;
     for share in &shares[1..] {
-        assert_eq!(share.group_public_key.as_bytes(), gpk.as_bytes(),
-            "all parties must derive the same group public key");
+        assert_eq!(
+            share.group_public_key.as_bytes(),
+            gpk.as_bytes(),
+            "all parties must derive the same group public key"
+        );
     }
 
     // Sign with parties 1 and 2 (the coordinator is Party 1).
@@ -110,7 +116,10 @@ async fn test_gg20_distributed_no_key_reconstruction() {
     // Basic sanity checks.
     assert_eq!(r.len(), 32, "r must be 32 bytes");
     assert_eq!(s.len(), 32, "s must be 32 bytes");
-    assert_ne!(*recovery_id, 0xff, "coordinator must return final signature, not partial sentinel");
+    assert_ne!(
+        *recovery_id, 0xff,
+        "coordinator must return final signature, not partial sentinel"
+    );
 
     // Cryptographic verification: the signature must verify against the group pubkey.
     let pubkey = k256::PublicKey::from_sec1_bytes(gpk.as_bytes())
@@ -140,7 +149,9 @@ async fn test_gg20_distributed_different_subsets() {
 
     // Subset {1, 2}
     let sigs_12 = run_sign(gg20_factory, &shares, &[0, 1], message).await;
-    let MpcSignature::Ecdsa { r, s, .. } = &sigs_12[0] else { panic!(); };
+    let MpcSignature::Ecdsa { r, s, .. } = &sigs_12[0] else {
+        panic!();
+    };
     let mut sig_bytes = [0u8; 64];
     sig_bytes[..32].copy_from_slice(r);
     sig_bytes[32..].copy_from_slice(s);
@@ -149,7 +160,9 @@ async fn test_gg20_distributed_different_subsets() {
 
     // Subset {1, 3} — party 3's share index is 2 in the shares vec
     let sigs_13 = run_sign(gg20_factory, &shares, &[0, 2], message).await;
-    let MpcSignature::Ecdsa { r, s, .. } = &sigs_13[0] else { panic!(); };
+    let MpcSignature::Ecdsa { r, s, .. } = &sigs_13[0] else {
+        panic!();
+    };
     sig_bytes[..32].copy_from_slice(r);
     sig_bytes[32..].copy_from_slice(s);
     vk.verify(message, &Signature::from_bytes(&sig_bytes.into()).unwrap())
@@ -183,8 +196,8 @@ async fn test_gg20_reshare_add_party() {
 
     let mut handles = Vec::new();
     // Old parties (1,2,3) run reshare with their real shares
-    for i in 0..3 {
-        let share = shares[i].clone();
+    for share in shares.iter().take(3) {
+        let share = share.clone();
         let transport = net.get_transport(share.party_id);
         let protocol = gg20_factory();
         let old_s = old_signers.clone();
@@ -227,14 +240,8 @@ async fn test_gg20_reshare_add_party() {
             &original_gpk[..],
             "group public key must be preserved after reshare"
         );
-        assert_eq!(
-            share.config.threshold, 2,
-            "new threshold must be 2"
-        );
-        assert_eq!(
-            share.config.total_parties, 4,
-            "new total_parties must be 4"
-        );
+        assert_eq!(share.config.threshold, 2, "new threshold must be 2");
+        assert_eq!(share.config.total_parties, 4, "new total_parties must be 4");
     }
 
     // Step 4: Sign with new parties {1,4} using new shares
@@ -268,7 +275,10 @@ async fn test_gg20_reshare_add_party() {
     };
     assert_eq!(r.len(), 32);
     assert_eq!(s.len(), 32);
-    assert_ne!(*recovery_id, 0xff, "coordinator must return final signature");
+    assert_ne!(
+        *recovery_id, 0xff,
+        "coordinator must return final signature"
+    );
 
     // Cryptographic verification against original group pubkey.
     let pubkey = k256::PublicKey::from_sec1_bytes(&original_gpk).unwrap();
@@ -304,8 +314,8 @@ async fn test_gg20_reshare_change_threshold() {
     let net = LocalTransportNetwork::new(3);
 
     let mut handles = Vec::new();
-    for i in 0..3 {
-        let share = shares[i].clone();
+    for share in shares.iter().take(3) {
+        let share = share.clone();
         let transport = net.get_transport(share.party_id);
         let protocol = gg20_factory();
         let old_s = old_signers.clone();
@@ -433,9 +443,7 @@ async fn test_gg20_simulation_different_signer_subsets() {
 // ============================================================================
 
 fn frost_secp256k1_factory() -> Box<dyn MpcProtocol> {
-    Box::new(
-        mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new(),
-    )
+    Box::new(mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new())
 }
 
 #[tokio::test]
@@ -488,7 +496,7 @@ async fn run_refresh(
         let transport = net.get_transport(s.party_id);
         let protocol = protocol_factory();
         handles.push(tokio::spawn(async move {
-            let signers: Vec<_> = (1..=s.config.total_parties).map(|i| PartyId(i as u16)).collect();
+            let signers: Vec<_> = (1..=s.config.total_parties).map(PartyId).collect();
             protocol.refresh(&s, &signers, &*transport).await
         }));
     }
@@ -522,11 +530,7 @@ async fn test_frost_secp256k1_refresh_preserves_group_pubkey() {
     for (old, new) in shares.iter().zip(refreshed.iter()) {
         let old_bytes: &[u8] = &old.share_data;
         let new_bytes: &[u8] = &new.share_data;
-        assert_ne!(
-            old_bytes,
-            new_bytes,
-            "share data must differ after refresh"
-        );
+        assert_ne!(old_bytes, new_bytes, "share data must differ after refresh");
     }
 }
 
@@ -649,8 +653,8 @@ async fn test_frost_ed25519_reshare_new_config() {
 
     let mut handles = Vec::new();
     // Old parties (1,2,3) run reshare with their existing shares
-    for i in 0..3 {
-        let share = shares[i].clone();
+    for share in shares.iter().take(3) {
+        let share = share.clone();
         let transport = net.get_transport(share.party_id);
         let protocol = frost_ed25519_factory();
         let old_s = old_signers.clone();
@@ -730,8 +734,8 @@ async fn test_frost_secp256k1_reshare_new_config() {
     let net = LocalTransportNetwork::new(4);
 
     let mut handles = Vec::new();
-    for i in 0..3 {
-        let share = shares[i].clone();
+    for share in shares.iter().take(3) {
+        let share = share.clone();
         let transport = net.get_transport(share.party_id);
         let protocol = frost_secp256k1_factory();
         let old_s = old_signers.clone();
@@ -800,7 +804,10 @@ async fn test_frost_secp256k1_reshare_new_config() {
         let MpcSignature::Schnorr { signature } = sig else {
             panic!();
         };
-        assert_eq!(sig0, signature, "all signers must agree on signature after reshare");
+        assert_eq!(
+            sig0, signature,
+            "all signers must agree on signature after reshare"
+        );
     }
 }
 
@@ -832,7 +839,10 @@ fn test_sec004_share_data_copies_are_zeroized() {
     // `raw` is a separate clone and is still intact.
     drop(zeroized);
     // raw still holds the original value — Zeroizing only zeroed its own copy.
-    assert_eq!(raw[0], 0xAA, "Zeroizing::new zeroes its own copy, not the original");
+    assert_eq!(
+        raw[0], 0xAA,
+        "Zeroizing::new zeroes its own copy, not the original"
+    );
     assert_eq!(raw.len(), 32);
 }
 

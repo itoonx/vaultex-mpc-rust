@@ -25,7 +25,10 @@ impl<'a> MpcBitcoinSigner<'a> {
         }
     }
 
-    pub async fn sign_sighash(&self, sighash: &[u8]) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
+    pub async fn sign_sighash(
+        &self,
+        sighash: &[u8],
+    ) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
         self.protocol
             .sign(self.key_share, &self.signers, sighash, self.transport)
             .await

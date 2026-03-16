@@ -31,7 +31,11 @@ impl std::fmt::Display for CliResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}] {}", self.status, self.message)?;
         if let Some(data) = &self.data {
-            write!(f, "\n{}", serde_json::to_string_pretty(data).unwrap_or_default())?;
+            write!(
+                f,
+                "\n{}",
+                serde_json::to_string_pretty(data).unwrap_or_default()
+            )?;
         }
         Ok(())
     }

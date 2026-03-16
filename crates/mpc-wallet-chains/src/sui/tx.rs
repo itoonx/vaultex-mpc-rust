@@ -33,9 +33,8 @@ pub fn validate_sui_address(addr: &str) -> Result<[u8; 32], CoreError> {
             hex_part.len()
         )));
     }
-    let bytes = hex::decode(hex_part).map_err(|e| {
-        CoreError::InvalidInput(format!("Sui address contains invalid hex: {e}"))
-    })?;
+    let bytes = hex::decode(hex_part)
+        .map_err(|e| CoreError::InvalidInput(format!("Sui address contains invalid hex: {e}")))?;
     Ok(bytes.try_into().unwrap()) // safe: we checked len == 64 hex = 32 bytes
 }
 
@@ -127,7 +126,11 @@ pub async fn build_sui_transaction(
             arr.copy_from_slice(b);
             arr
         }
-        _ => return Err(CoreError::InvalidInput("Sui requires Ed25519 key".to_string())),
+        _ => {
+            return Err(CoreError::InvalidInput(
+                "Sui requires Ed25519 key".to_string(),
+            ))
+        }
     };
 
     // 8. Store: tx_data = bcs_bytes || pubkey(32)
@@ -161,7 +164,11 @@ pub fn finalize_sui_transaction(
     // Extract signature bytes
     let sig_bytes = match sig {
         MpcSignature::EdDsa { signature } => *signature,
-        _ => return Err(CoreError::InvalidInput("Sui requires EdDsa signature".to_string())),
+        _ => {
+            return Err(CoreError::InvalidInput(
+                "Sui requires EdDsa signature".to_string(),
+            ))
+        }
     };
 
     // tx_data = bcs_bytes || pubkey(32)

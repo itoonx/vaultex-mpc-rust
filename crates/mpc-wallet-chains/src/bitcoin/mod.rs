@@ -99,9 +99,10 @@ impl ChainProvider for BitcoinProvider {
         &self,
         params: &TransactionParams,
     ) -> Result<SimulationResult, CoreError> {
-        let config = self.simulation_config.as_ref().ok_or_else(|| {
-            CoreError::Other("Bitcoin simulation not configured".into())
-        })?;
+        let config = self
+            .simulation_config
+            .as_ref()
+            .ok_or_else(|| CoreError::Other("Bitcoin simulation not configured".into()))?;
 
         let mut risk_flags = Vec::new();
         let mut risk_score: u8 = 0;

@@ -3,10 +3,10 @@ pub mod local;
 /// NATS-based transport for multi-process and multi-machine MPC deployments.
 pub mod nats;
 pub use nats::NatsTlsConfig;
-/// Per-session ECDH key exchange and ChaCha20-Poly1305 encryption (Epic E3).
-pub mod session_key;
 /// NATS JetStream subject configuration and ACL for MPC message streams (Epic E5).
 pub mod jetstream;
+/// Per-session ECDH key exchange and ChaCha20-Poly1305 encryption (Epic E3).
+pub mod session_key;
 /// SEC-007 fix: Ed25519-signed message envelope with seq_no replay protection.
 ///
 /// Use [`signed_envelope::SignedEnvelope::sign`] before sending and

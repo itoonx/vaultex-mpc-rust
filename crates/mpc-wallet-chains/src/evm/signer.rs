@@ -29,7 +29,10 @@ impl<'a> MpcEvmSigner<'a> {
     }
 
     /// Sign a message digest using the MPC protocol.
-    pub async fn sign_digest(&self, digest: &[u8]) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
+    pub async fn sign_digest(
+        &self,
+        digest: &[u8],
+    ) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
         self.protocol
             .sign(self.key_share, &self.signers, digest, self.transport)
             .await

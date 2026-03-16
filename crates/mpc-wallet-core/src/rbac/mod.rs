@@ -199,7 +199,10 @@ mod tests {
             "viewer".into(),
         ];
         let roles = map_roles(&raw);
-        assert_eq!(roles, vec![ApiRole::Admin, ApiRole::Initiator, ApiRole::Viewer]);
+        assert_eq!(
+            roles,
+            vec![ApiRole::Admin, ApiRole::Initiator, ApiRole::Viewer]
+        );
     }
 
     #[test]
@@ -217,7 +220,10 @@ mod tests {
     #[test]
     fn test_require_mfa_passes() {
         let ctx = AuthContext::with_attributes(
-            "alice", vec![ApiRole::Admin], AbacAttributes::default(), true,
+            "alice",
+            vec![ApiRole::Admin],
+            AbacAttributes::default(),
+            true,
         );
         assert!(require_mfa(&ctx).is_ok());
     }
@@ -231,7 +237,10 @@ mod tests {
     #[test]
     fn test_admin_with_mfa_can_manage_policy() {
         let ctx = AuthContext::with_attributes(
-            "admin", vec![ApiRole::Admin], AbacAttributes::default(), true,
+            "admin",
+            vec![ApiRole::Admin],
+            AbacAttributes::default(),
+            true,
         );
         assert!(Permissions::can_manage_policy_mfa(&ctx).is_ok());
     }
@@ -245,7 +254,10 @@ mod tests {
     #[test]
     fn test_non_admin_with_mfa_cannot_manage_policy() {
         let ctx = AuthContext::with_attributes(
-            "alice", vec![ApiRole::Initiator], AbacAttributes::default(), true,
+            "alice",
+            vec![ApiRole::Initiator],
+            AbacAttributes::default(),
+            true,
         );
         assert!(Permissions::can_manage_policy_mfa(&ctx).is_err());
     }
@@ -253,7 +265,10 @@ mod tests {
     #[test]
     fn test_admin_mfa_freeze_and_export() {
         let ctx_mfa = AuthContext::with_attributes(
-            "admin", vec![ApiRole::Admin], AbacAttributes::default(), true,
+            "admin",
+            vec![ApiRole::Admin],
+            AbacAttributes::default(),
+            true,
         );
         let ctx_no_mfa = AuthContext::new("admin", vec![ApiRole::Admin]);
 

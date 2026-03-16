@@ -29,7 +29,9 @@ use std::sync::RwLock;
 
 use crate::error::CoreError;
 use crate::policy::evaluator::{evaluate, EvalResult};
-pub use crate::policy::schema::{ChainPolicy, Policy, PolicyTemplate, SignedPolicy, POLICY_SCHEMA_VERSION};
+pub use crate::policy::schema::{
+    ChainPolicy, Policy, PolicyTemplate, SignedPolicy, POLICY_SCHEMA_VERSION,
+};
 
 /// In-memory store for the active signing policy.
 ///
@@ -563,7 +565,12 @@ mod template_tests {
     fn test_exchange_template() {
         let p = PolicyTemplate::Exchange.build();
         assert_eq!(p.name, "exchange-hot-wallet");
-        assert!(p.chains.get("ethereum").unwrap().max_amount_per_tx.is_some());
+        assert!(p
+            .chains
+            .get("ethereum")
+            .unwrap()
+            .max_amount_per_tx
+            .is_some());
     }
 
     #[test]

@@ -191,11 +191,7 @@ impl KeyStore for EncryptedFileStore {
         Ok(())
     }
 
-    async fn load(
-        &self,
-        group_id: &KeyGroupId,
-        party_id: PartyId,
-    ) -> Result<KeyShare, CoreError> {
+    async fn load(&self, group_id: &KeyGroupId, party_id: PartyId) -> Result<KeyShare, CoreError> {
         // SEC: check frozen state BEFORE any decryption attempt.
         // A frozen key group must never have its ciphertext read or decrypted.
         let frozen_path = self.group_dir(group_id).join("frozen");
@@ -265,9 +261,7 @@ impl KeyStore for EncryptedFileStore {
         if frozen_path.exists() {
             tokio::fs::remove_file(&frozen_path)
                 .await
-                .map_err(|e| {
-                    CoreError::KeyStore(format!("failed to remove frozen marker: {e}"))
-                })?;
+                .map_err(|e| CoreError::KeyStore(format!("failed to remove frozen marker: {e}")))?;
         }
         // If the frozen marker does not exist, unfreeze is idempotent — no error.
         Ok(())
@@ -420,7 +414,10 @@ mod tests {
         let share = make_test_share();
         let meta = make_test_metadata(&group_id);
 
-        store.save(&group_id, &meta, PartyId(1), &share).await.unwrap();
+        store
+            .save(&group_id, &meta, PartyId(1), &share)
+            .await
+            .unwrap();
         // Verify load succeeds before freeze
         assert!(store.load(&group_id, PartyId(1)).await.is_ok());
 
@@ -444,7 +441,10 @@ mod tests {
         let share = make_test_share();
         let meta = make_test_metadata(&group_id);
 
-        store.save(&group_id, &meta, PartyId(1), &share).await.unwrap();
+        store
+            .save(&group_id, &meta, PartyId(1), &share)
+            .await
+            .unwrap();
         store.freeze(&group_id).await.unwrap();
         // Confirm frozen
         assert!(matches!(
@@ -479,7 +479,10 @@ mod tests {
         let share = make_test_share();
         let meta = make_test_metadata(&group_id);
 
-        store.save(&group_id, &meta, PartyId(1), &share).await.unwrap();
+        store
+            .save(&group_id, &meta, PartyId(1), &share)
+            .await
+            .unwrap();
         store.freeze(&group_id).await.unwrap();
         // Second freeze on already-frozen group must succeed (idempotent)
         assert!(store.freeze(&group_id).await.is_ok());
@@ -493,7 +496,10 @@ mod tests {
         let share = make_test_share();
         let meta = make_test_metadata(&group_id);
 
-        store.save(&group_id, &meta, PartyId(1), &share).await.unwrap();
+        store
+            .save(&group_id, &meta, PartyId(1), &share)
+            .await
+            .unwrap();
         // Unfreeze a group that was never frozen — must succeed (idempotent)
         assert!(store.unfreeze(&group_id).await.is_ok());
         // Unfreeze again — still idempotent

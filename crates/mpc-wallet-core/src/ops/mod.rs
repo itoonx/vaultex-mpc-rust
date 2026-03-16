@@ -295,9 +295,8 @@ impl RecoveryPlan {
             ));
             steps.push("3. Contact backup custodians for offline share restoration.".into());
         } else {
-            steps.push(
-                "2. All required shares accessible. Proceed with normal key refresh.".into(),
-            );
+            steps
+                .push("2. All required shares accessible. Proceed with normal key refresh.".into());
             steps.push("3. After refresh, verify new shares with test signing.".into());
         }
         steps.push("4. Update backup records and verify all share locations.".into());
@@ -364,10 +363,7 @@ mod tests {
 
     #[test]
     fn test_insufficient_regions() {
-        let nodes = vec![
-            node(1, "aws", "us-east-1"),
-            node(2, "gcp", "us-east-1"),
-        ];
+        let nodes = vec![node(1, "aws", "us-east-1"), node(2, "gcp", "us-east-1")];
         let policy = DistributionPolicy {
             min_providers: 2,
             min_regions: 2,
@@ -483,8 +479,18 @@ mod tests {
     #[test]
     fn test_rpc_failover_returns_highest_priority_healthy() {
         let pool = RpcFailoverPool::new(vec![
-            RpcEndpoint { url: "http://primary".into(), provider: "alchemy".into(), priority: 1, healthy: true },
-            RpcEndpoint { url: "http://backup".into(), provider: "infura".into(), priority: 2, healthy: true },
+            RpcEndpoint {
+                url: "http://primary".into(),
+                provider: "alchemy".into(),
+                priority: 1,
+                healthy: true,
+            },
+            RpcEndpoint {
+                url: "http://backup".into(),
+                provider: "infura".into(),
+                priority: 2,
+                healthy: true,
+            },
         ]);
         assert_eq!(pool.next_healthy().unwrap().url, "http://primary");
     }
@@ -492,8 +498,18 @@ mod tests {
     #[test]
     fn test_rpc_failover_skips_unhealthy() {
         let mut pool = RpcFailoverPool::new(vec![
-            RpcEndpoint { url: "http://primary".into(), provider: "alchemy".into(), priority: 1, healthy: true },
-            RpcEndpoint { url: "http://backup".into(), provider: "infura".into(), priority: 2, healthy: true },
+            RpcEndpoint {
+                url: "http://primary".into(),
+                provider: "alchemy".into(),
+                priority: 1,
+                healthy: true,
+            },
+            RpcEndpoint {
+                url: "http://backup".into(),
+                provider: "infura".into(),
+                priority: 2,
+                healthy: true,
+            },
         ]);
         pool.mark_unhealthy("http://primary");
         assert_eq!(pool.next_healthy().unwrap().url, "http://backup");
@@ -501,18 +517,24 @@ mod tests {
 
     #[test]
     fn test_rpc_failover_all_unhealthy_returns_none() {
-        let mut pool = RpcFailoverPool::new(vec![
-            RpcEndpoint { url: "http://a".into(), provider: "x".into(), priority: 1, healthy: true },
-        ]);
+        let mut pool = RpcFailoverPool::new(vec![RpcEndpoint {
+            url: "http://a".into(),
+            provider: "x".into(),
+            priority: 1,
+            healthy: true,
+        }]);
         pool.mark_unhealthy("http://a");
         assert!(pool.next_healthy().is_none());
     }
 
     #[test]
     fn test_rpc_failover_recovery() {
-        let mut pool = RpcFailoverPool::new(vec![
-            RpcEndpoint { url: "http://a".into(), provider: "x".into(), priority: 1, healthy: true },
-        ]);
+        let mut pool = RpcFailoverPool::new(vec![RpcEndpoint {
+            url: "http://a".into(),
+            provider: "x".into(),
+            priority: 1,
+            healthy: true,
+        }]);
         pool.mark_unhealthy("http://a");
         assert!(pool.next_healthy().is_none());
         pool.mark_healthy("http://a");
@@ -523,21 +545,44 @@ mod tests {
 
     #[test]
     fn test_can_tolerate_failures_2_of_3() {
-        assert!(can_tolerate_failures(2, 3, 1));  // 1 failure ok
+        assert!(can_tolerate_failures(2, 3, 1)); // 1 failure ok
         assert!(!can_tolerate_failures(2, 3, 2)); // 2 failures = no quorum
     }
 
     #[test]
     fn test_healthy_count() {
         let pool = RpcFailoverPool::new(vec![
-            RpcEndpoint { url: "a".into(), provider: "x".into(), priority: 1, healthy: true },
-            RpcEndpoint { url: "b".into(), provider: "y".into(), priority: 2, healthy: false },
-            RpcEndpoint { url: "c".into(), provider: "z".into(), priority: 3, healthy: true },
+            RpcEndpoint {
+                url: "a".into(),
+                provider: "x".into(),
+                priority: 1,
+                healthy: true,
+            },
+            RpcEndpoint {
+                url: "b".into(),
+                provider: "y".into(),
+                priority: 2,
+                healthy: false,
+            },
+            RpcEndpoint {
+                url: "c".into(),
+                provider: "z".into(),
+                priority: 3,
+                healthy: true,
+            },
         ]);
         assert_eq!(pool.healthy_count(), 2);
+    }
+
     // ── Disaster Recovery (RecoveryPlan) tests ───────────────────────────
 
-    fn health_node(id: u16, provider: &str, region: &str, status: HealthStatus, hb: u64) -> NodeHealth {
+    fn health_node(
+        id: u16,
+        provider: &str,
+        region: &str,
+        status: HealthStatus,
+        hb: u64,
+    ) -> NodeHealth {
         NodeHealth {
             party_id: PartyId(id),
             status,
@@ -594,5 +639,4 @@ mod tests {
         assert!(!plan.steps.iter().any(|s| s.contains("CRITICAL")));
         assert!(plan.steps.iter().any(|s| s.contains("normal key refresh")));
     }
-}
 }

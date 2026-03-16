@@ -26,7 +26,10 @@ impl<'a> MpcSolanaSigner<'a> {
     }
 
     /// Sign raw message bytes (Solana signs message, not hash).
-    pub async fn sign_message(&self, message: &[u8]) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
+    pub async fn sign_message(
+        &self,
+        message: &[u8],
+    ) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
         self.protocol
             .sign(self.key_share, &self.signers, message, self.transport)
             .await

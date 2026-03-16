@@ -61,9 +61,7 @@ impl ChainRegistry {
     /// This is the single entry point — no more per-chain match blocks.
     pub fn provider(&self, chain: Chain) -> Result<Box<dyn ChainProvider>, CoreError> {
         let provider: Box<dyn ChainProvider> = match chain {
-            Chain::Ethereum | Chain::Polygon | Chain::Bsc => {
-                Box::new(EvmProvider::new(chain)?)
-            }
+            Chain::Ethereum | Chain::Polygon | Chain::Bsc => Box::new(EvmProvider::new(chain)?),
             Chain::BitcoinMainnet => {
                 let p = match self.env {
                     NetworkEnv::Testnet | NetworkEnv::Devnet => BitcoinProvider::testnet(),
@@ -95,8 +93,6 @@ impl ChainRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::ChainProvider;
-
     #[test]
     fn test_registry_creates_all_chains() {
         let registry = ChainRegistry::default_mainnet();

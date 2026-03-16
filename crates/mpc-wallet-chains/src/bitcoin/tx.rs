@@ -62,7 +62,7 @@ pub async fn build_taproot_transaction(
             let bytes = hex::decode(h).unwrap_or_default();
             ScriptBuf::from_bytes(bytes)
         })
-        .unwrap_or_else(ScriptBuf::new);
+        .unwrap_or_default();
 
     // ── SEC-009 fix: require the actual P2TR script_pubkey of the UTXO ────────
     //
@@ -78,9 +78,8 @@ pub async fn build_taproot_transaction(
         .and_then(|e| e.get("prev_script_pubkey_hex"))
         .and_then(|v| v.as_str())
     {
-        let bytes = hex::decode(script_hex).map_err(|e| {
-            CoreError::InvalidInput(format!("invalid prev_script_pubkey_hex: {e}"))
-        })?;
+        let bytes = hex::decode(script_hex)
+            .map_err(|e| CoreError::InvalidInput(format!("invalid prev_script_pubkey_hex: {e}")))?;
         ScriptBuf::from_bytes(bytes)
     } else if let Some(xonly_hex) = params
         .extra
@@ -89,9 +88,8 @@ pub async fn build_taproot_transaction(
         .and_then(|v| v.as_str())
     {
         // Reconstruct P2TR script: OP_1 (0x51) + PUSH32 (0x20) + <32-byte x-only pubkey>
-        let pk_bytes = hex::decode(xonly_hex).map_err(|e| {
-            CoreError::InvalidInput(format!("invalid prev_xonly_pubkey_hex: {e}"))
-        })?;
+        let pk_bytes = hex::decode(xonly_hex)
+            .map_err(|e| CoreError::InvalidInput(format!("invalid prev_xonly_pubkey_hex: {e}")))?;
         if pk_bytes.len() != 32 {
             return Err(CoreError::InvalidInput(
                 "prev_xonly_pubkey_hex must be exactly 32 bytes (64 hex chars)".into(),
@@ -136,11 +134,7 @@ pub async fn build_taproot_transaction(
 
     let mut sighash_cache = SighashCache::new(&tx);
     let sighash = sighash_cache
-        .taproot_key_spend_signature_hash(
-            0,
-            &Prevouts::All(&[prev_out]),
-            TapSighashType::Default,
-        )
+        .taproot_key_spend_signature_hash(0, &Prevouts::All(&[prev_out]), TapSighashType::Default)
         .map_err(|e| CoreError::Crypto(format!("sighash error: {e}")))?;
 
     let tx_data = serde_json::to_vec(&SerializableTx::from_tx(&tx))
@@ -168,7 +162,7 @@ pub fn finalize_taproot_transaction(
         .map_err(|e| CoreError::Serialization(e.to_string()))?;
 
     // SEC-016 fix: use proper error propagation instead of unwrap
-    let mut tx = stx.to_tx().map_err(|e| CoreError::Serialization(e))?;
+    let mut tx = stx.to_tx().map_err(CoreError::Serialization)?;
 
     let mut witness = bitcoin::Witness::new();
     witness.push(signature.as_slice());
@@ -199,7 +193,9 @@ impl SerializableTx {
         use bitcoin::consensus::Encodable;
         let mut buf = Vec::new();
         tx.consensus_encode(&mut buf).unwrap();
-        Self { hex: hex::encode(buf) }
+        Self {
+            hex: hex::encode(buf),
+        }
     }
 
     /// Deserialize with proper error propagation (SEC-016 fix: no panicking unwrap).
@@ -217,8 +213,7 @@ mod tests {
     use crate::provider::TransactionParams;
 
     /// Valid 32-byte x-only pubkey (the generator point G, for test use only)
-    const TEST_XONLY_HEX: &str =
-        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+    const TEST_XONLY_HEX: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 
     fn params_with_xonly() -> TransactionParams {
         TransactionParams {
@@ -243,7 +238,10 @@ mod tests {
             params_with_xonly(),
         )
         .await;
-        assert!(result.is_ok(), "SEC-009 fix: build with xonly pubkey should succeed");
+        assert!(
+            result.is_ok(),
+            "SEC-009 fix: build with xonly pubkey should succeed"
+        );
         // Taproot sighash is exactly 32 bytes
         assert_eq!(result.unwrap().sign_payload.len(), 32);
     }
@@ -262,12 +260,9 @@ mod tests {
                 // Neither prev_xonly_pubkey_hex nor prev_script_pubkey_hex supplied
             })),
         };
-        let result = build_taproot_transaction(
-            Chain::BitcoinMainnet,
-            bitcoin::Network::Bitcoin,
-            params,
-        )
-        .await;
+        let result =
+            build_taproot_transaction(Chain::BitcoinMainnet, bitcoin::Network::Bitcoin, params)
+                .await;
         assert!(result.is_err(), "must reject missing script_pubkey");
         let msg = format!("{}", result.unwrap_err());
         assert!(
@@ -291,12 +286,9 @@ mod tests {
                 "prev_script_pubkey_hex": script_hex
             })),
         };
-        let result = build_taproot_transaction(
-            Chain::BitcoinMainnet,
-            bitcoin::Network::Bitcoin,
-            params,
-        )
-        .await;
+        let result =
+            build_taproot_transaction(Chain::BitcoinMainnet, bitcoin::Network::Bitcoin, params)
+                .await;
         assert!(result.is_ok(), "full script_pubkey_hex should be accepted");
     }
 
@@ -314,12 +306,9 @@ mod tests {
                 "prev_xonly_pubkey_hex": "deadbeef"  // only 4 bytes
             })),
         };
-        let result = build_taproot_transaction(
-            Chain::BitcoinMainnet,
-            bitcoin::Network::Bitcoin,
-            params,
-        )
-        .await;
+        let result =
+            build_taproot_transaction(Chain::BitcoinMainnet, bitcoin::Network::Bitcoin, params)
+                .await;
         assert!(result.is_err(), "short xonly pubkey must be rejected");
     }
 

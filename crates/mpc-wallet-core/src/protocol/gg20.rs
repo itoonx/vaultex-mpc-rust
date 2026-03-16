@@ -67,7 +67,7 @@ use k256::{
     ProjectivePoint, Scalar,
 };
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroizing, ZeroizeOnDrop};
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared key-share data structure
@@ -165,7 +165,10 @@ fn lagrange_interpolate(shares: &[(u16, Scalar)]) -> Scalar {
                 let num = Scalar::ZERO - x_j_s;
                 let den = x_i_s - x_j_s;
                 let den_inv = den.invert();
-                assert!(bool::from(den_inv.is_some()), "zero denominator in Lagrange");
+                assert!(
+                    bool::from(den_inv.is_some()),
+                    "zero denominator in Lagrange"
+                );
                 basis *= num * den_inv.unwrap();
             }
         }
@@ -442,16 +445,17 @@ async fn distributed_sign(
             use k256::elliptic_curve::group::GroupEncoding;
             r_point.to_bytes()
         };
-        let x_bytes: [u8; 32] = r_point_bytes[1..33].try_into().map_err(|_| {
-            CoreError::Crypto("failed to extract R.x bytes from SEC1 point".into())
-        })?;
+        let x_bytes: [u8; 32] = r_point_bytes[1..33]
+            .try_into()
+            .map_err(|_| CoreError::Crypto("failed to extract R.x bytes from SEC1 point".into()))?;
         let r_scalar = Scalar::from_repr(*k256::FieldBytes::from_slice(&x_bytes))
             .into_option()
             .ok_or_else(|| CoreError::Crypto("R.x does not reduce to valid scalar".into()))?;
 
-        let k_inv_scalar = k.invert().into_option().ok_or_else(|| {
-            CoreError::Crypto("ephemeral nonce k is zero — regenerate".into())
-        })?;
+        let k_inv_scalar = k
+            .invert()
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("ephemeral nonce k is zero — regenerate".into()))?;
 
         // Broadcast (r, k_inv) to all other signers.
         let round1_payload = serde_json::to_vec(&serde_json::json!({
@@ -480,12 +484,11 @@ async fn distributed_sign(
         let r_hex = v["r"]
             .as_str()
             .ok_or_else(|| CoreError::Serialization("missing 'r' in round1 message".into()))?;
-        let k_inv_hex = v["k_inv"].as_str().ok_or_else(|| {
-            CoreError::Serialization("missing 'k_inv' in round1 message".into())
-        })?;
+        let k_inv_hex = v["k_inv"]
+            .as_str()
+            .ok_or_else(|| CoreError::Serialization("missing 'k_inv' in round1 message".into()))?;
 
-        let r_bytes =
-            hex::decode(r_hex).map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let r_bytes = hex::decode(r_hex).map_err(|e| CoreError::Serialization(e.to_string()))?;
         let k_inv_bytes =
             hex::decode(k_inv_hex).map_err(|e| CoreError::Serialization(e.to_string()))?;
 
@@ -542,9 +545,8 @@ async fn distributed_sign(
         let hash_bytes = sha2::Sha256::digest(message);
         use k256::elliptic_curve::ops::Reduce;
         use k256::U256;
-        let hash_scalar = <Scalar as Reduce<U256>>::reduce_bytes(
-            k256::FieldBytes::from_slice(&hash_bytes),
-        );
+        let hash_scalar =
+            <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&hash_bytes));
 
         let s = hash_scalar * k_inv_scalar + s_sum;
 
@@ -581,13 +583,9 @@ async fn distributed_sign(
         let recovery_id = (0u8..4)
             .find(|&v| {
                 let recid = k256::ecdsa::RecoveryId::try_from(v).unwrap();
-                k256::ecdsa::VerifyingKey::recover_from_prehash(
-                    &hash_bytes,
-                    &normalized_sig,
-                    recid,
-                )
-                .map(|recovered| recovered == verifying_key)
-                .unwrap_or(false)
+                k256::ecdsa::VerifyingKey::recover_from_prehash(&hash_bytes, &normalized_sig, recid)
+                    .map(|recovered| recovered == verifying_key)
+                    .unwrap_or(false)
             })
             .unwrap_or(0);
 
@@ -651,7 +649,9 @@ async fn distributed_refresh(
 
     // Validate that we are in the signer set.
     if !signers.contains(&my_party) {
-        return Err(CoreError::Protocol("party not in refresh signer set".into()));
+        return Err(CoreError::Protocol(
+            "party not in refresh signer set".into(),
+        ));
     }
 
     // Deserialize our current Shamir share.
@@ -856,15 +856,11 @@ async fn distributed_reshare(
         for _old_idx in 0..old_signers.len() {
             let msg = transport.recv().await?;
             let eval_bytes: [u8; 32] = msg.payload.as_slice().try_into().map_err(|_| {
-                CoreError::Protocol(
-                    "invalid reshare evaluation size (expected 32 bytes)".into(),
-                )
+                CoreError::Protocol("invalid reshare evaluation size (expected 32 bytes)".into())
             })?;
             let eval = Scalar::from_repr(*k256::FieldBytes::from_slice(&eval_bytes))
                 .into_option()
-                .ok_or_else(|| {
-                    CoreError::Crypto("invalid scalar in reshare evaluation".into())
-                })?;
+                .ok_or_else(|| CoreError::Crypto("invalid scalar in reshare evaluation".into()))?;
             new_share_scalar += eval;
         }
 
@@ -1098,7 +1094,10 @@ mod tests {
                 sum += lambda * y;
             }
         }
-        assert_eq!(secret, sum, "additive shares for set {{1,2}} must sum to secret");
+        assert_eq!(
+            secret, sum,
+            "additive shares for set {{1,2}} must sum to secret"
+        );
     }
 
     /// Verify the same property for signing set {1, 3} and {2, 3}.

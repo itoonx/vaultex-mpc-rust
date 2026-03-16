@@ -60,13 +60,9 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
         // Do RNG work in a block so rng is dropped before .await
         let (round1_secret, round1_bytes) = {
             let mut rng = rand::thread_rng();
-            let (round1_secret, round1_package) = frost::keys::dkg::part1(
-                my_id,
-                config.total_parties,
-                config.threshold,
-                &mut rng,
-            )
-            .map_err(|e| CoreError::Protocol(format!("FROST DKG part1: {e}")))?;
+            let (round1_secret, round1_package) =
+                frost::keys::dkg::part1(my_id, config.total_parties, config.threshold, &mut rng)
+                    .map_err(|e| CoreError::Protocol(format!("FROST DKG part1: {e}")))?;
 
             let round1_bytes = serde_json::to_vec(&round1_package)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -88,9 +84,8 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             BTreeMap::new();
         for _ in 0..(config.total_parties - 1) {
             let msg = transport.recv().await?;
-            let pkg: frost::keys::dkg::round1::Package =
-                serde_json::from_slice(&msg.payload)
-                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            let pkg: frost::keys::dkg::round1::Package = serde_json::from_slice(&msg.payload)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
             let from_id = party_to_identifier(msg.from)?;
             round1_packages.insert(from_id, pkg);
         }
@@ -110,12 +105,10 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
                             .map(|id| id == *target_id)
                             .unwrap_or(false)
                     })
-                    .ok_or_else(|| {
-                        CoreError::Protocol("cannot map identifier to party".into())
-                    })?;
+                    .ok_or_else(|| CoreError::Protocol("cannot map identifier to party".into()))?;
 
-                let pkg_bytes = serde_json::to_vec(pkg)
-                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+                let pkg_bytes =
+                    serde_json::to_vec(pkg).map_err(|e| CoreError::Serialization(e.to_string()))?;
                 messages.push((target_party, pkg_bytes));
             }
             (round2_secret, messages)
@@ -138,9 +131,8 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             BTreeMap::new();
         for _ in 0..(config.total_parties - 1) {
             let msg = transport.recv().await?;
-            let pkg: frost::keys::dkg::round2::Package =
-                serde_json::from_slice(&msg.payload)
-                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            let pkg: frost::keys::dkg::round2::Package = serde_json::from_slice(&msg.payload)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
             let from_id = party_to_identifier(msg.from)?;
             round2_received.insert(from_id, pkg);
         }
@@ -212,12 +204,10 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
         // Cloning produces another Zeroizing<Vec<u8>> — no double-wrap needed.
         // The deserialized FrostSecp256k1ShareData also derives ZeroizeOnDrop.
         let share_data_copy = key_share.share_data.clone();
-        let share_data: FrostSecp256k1ShareData =
-            serde_json::from_slice(&share_data_copy)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
-        let key_package: frost::keys::KeyPackage =
-            serde_json::from_slice(&share_data.key_package)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let share_data: FrostSecp256k1ShareData = serde_json::from_slice(&share_data_copy)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let key_package: frost::keys::KeyPackage = serde_json::from_slice(&share_data.key_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
         let pubkey_package: frost::keys::PublicKeyPackage =
             serde_json::from_slice(&share_data.pubkey_package)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -265,8 +255,8 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             .map_err(|e| CoreError::Protocol(format!("FROST sign round2: {e}")))?;
 
         // Broadcast signature share
-        let share_bytes = serde_json::to_vec(&sig_share)
-            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let share_bytes =
+            serde_json::to_vec(&sig_share).map_err(|e| CoreError::Serialization(e.to_string()))?;
         transport
             .send(ProtocolMessage {
                 from: key_share.party_id,
@@ -327,12 +317,10 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
 
         // Deserialize current key package and pubkey package
         let share_data_copy = key_share.share_data.clone();
-        let share_data: FrostSecp256k1ShareData =
-            serde_json::from_slice(&share_data_copy)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
-        let key_package: frost::keys::KeyPackage =
-            serde_json::from_slice(&share_data.key_package)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let share_data: FrostSecp256k1ShareData = serde_json::from_slice(&share_data_copy)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let key_package: frost::keys::KeyPackage = serde_json::from_slice(&share_data.key_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
         let pubkey_package: frost::keys::PublicKeyPackage =
             serde_json::from_slice(&share_data.pubkey_package)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -394,10 +382,9 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             let msg = transport.recv().await?;
             let eval_bytes: Vec<u8> = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
-            let eval_scalar =
-                k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&eval_bytes))
-                    .into_option()
-                    .ok_or_else(|| CoreError::Crypto("invalid peer evaluation scalar".into()))?;
+            let eval_scalar = k256::Scalar::from_repr(*k256::FieldBytes::from_slice(&eval_bytes))
+                .into_option()
+                .ok_or_else(|| CoreError::Crypto("invalid peer evaluation scalar".into()))?;
             delta += eval_scalar;
         }
 
@@ -406,29 +393,24 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
         let new_share_bytes = new_scalar.to_repr();
 
         // Create new SigningShare via deserialization
-        let new_signing_share =
-            frost::keys::SigningShare::deserialize(new_share_bytes.as_slice())
-                .map_err(|e| CoreError::Protocol(format!("SigningShare deserialize: {e}")))?;
+        let new_signing_share = frost::keys::SigningShare::deserialize(new_share_bytes.as_slice())
+            .map_err(|e| CoreError::Protocol(format!("SigningShare deserialize: {e}")))?;
 
         // Compute new verifying share: G * new_scalar (compressed SEC1 point)
-        let new_vs_point =
-            (k256::ProjectivePoint::GENERATOR * new_scalar).to_affine();
+        let new_vs_point = (k256::ProjectivePoint::GENERATOR * new_scalar).to_affine();
         let new_vs_compressed = {
             use k256::elliptic_curve::group::GroupEncoding;
             new_vs_point.to_bytes()
         };
-        let new_verifying_share =
-            frost::keys::VerifyingShare::deserialize(&new_vs_compressed)
-                .map_err(|e| {
-                    CoreError::Protocol(format!("VerifyingShare deserialize: {e}"))
-                })?;
+        let new_verifying_share = frost::keys::VerifyingShare::deserialize(&new_vs_compressed)
+            .map_err(|e| CoreError::Protocol(format!("VerifyingShare deserialize: {e}")))?;
 
         // === Round 101: broadcast new verifying share so all can rebuild PublicKeyPackage ===
         let vs_bytes = new_verifying_share
             .serialize()
             .map_err(|e| CoreError::Serialization(e.to_string()))?;
-        let vs_payload = serde_json::to_vec(&vs_bytes)
-            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let vs_payload =
+            serde_json::to_vec(&vs_bytes).map_err(|e| CoreError::Serialization(e.to_string()))?;
         transport
             .send(ProtocolMessage {
                 from: party_id,
@@ -447,8 +429,8 @@ impl MpcProtocol for FrostSecp256k1TrProtocol {
             let msg = transport.recv().await?;
             let peer_vs_bytes: Vec<u8> = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
-            let peer_vs = frost::keys::VerifyingShare::deserialize(&peer_vs_bytes)
-                .map_err(|e| {
+            let peer_vs =
+                frost::keys::VerifyingShare::deserialize(&peer_vs_bytes).map_err(|e| {
                     CoreError::Protocol(format!("peer VerifyingShare deserialize: {e}"))
                 })?;
             let from_id = party_to_identifier(msg.from)?;

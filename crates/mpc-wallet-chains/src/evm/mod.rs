@@ -54,19 +54,35 @@ impl EvmProvider {
                 )))
             }
         };
-        Ok(Self { chain, chain_id, simulation_config: None })
+        Ok(Self {
+            chain,
+            chain_id,
+            simulation_config: None,
+        })
     }
 
     pub fn ethereum() -> Self {
-        Self { chain: Chain::Ethereum, chain_id: 1, simulation_config: None }
+        Self {
+            chain: Chain::Ethereum,
+            chain_id: 1,
+            simulation_config: None,
+        }
     }
 
     pub fn polygon() -> Self {
-        Self { chain: Chain::Polygon, chain_id: 137, simulation_config: None }
+        Self {
+            chain: Chain::Polygon,
+            chain_id: 137,
+            simulation_config: None,
+        }
     }
 
     pub fn bsc() -> Self {
-        Self { chain: Chain::Bsc, chain_id: 56, simulation_config: None }
+        Self {
+            chain: Chain::Bsc,
+            chain_id: 56,
+            simulation_config: None,
+        }
     }
 
     /// Attach a simulation configuration, enabling `simulate_transaction`.
@@ -123,13 +139,17 @@ impl ChainProvider for EvmProvider {
 
         // Proxy detection
         let to_lower = params.to.to_lowercase();
-        if config.known_proxies.iter().any(|p| p.to_lowercase() == to_lower) {
+        if config
+            .known_proxies
+            .iter()
+            .any(|p| p.to_lowercase() == to_lower)
+        {
             risk_flags.push("proxy_detected".into());
             risk_score = risk_score.saturating_add(30);
         }
 
         // Contract interaction (has calldata)
-        if params.data.as_ref().map_or(false, |d| !d.is_empty()) {
+        if params.data.as_ref().is_some_and(|d| !d.is_empty()) {
             risk_flags.push("contract_interaction".into());
             risk_score = risk_score.saturating_add(10);
         }

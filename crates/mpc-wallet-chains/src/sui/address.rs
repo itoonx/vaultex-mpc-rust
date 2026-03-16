@@ -25,8 +25,6 @@ pub fn derive_sui_address(group_pubkey: &GroupPublicKey) -> Result<String, CoreE
 
             Ok(format!("0x{}", hex::encode(hash)))
         }
-        _ => Err(CoreError::Crypto(
-            "Sui requires Ed25519 public key".into(),
-        )),
+        _ => Err(CoreError::Crypto("Sui requires Ed25519 public key".into())),
     }
 }

@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0134",  # rustls-pemfile unmaintained — transitive dep via async-nats
+    "RUSTSEC-2023-0089",  # atomic-polyfill unmaintained — transitive dep via heapless/frost-core
+    "RUSTSEC-2024-0388",  # derivative unmaintained — transitive dep via ark-ff/ruint/alloy
+    "RUSTSEC-2024-0436",  # paste unmaintained — transitive dep via ark-ff/syn-solidity/alloy
+]
