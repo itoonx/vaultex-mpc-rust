@@ -2,6 +2,7 @@
 pub mod local;
 /// NATS-based transport for multi-process and multi-machine MPC deployments.
 pub mod nats;
+pub use nats::NatsTlsConfig;
 /// SEC-007 fix: Ed25519-signed message envelope with seq_no replay protection.
 ///
 /// Use [`signed_envelope::SignedEnvelope::sign`] before sending and
