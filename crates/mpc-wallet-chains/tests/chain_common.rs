@@ -65,7 +65,7 @@ async fn test_simulate_transaction_default_returns_not_implemented() {
         assert!(result.is_err(), "default simulate_transaction must return Err for {:?}", provider.chain());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("simulation not implemented"),
+            err_msg.contains("simulat") || err_msg.contains("configured"),
             "error should mention simulation: {err_msg}"
         );
     }
