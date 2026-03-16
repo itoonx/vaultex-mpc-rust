@@ -33,6 +33,8 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 async-nats = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 futures = { workspace = true }
 
 # Utilities

@@ -15,6 +15,7 @@
 //! - ⚠️  Per-session ECDH key exchange — Epic E3 scope
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use async_nats::Client;
@@ -30,6 +31,90 @@ use crate::{
     },
     types::PartyId,
 };
+
+/// TLS configuration for mTLS-enabled NATS connections (Epic E2).
+///
+/// Provides mutual TLS: the client authenticates the server via `ca_cert_path`
+/// and presents its own certificate (`client_cert_path` + `client_key_path`)
+/// so the NATS server can authenticate the client.
+#[derive(Debug, Clone)]
+pub struct NatsTlsConfig {
+    /// Path to PEM-encoded CA certificate for server verification.
+    pub ca_cert_path: PathBuf,
+    /// Path to PEM-encoded client certificate (for mutual TLS).
+    pub client_cert_path: PathBuf,
+    /// Path to PEM-encoded client private key.
+    pub client_key_path: PathBuf,
+}
+
+impl NatsTlsConfig {
+    /// Build a [`rustls::ClientConfig`] from PEM files on disk.
+    ///
+    /// Loads the CA cert, client cert, and client key from the configured paths.
+    /// The client key bytes are zeroized after use (SEC-004 pattern).
+    pub fn build_rustls_config(&self) -> Result<rustls::ClientConfig, CoreError> {
+        use std::io::BufReader;
+        use zeroize::Zeroize;
+
+        // 1. Load CA cert
+        let ca_pem = std::fs::read(&self.ca_cert_path).map_err(|e| {
+            CoreError::Transport(format!(
+                "read CA cert {}: {e}",
+                self.ca_cert_path.display()
+            ))
+        })?;
+        let mut ca_reader = BufReader::new(ca_pem.as_slice());
+        let ca_certs: Vec<_> = rustls_pemfile::certs(&mut ca_reader)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| CoreError::Transport(format!("parse CA cert: {e}")))?;
+
+        if ca_certs.is_empty() {
+            return Err(CoreError::Transport(
+                "no CA certificates found in PEM file".into(),
+            ));
+        }
+
+        let mut root_store = rustls::RootCertStore::empty();
+        for cert in ca_certs {
+            root_store
+                .add(cert)
+                .map_err(|e| CoreError::Transport(format!("add CA cert to root store: {e}")))?;
+        }
+
+        // 2. Load client cert
+        let client_pem = std::fs::read(&self.client_cert_path).map_err(|e| {
+            CoreError::Transport(format!(
+                "read client cert {}: {e}",
+                self.client_cert_path.display()
+            ))
+        })?;
+        let mut client_reader = BufReader::new(client_pem.as_slice());
+        let client_certs: Vec<_> = rustls_pemfile::certs(&mut client_reader)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| CoreError::Transport(format!("parse client cert: {e}")))?;
+
+        // 3. Load client key (zeroize raw bytes after use — SEC-004 pattern)
+        let mut key_pem = std::fs::read(&self.client_key_path).map_err(|e| {
+            CoreError::Transport(format!(
+                "read client key {}: {e}",
+                self.client_key_path.display()
+            ))
+        })?;
+        let mut key_reader = BufReader::new(key_pem.as_slice());
+        let client_key = rustls_pemfile::private_key(&mut key_reader)
+            .map_err(|e| CoreError::Transport(format!("parse client key: {e}")))?
+            .ok_or_else(|| CoreError::Transport("no private key found in PEM file".into()))?;
+        key_pem.zeroize(); // SEC-004 pattern: zeroize key bytes
+
+        // 4. Build rustls config — TLS 1.2+ with default safe cipher suites
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_client_auth_cert(client_certs, client_key)
+            .map_err(|e| CoreError::Transport(format!("build TLS config: {e}")))?;
+
+        Ok(config)
+    }
+}
 
 /// NATS-backed [`Transport`] with SEC-007 signed envelope authentication.
 ///
@@ -80,6 +165,45 @@ impl NatsTransport {
         let client = async_nats::connect(nats_url)
             .await
             .map_err(|e| CoreError::Transport(format!("NATS connect failed: {e}")))?;
+        Ok(Self {
+            client,
+            party_id,
+            session_id,
+            signing_key,
+            peer_keys: HashMap::new(),
+            last_seq: Mutex::new(HashMap::new()),
+            out_seq: Mutex::new(0),
+        })
+    }
+
+    /// Connect to a NATS server with mTLS + SEC-007 signed envelope support (Epic E2).
+    ///
+    /// Like [`connect_signed`](Self::connect_signed), but the NATS connection is
+    /// secured with mutual TLS: the client verifies the server's certificate
+    /// against the provided CA cert, and presents its own client certificate for
+    /// server-side authentication.
+    ///
+    /// # Arguments
+    /// - `nats_url` — NATS server URL (e.g. `tls://nats.example.com:4222`).
+    /// - `party_id` — this party's ID.
+    /// - `session_id` — signing session namespace.
+    /// - `signing_key` — this party's Ed25519 key used to sign outgoing envelopes.
+    /// - `tls_config` — mTLS certificate paths (CA, client cert, client key).
+    pub async fn connect_signed_tls(
+        nats_url: &str,
+        party_id: PartyId,
+        session_id: String,
+        signing_key: SigningKey,
+        tls_config: NatsTlsConfig,
+    ) -> Result<Self, CoreError> {
+        let tls_client_config = tls_config.build_rustls_config()?;
+
+        let client = async_nats::ConnectOptions::new()
+            .tls_client_config(tls_client_config)
+            .connect(nats_url)
+            .await
+            .map_err(|e| CoreError::Transport(format!("NATS TLS connect failed: {e}")))?;
+
         Ok(Self {
             client,
             party_id,
@@ -291,6 +415,95 @@ mod tests {
         assert!(env1.verify(&vk, 0).is_ok());
         // Second with same seq_no 1 is rejected as replay (last_seen = 1)
         assert!(env2.verify(&vk, 1).is_err());
+    }
+
+    // ─── mTLS tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tls_config_rejects_missing_ca_cert() {
+        let config = NatsTlsConfig {
+            ca_cert_path: "/nonexistent/ca.pem".into(),
+            client_cert_path: "/nonexistent/client.pem".into(),
+            client_key_path: "/nonexistent/key.pem".into(),
+        };
+        let result = config.build_rustls_config();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("read CA cert"),
+            "error should mention CA cert: {err}"
+        );
+    }
+
+    #[test]
+    fn test_tls_config_rejects_invalid_pem() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write garbage (not valid PEM) to all three files
+        let ca_path = dir.path().join("ca.pem");
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&ca_path, b"not a valid PEM").unwrap();
+        std::fs::write(&cert_path, b"not a valid PEM").unwrap();
+        std::fs::write(&key_path, b"not a valid PEM").unwrap();
+
+        let config = NatsTlsConfig {
+            ca_cert_path: ca_path,
+            client_cert_path: cert_path,
+            client_key_path: key_path,
+        };
+        let result = config.build_rustls_config();
+        // Should fail because no valid certs were found in the garbage PEM
+        assert!(result.is_err(), "invalid PEM should fail: {:?}", result);
+    }
+
+    #[test]
+    fn test_tls_config_struct_construction() {
+        let config = NatsTlsConfig {
+            ca_cert_path: "/tmp/test-ca.pem".into(),
+            client_cert_path: "/tmp/test-client.pem".into(),
+            client_key_path: "/tmp/test-key.pem".into(),
+        };
+        // Verify Debug works and doesn't panic
+        let debug = format!("{:?}", config);
+        assert!(debug.contains("NatsTlsConfig"), "Debug impl should work");
+        // Verify Clone works
+        let _cloned = config.clone();
+    }
+
+    #[tokio::test]
+    async fn test_connect_signed_tls_rejects_bad_config() {
+        use rand::rngs::OsRng;
+        use rand::RngCore;
+
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let signing_key = SigningKey::from_bytes(&bytes);
+
+        let bad_config = NatsTlsConfig {
+            ca_cert_path: "/nonexistent/ca.pem".into(),
+            client_cert_path: "/nonexistent/client.pem".into(),
+            client_key_path: "/nonexistent/key.pem".into(),
+        };
+
+        let result = NatsTransport::connect_signed_tls(
+            "tls://localhost:4222",
+            PartyId(1),
+            "test-session".into(),
+            signing_key,
+            bad_config,
+        )
+        .await;
+
+        let err = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected error for bad TLS config"),
+        };
+        // Should fail at TLS config build (file not found), not at NATS connect
+        assert!(
+            err.contains("read CA cert"),
+            "should fail on TLS config, got: {err}"
+        );
     }
 
     // NatsTransport integration test requires a live NATS server.

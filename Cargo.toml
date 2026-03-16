@@ -48,6 +48,7 @@ futures = "0.3"
 
 # Transport
 async-nats = "0.38"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
 
 # CLI
