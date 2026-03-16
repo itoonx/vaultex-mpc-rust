@@ -32,8 +32,8 @@ fn parse_scheme(s: &str) -> Result<CryptoScheme, String> {
 }
 
 pub async fn run(args: KeygenArgs, format: OutputFormat) -> anyhow::Result<()> {
-    let config = ThresholdConfig::new(args.threshold, args.parties)
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let config =
+        ThresholdConfig::new(args.threshold, args.parties).map_err(|e| anyhow::anyhow!(e))?;
 
     tracing::info!(
         "Starting keygen: {}-of-{} with scheme {}",
@@ -44,9 +44,7 @@ pub async fn run(args: KeygenArgs, format: OutputFormat) -> anyhow::Result<()> {
 
     // Select the protocol based on scheme
     let _protocol: Box<dyn mpc_wallet_core::protocol::MpcProtocol> = match args.scheme {
-        CryptoScheme::Gg20Ecdsa => {
-            Box::new(mpc_wallet_core::protocol::gg20::Gg20Protocol::new())
-        }
+        CryptoScheme::Gg20Ecdsa => Box::new(mpc_wallet_core::protocol::gg20::Gg20Protocol::new()),
         CryptoScheme::FrostSecp256k1Tr => {
             Box::new(mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new())
         }
@@ -56,7 +54,8 @@ pub async fn run(args: KeygenArgs, format: OutputFormat) -> anyhow::Result<()> {
     };
 
     // Create local transport for demo mode (all parties in one process)
-    let transports = mpc_wallet_core::transport::local::LocalTransportNetwork::new(config.total_parties);
+    let transports =
+        mpc_wallet_core::transport::local::LocalTransportNetwork::new(config.total_parties);
 
     // Run keygen for all parties concurrently
     let mut handles = Vec::new();
@@ -80,9 +79,9 @@ pub async fn run(args: KeygenArgs, format: OutputFormat) -> anyhow::Result<()> {
                 CryptoScheme::Gg20Ecdsa => {
                     Box::new(mpc_wallet_core::protocol::gg20::Gg20Protocol::new())
                 }
-                CryptoScheme::FrostSecp256k1Tr => {
-                    Box::new(mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new())
-                }
+                CryptoScheme::FrostSecp256k1Tr => Box::new(
+                    mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new(),
+                ),
                 CryptoScheme::FrostEd25519 => {
                     Box::new(mpc_wallet_core::protocol::frost_ed25519::FrostEd25519Protocol::new())
                 }
@@ -121,7 +120,9 @@ pub async fn run(args: KeygenArgs, format: OutputFormat) -> anyhow::Result<()> {
 
     use mpc_wallet_core::key_store::KeyStore;
     for share in &key_shares {
-        store.save(&group_id, &metadata, share.party_id, share).await?;
+        store
+            .save(&group_id, &metadata, share.party_id, share)
+            .await?;
     }
 
     let result = CliResult {

@@ -2,8 +2,8 @@
 
 /// Helper: create a valid evidence pack JSON by using the core audit module directly.
 fn create_valid_pack() -> String {
-    use mpc_wallet_core::audit::{AuditLedger, EventKind};
     use ed25519_dalek::SigningKey;
+    use mpc_wallet_core::audit::{AuditLedger, EventKind};
     use rand::rngs::OsRng;
     use rand::RngCore;
 

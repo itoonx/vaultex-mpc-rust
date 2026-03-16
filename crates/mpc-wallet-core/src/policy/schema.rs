@@ -5,9 +5,9 @@
 //! "no policy → no sign" rule (FR-B5): a signing session cannot start unless
 //! a valid policy has been loaded via [`super::PolicyStore::load`].
 
+use crate::error::CoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::error::CoreError;
 /// Current policy schema version. Policies with a different version number
 /// are rejected by [`super::PolicyStore::load`].
 pub const POLICY_SCHEMA_VERSION: u32 = 1;
@@ -122,8 +122,8 @@ impl PolicyTemplate {
                     m.insert(
                         "ethereum".into(),
                         ChainPolicy {
-                            allowlist: vec![], // operator must configure
-                            max_amount_per_tx: Some(10_000_000_000_000_000_000), // 10 ETH in wei
+                            allowlist: vec![],                                      // operator must configure
+                            max_amount_per_tx: Some(10_000_000_000_000_000_000),    // 10 ETH in wei
                             daily_velocity_limit: Some(18_000_000_000_000_000_000), // 18 ETH in wei
                         },
                     );
@@ -217,11 +217,10 @@ impl SignedPolicy {
             .map_err(|_| CoreError::PolicyRequired("signature must be 64 bytes".into()))?;
         let signature = Signature::from_bytes(&sig_bytes);
 
-        let canonical =
-            serde_json::to_vec(&self.policy).expect("policy serialization cannot fail");
-        verifying_key
-            .verify(&canonical, &signature)
-            .map_err(|_| CoreError::PolicyRequired("policy signature verification failed".into()))?;
+        let canonical = serde_json::to_vec(&self.policy).expect("policy serialization cannot fail");
+        verifying_key.verify(&canonical, &signature).map_err(|_| {
+            CoreError::PolicyRequired("policy signature verification failed".into())
+        })?;
 
         Ok(&self.policy)
     }

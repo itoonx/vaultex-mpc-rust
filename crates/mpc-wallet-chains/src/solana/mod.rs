@@ -104,10 +104,7 @@ impl ChainProvider for SolanaProvider {
         let mut risk_score: u16 = 0;
 
         // Check value against max_lamports_per_tx
-        let lamports: u64 = params
-            .value
-            .parse()
-            .unwrap_or(0);
+        let lamports: u64 = params.value.parse().unwrap_or(0);
         if lamports > config.max_lamports_per_tx {
             risk_flags.push("high_value".to_string());
             risk_score += 50;

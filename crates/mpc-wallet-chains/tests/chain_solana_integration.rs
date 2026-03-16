@@ -55,8 +55,7 @@ async fn test_solana_sign_payload_is_binary_not_json() {
     );
     // Must not start with '{' (would indicate it's still JSON)
     assert_ne!(
-        unsigned.sign_payload[0],
-        b'{',
+        unsigned.sign_payload[0], b'{',
         "sign_payload must be binary, not JSON"
     );
 }
@@ -75,9 +74,7 @@ async fn test_solana_finalize_produces_correct_size() {
     let fake_sig = MpcSignature::EdDsa {
         signature: [0u8; 64],
     };
-    let signed = provider
-        .finalize_transaction(&unsigned, &fake_sig)
-        .unwrap();
+    let signed = provider.finalize_transaction(&unsigned, &fake_sig).unwrap();
     // A signed Solana tx = 1 (compact-u16 for num_sigs) + 64 (sig) + message_len
     // message_len for 3 accounts + 1 instruction = at least 100 bytes
     // total should be at least 165 bytes
@@ -88,8 +85,7 @@ async fn test_solana_finalize_produces_correct_size() {
     );
     // First byte must be 0x01 (compact-u16 encoding of 1 signature)
     assert_eq!(
-        signed.raw_tx[0],
-        0x01,
+        signed.raw_tx[0], 0x01,
         "first byte must be 0x01 (1 signature)"
     );
     // Bytes 1..65 must be the signature
@@ -147,7 +143,8 @@ async fn test_solana_message_structure_account_keys_offset() {
     let from_bytes_in_msg = &msg[4..36];
     let expected = bs58::decode(from_addr).into_vec().unwrap();
     assert_eq!(
-        from_bytes_in_msg, expected.as_slice(),
+        from_bytes_in_msg,
+        expected.as_slice(),
         "bytes [4..36] must be the from public key"
     );
 }
@@ -167,7 +164,10 @@ async fn test_solana_message_structure_three_accounts_present() {
     let unsigned = provider.build_transaction(params).await.unwrap();
     let msg = &unsigned.sign_payload;
     // byte 3: compact-u16 account count = 3 (single byte, value < 128)
-    assert_eq!(msg[3], 3, "must have exactly 3 account keys (compact-u16 = 3)");
+    assert_eq!(
+        msg[3], 3,
+        "must have exactly 3 account keys (compact-u16 = 3)"
+    );
     // minimum size: 3 (header) + 1 (compact-u16) + 96 (3×32 account keys) + 32 (blockhash) = 132
     assert!(
         msg.len() >= 132,
@@ -232,7 +232,9 @@ async fn test_solana_tx_hash_is_base58_full_signature() {
     let unsigned = provider.build_transaction(params).await.unwrap();
 
     let sig_bytes = [0xABu8; 64];
-    let fake_sig = MpcSignature::EdDsa { signature: sig_bytes };
+    let fake_sig = MpcSignature::EdDsa {
+        signature: sig_bytes,
+    };
     let signed = provider.finalize_transaction(&unsigned, &fake_sig).unwrap();
 
     // tx_hash must be base58 encoding of the full 64-byte signature

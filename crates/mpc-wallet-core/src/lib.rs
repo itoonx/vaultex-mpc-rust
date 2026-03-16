@@ -16,49 +16,49 @@
 //! No single party ever holds a complete private key; all sensitive operations
 //! are distributed across parties using threshold cryptography.
 
-/// Error types returned by all core operations.
-pub mod error;
-/// Key share storage traits and encrypted file-based implementation.
-pub mod key_store;
-/// MPC protocol traits and implementations (GG20, FROST Ed25519, FROST secp256k1).
-pub mod protocol;
-/// Transport layer traits and implementations for inter-party messaging.
-pub mod transport;
-/// Shared primitive types: [`types::PartyId`], [`types::ThresholdConfig`], [`types::CryptoScheme`].
-pub mod types;
-/// Policy engine: signing policy schema, evaluator, and the "no policy → no sign" gate.
-///
-/// Use [`policy::PolicyStore`] to load a [`policy::Policy`] and call
-/// [`policy::PolicyStore::check`] before creating any signing session (FR-B5).
-pub mod policy;
-/// Signing session manager: idempotent session lifecycle with `tx_fingerprint` lock.
-///
-/// Use [`session::SessionManager`] to create and track signing sessions.
-/// Call [`session::SessionManager::create`] before initiating any MPC signing round.
-pub mod session;
 /// Approval workflow: M-of-N quorum enforcement and maker/checker/approver SoD.
 ///
 /// Use [`approvals::ApprovalStore`] to register sessions, assign roles,
 /// collect Ed25519-signed approvals, and check quorum before signing (FR-C).
 pub mod approvals;
-/// Role-based and attribute-based access control (Epic A).
-///
-/// Provides [`rbac::ApiRole`] for RBAC, [`rbac::AbacAttributes`] for ABAC,
-/// [`rbac::AuthContext`] combining both, and [`rbac::Permissions`] for authorization gates.
-pub mod rbac;
-/// JWT-based identity validation (Epic A).
-///
-/// Provides [`identity::JwtValidator`] to decode and validate JWTs, extracting
-/// RBAC roles and ABAC attributes into an [`rbac::AuthContext`].
-pub mod identity;
 /// Append-only hash-chained audit ledger with Ed25519 service signatures (FR-F).
 ///
 /// Use [`audit::AuditLedger`] to record every signing event. Call
 /// [`audit::AuditLedger::verify`] to check tamper-evident chain integrity.
 pub mod audit;
+/// Error types returned by all core operations.
+pub mod error;
+/// JWT-based identity validation (Epic A).
+///
+/// Provides [`identity::JwtValidator`] to decode and validate JWTs, extracting
+/// RBAC roles and ABAC attributes into an [`rbac::AuthContext`].
+pub mod identity;
+/// Key share storage traits and encrypted file-based implementation.
+pub mod key_store;
 /// Multi-cloud operations: node distribution constraints and health monitoring (Epic I).
 ///
 /// Use [`ops::validate_distribution`] to enforce that MPC parties are spread across
 /// distinct cloud providers and regions. Use [`ops::assess_quorum_risk`] to evaluate
 /// signing quorum availability from node health reports.
 pub mod ops;
+/// Policy engine: signing policy schema, evaluator, and the "no policy → no sign" gate.
+///
+/// Use [`policy::PolicyStore`] to load a [`policy::Policy`] and call
+/// [`policy::PolicyStore::check`] before creating any signing session (FR-B5).
+pub mod policy;
+/// MPC protocol traits and implementations (GG20, FROST Ed25519, FROST secp256k1).
+pub mod protocol;
+/// Role-based and attribute-based access control (Epic A).
+///
+/// Provides [`rbac::ApiRole`] for RBAC, [`rbac::AbacAttributes`] for ABAC,
+/// [`rbac::AuthContext`] combining both, and [`rbac::Permissions`] for authorization gates.
+pub mod rbac;
+/// Signing session manager: idempotent session lifecycle with `tx_fingerprint` lock.
+///
+/// Use [`session::SessionManager`] to create and track signing sessions.
+/// Call [`session::SessionManager::create`] before initiating any MPC signing round.
+pub mod session;
+/// Transport layer traits and implementations for inter-party messaging.
+pub mod transport;
+/// Shared primitive types: [`types::PartyId`], [`types::ThresholdConfig`], [`types::CryptoScheme`].
+pub mod types;

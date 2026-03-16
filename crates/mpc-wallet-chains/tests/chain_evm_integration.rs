@@ -76,8 +76,8 @@ async fn test_evm_polygon_chain_id() {
         .expect("build_transaction should succeed for Polygon");
 
     // Deserialize the stored tx_data and check chain_id
-    let tx: TxEip1559 = serde_json::from_slice(&unsigned.tx_data)
-        .expect("tx_data must deserialize to TxEip1559");
+    let tx: TxEip1559 =
+        serde_json::from_slice(&unsigned.tx_data).expect("tx_data must deserialize to TxEip1559");
 
     assert_eq!(
         tx.chain_id, 137,
@@ -92,16 +92,16 @@ async fn test_evm_polygon_chain_id() {
 async fn test_evm_bsc_chain_id() {
     use alloy::consensus::TxEip1559;
 
-    let provider = mpc_wallet_chains::evm::EvmProvider::new(Chain::Bsc)
-        .expect("BSC is a valid EVM chain");
+    let provider =
+        mpc_wallet_chains::evm::EvmProvider::new(Chain::Bsc).expect("BSC is a valid EVM chain");
 
     let unsigned = provider
         .build_transaction(evm_params())
         .await
         .expect("build_transaction should succeed for BSC");
 
-    let tx: TxEip1559 = serde_json::from_slice(&unsigned.tx_data)
-        .expect("tx_data must deserialize to TxEip1559");
+    let tx: TxEip1559 =
+        serde_json::from_slice(&unsigned.tx_data).expect("tx_data must deserialize to TxEip1559");
 
     assert_eq!(
         tx.chain_id, 56,
@@ -122,8 +122,8 @@ async fn test_evm_provider_returns_correct_chain() {
         "provider.chain() must return Chain::Polygon"
     );
 
-    let bsc = mpc_wallet_chains::evm::EvmProvider::new(Chain::Bsc)
-        .expect("BSC is a valid EVM chain");
+    let bsc =
+        mpc_wallet_chains::evm::EvmProvider::new(Chain::Bsc).expect("BSC is a valid EVM chain");
     assert_eq!(
         bsc.chain(),
         Chain::Bsc,
@@ -206,7 +206,9 @@ async fn test_evm_simulation_contract_interaction() {
         extra: None,
     };
     let result = provider.simulate_transaction(&params).await.unwrap();
-    assert!(result.risk_flags.contains(&"contract_interaction".to_string()));
+    assert!(result
+        .risk_flags
+        .contains(&"contract_interaction".to_string()));
 }
 
 #[tokio::test]

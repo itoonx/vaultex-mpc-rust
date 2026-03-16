@@ -19,10 +19,7 @@ pub fn derive_evm_address(group_pubkey: &GroupPublicKey) -> Result<String, CoreE
             // Decompress the key
             let point = k256::PublicKey::from_sec1_bytes(bytes)
                 .map_err(|e| CoreError::Crypto(format!("invalid secp256k1 key: {e}")))?;
-            point
-                .to_encoded_point(false)
-                .as_bytes()
-                .to_vec()
+            point.to_encoded_point(false).as_bytes().to_vec()
         }
         GroupPublicKey::Ed25519(_) => {
             return Err(CoreError::Crypto(

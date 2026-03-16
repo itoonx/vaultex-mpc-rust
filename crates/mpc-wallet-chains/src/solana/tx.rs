@@ -275,10 +275,15 @@ pub async fn build_solana_transaction(
     let message_bytes = match version {
         Some("v0") => {
             // Parse lookup tables if present
-            let lookup_tables = parse_lookup_tables(
-                params.extra.as_ref().and_then(|e| e.get("lookup_tables")),
-            )?;
-            build_message_bytes_v0(&from_bytes, &to_bytes, lamports, &recent_blockhash, &lookup_tables)
+            let lookup_tables =
+                parse_lookup_tables(params.extra.as_ref().and_then(|e| e.get("lookup_tables")))?;
+            build_message_bytes_v0(
+                &from_bytes,
+                &to_bytes,
+                lamports,
+                &recent_blockhash,
+                &lookup_tables,
+            )
         }
         _ => build_message_bytes(&from_bytes, &to_bytes, lamports, &recent_blockhash),
     };
@@ -290,8 +295,8 @@ pub async fn build_solana_transaction(
         "to": to_str,
         "lamports": lamports,
     });
-    let tx_data = serde_json::to_vec(&tx_data_json)
-        .map_err(|e| CoreError::Serialization(e.to_string()))?;
+    let tx_data =
+        serde_json::to_vec(&tx_data_json).map_err(|e| CoreError::Serialization(e.to_string()))?;
 
     Ok(UnsignedTransaction {
         chain: Chain::Solana,

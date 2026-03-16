@@ -63,7 +63,7 @@ impl NatsAcl {
     /// Allows:
     /// - Publish to other parties' subjects: `mpc.{session}.party.{other}`
     /// - Subscribe to own subject: `mpc.{session}.party.{self}`
-    /// Denies:
+    ///   Denies:
     /// - Publish to own subject (isolation — a party sends TO others, not to itself)
     pub fn for_party(party_id: PartyId, session_id: &str, total_parties: u16) -> Self {
         let own_subject = format!("mpc.{}.party.{}", session_id, party_id.0);
@@ -96,19 +96,13 @@ pub fn validate_jetstream_config(config: &JetStreamConfig) -> Result<(), CoreErr
         ));
     }
     if config.max_age_secs == 0 {
-        return Err(CoreError::InvalidConfig(
-            "max_age_secs must be > 0".into(),
-        ));
+        return Err(CoreError::InvalidConfig("max_age_secs must be > 0".into()));
     }
     if config.replicas == 0 {
-        return Err(CoreError::InvalidConfig(
-            "replicas must be >= 1".into(),
-        ));
+        return Err(CoreError::InvalidConfig("replicas must be >= 1".into()));
     }
     if config.max_messages == 0 {
-        return Err(CoreError::InvalidConfig(
-            "max_messages must be > 0".into(),
-        ));
+        return Err(CoreError::InvalidConfig("max_messages must be > 0".into()));
     }
     Ok(())
 }
@@ -127,15 +121,19 @@ mod tests {
 
     #[test]
     fn test_jetstream_empty_stream_name_rejected() {
-        let mut config = JetStreamConfig::default();
-        config.stream_name = "".into();
+        let config = JetStreamConfig {
+            stream_name: "".into(),
+            ..JetStreamConfig::default()
+        };
         assert!(validate_jetstream_config(&config).is_err());
     }
 
     #[test]
     fn test_jetstream_zero_replicas_rejected() {
-        let mut config = JetStreamConfig::default();
-        config.replicas = 0;
+        let config = JetStreamConfig {
+            replicas: 0,
+            ..JetStreamConfig::default()
+        };
         assert!(validate_jetstream_config(&config).is_err());
     }
 

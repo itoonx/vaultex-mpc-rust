@@ -140,9 +140,9 @@ impl SessionEncryption {
         let nonce = Nonce::from_slice(&data[0..12]);
         let ciphertext = &data[12..];
 
-        cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| CoreError::Transport("E3 decrypt failed: authentication tag mismatch".into()))
+        cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            CoreError::Transport("E3 decrypt failed: authentication tag mismatch".into())
+        })
     }
 
     /// Check if a peer has been registered.
@@ -166,10 +166,22 @@ mod tests {
 
         // Exchange public keys and register peers
         enc_a
-            .register_peer(party_b, &enc_b.local_public_key, &secret_a, session_id, party_a)
+            .register_peer(
+                party_b,
+                &enc_b.local_public_key,
+                &secret_a,
+                session_id,
+                party_a,
+            )
             .unwrap();
         enc_b
-            .register_peer(party_a, &enc_a.local_public_key, &secret_b, session_id, party_b)
+            .register_peer(
+                party_a,
+                &enc_a.local_public_key,
+                &secret_b,
+                session_id,
+                party_b,
+            )
             .unwrap();
 
         // Party A encrypts for Party B
@@ -192,11 +204,23 @@ mod tests {
         let party_b = PartyId(2);
 
         enc_a
-            .register_peer(party_b, &enc_b.local_public_key, &secret_a, session_id, party_a)
+            .register_peer(
+                party_b,
+                &enc_b.local_public_key,
+                &secret_a,
+                session_id,
+                party_a,
+            )
             .unwrap();
         // B registers with C's key instead of A's (wrong key)
         enc_b
-            .register_peer(party_a, &enc_c.local_public_key, &secret_b, session_id, party_b)
+            .register_peer(
+                party_a,
+                &enc_c.local_public_key,
+                &secret_b,
+                session_id,
+                party_b,
+            )
             .unwrap();
 
         let ciphertext = enc_a.encrypt(party_b, b"secret data", party_a).unwrap();
@@ -219,7 +243,13 @@ mod tests {
         let (enc_b, _secret_b) = SessionEncryption::new(session_id);
 
         enc_a
-            .register_peer(PartyId(2), &enc_b.local_public_key, &secret_a, session_id, PartyId(1))
+            .register_peer(
+                PartyId(2),
+                &enc_b.local_public_key,
+                &secret_a,
+                session_id,
+                PartyId(1),
+            )
             .unwrap();
 
         let ct1 = enc_a.encrypt(PartyId(2), b"msg1", PartyId(1)).unwrap();
@@ -236,19 +266,36 @@ mod tests {
         let (mut enc_b, secret_b) = SessionEncryption::new(session_id);
 
         enc_a
-            .register_peer(PartyId(2), &enc_b.local_public_key, &secret_a, session_id, PartyId(1))
+            .register_peer(
+                PartyId(2),
+                &enc_b.local_public_key,
+                &secret_a,
+                session_id,
+                PartyId(1),
+            )
             .unwrap();
         enc_b
-            .register_peer(PartyId(1), &enc_a.local_public_key, &secret_b, session_id, PartyId(2))
+            .register_peer(
+                PartyId(1),
+                &enc_a.local_public_key,
+                &secret_b,
+                session_id,
+                PartyId(2),
+            )
             .unwrap();
 
-        let mut ciphertext = enc_a.encrypt(PartyId(2), b"important data", PartyId(1)).unwrap();
+        let mut ciphertext = enc_a
+            .encrypt(PartyId(2), b"important data", PartyId(1))
+            .unwrap();
         // Tamper with ciphertext (flip a byte after nonce)
         if ciphertext.len() > 13 {
             ciphertext[13] ^= 0xFF;
         }
         let result = enc_b.decrypt(PartyId(1), &ciphertext);
-        assert!(result.is_err(), "tampered ciphertext must fail authentication");
+        assert!(
+            result.is_err(),
+            "tampered ciphertext must fail authentication"
+        );
     }
 
     #[test]
@@ -261,10 +308,22 @@ mod tests {
         let party_b = PartyId(2);
 
         enc_a
-            .register_peer(party_b, &enc_b.local_public_key, &secret_a, session_id, party_a)
+            .register_peer(
+                party_b,
+                &enc_b.local_public_key,
+                &secret_a,
+                session_id,
+                party_a,
+            )
             .unwrap();
         enc_b
-            .register_peer(party_a, &enc_a.local_public_key, &secret_b, session_id, party_b)
+            .register_peer(
+                party_a,
+                &enc_a.local_public_key,
+                &secret_b,
+                session_id,
+                party_b,
+            )
             .unwrap();
 
         // A -> B
@@ -292,7 +351,13 @@ mod tests {
 
         assert!(!enc_a.has_peer(&PartyId(2)));
         enc_a
-            .register_peer(PartyId(2), &enc_b.local_public_key, &secret_a, session_id, PartyId(1))
+            .register_peer(
+                PartyId(2),
+                &enc_b.local_public_key,
+                &secret_a,
+                session_id,
+                PartyId(1),
+            )
             .unwrap();
         assert!(enc_a.has_peer(&PartyId(2)));
     }

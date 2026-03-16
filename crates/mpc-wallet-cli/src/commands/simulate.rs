@@ -35,9 +35,10 @@ pub async fn run(args: SimulateArgs, format: OutputFormat) -> anyhow::Result<()>
         .transpose()
         .map_err(|e| anyhow::anyhow!("invalid --extra JSON: {e}"))?;
 
-    let data = args.data.as_ref().map(|h| {
-        hex::decode(h.strip_prefix("0x").unwrap_or(h)).unwrap_or_default()
-    });
+    let data = args
+        .data
+        .as_ref()
+        .map(|h| hex::decode(h.strip_prefix("0x").unwrap_or(h)).unwrap_or_default());
 
     let params = TransactionParams {
         to: args.to,
@@ -47,10 +48,7 @@ pub async fn run(args: SimulateArgs, format: OutputFormat) -> anyhow::Result<()>
         extra,
     };
 
-    let chain: Chain = args
-        .chain
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
+    let chain: Chain = args.chain.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
     let result = match chain {
         Chain::Solana => {

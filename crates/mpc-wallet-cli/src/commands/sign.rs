@@ -44,8 +44,8 @@ pub async fn run(args: SignArgs, format: OutputFormat) -> anyhow::Result<()> {
     use mpc_wallet_core::key_store::KeyStore;
     let signers: Vec<PartyId> = args.signers.iter().map(|&id| PartyId(id)).collect();
 
-    let message = hex::decode(&args.message)
-        .map_err(|e| anyhow::anyhow!("invalid hex message: {e}"))?;
+    let message =
+        hex::decode(&args.message).map_err(|e| anyhow::anyhow!("invalid hex message: {e}"))?;
 
     // Load key shares for all signers
     let mut key_shares = Vec::new();
@@ -58,7 +58,8 @@ pub async fn run(args: SignArgs, format: OutputFormat) -> anyhow::Result<()> {
     let config = key_shares[0].config;
 
     // Create transports for the signing parties
-    let transports = mpc_wallet_core::transport::local::LocalTransportNetwork::new(config.total_parties);
+    let transports =
+        mpc_wallet_core::transport::local::LocalTransportNetwork::new(config.total_parties);
 
     // Run signing for all parties concurrently
     let mut join_handles = Vec::new();
@@ -74,9 +75,9 @@ pub async fn run(args: SignArgs, format: OutputFormat) -> anyhow::Result<()> {
                 CryptoScheme::Gg20Ecdsa => {
                     Box::new(mpc_wallet_core::protocol::gg20::Gg20Protocol::new())
                 }
-                CryptoScheme::FrostSecp256k1Tr => {
-                    Box::new(mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new())
-                }
+                CryptoScheme::FrostSecp256k1Tr => Box::new(
+                    mpc_wallet_core::protocol::frost_secp256k1::FrostSecp256k1TrProtocol::new(),
+                ),
                 CryptoScheme::FrostEd25519 => {
                     Box::new(mpc_wallet_core::protocol::frost_ed25519::FrostEd25519Protocol::new())
                 }
@@ -98,14 +99,15 @@ pub async fn run(args: SignArgs, format: OutputFormat) -> anyhow::Result<()> {
     let sig = &signatures[0];
     let sig_hex = match sig {
         mpc_wallet_core::protocol::MpcSignature::Ecdsa { r, s, recovery_id } => {
-            format!("r={} s={} v={}", hex::encode(r), hex::encode(s), recovery_id)
+            format!(
+                "r={} s={} v={}",
+                hex::encode(r),
+                hex::encode(s),
+                recovery_id
+            )
         }
-        mpc_wallet_core::protocol::MpcSignature::Schnorr { signature } => {
-            hex::encode(signature)
-        }
-        mpc_wallet_core::protocol::MpcSignature::EdDsa { signature } => {
-            hex::encode(signature)
-        }
+        mpc_wallet_core::protocol::MpcSignature::Schnorr { signature } => hex::encode(signature),
+        mpc_wallet_core::protocol::MpcSignature::EdDsa { signature } => hex::encode(signature),
     };
 
     let result = CliResult {

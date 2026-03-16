@@ -58,10 +58,7 @@ impl NatsTlsConfig {
 
         // 1. Load CA cert
         let ca_pem = std::fs::read(&self.ca_cert_path).map_err(|e| {
-            CoreError::Transport(format!(
-                "read CA cert {}: {e}",
-                self.ca_cert_path.display()
-            ))
+            CoreError::Transport(format!("read CA cert {}: {e}", self.ca_cert_path.display()))
         })?;
         let mut ca_reader = BufReader::new(ca_pem.as_slice());
         let ca_certs: Vec<_> = rustls_pemfile::certs(&mut ca_reader)
@@ -263,8 +260,8 @@ impl Transport for NatsTransport {
         );
 
         let subject = Self::party_subject(&self.session_id, target);
-        let payload = serde_json::to_vec(&envelope)
-            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let payload =
+            serde_json::to_vec(&envelope).map_err(|e| CoreError::Serialization(e.to_string()))?;
 
         self.client
             .publish(subject, payload.into())
@@ -363,8 +360,8 @@ mod tests {
         // Verify the sign→serialise→deserialise→verify pipeline works
         // without a live NATS server.
         use crate::transport::signed_envelope::SignedEnvelope;
-        use rand::RngCore;
         use rand::rngs::OsRng;
+        use rand::RngCore;
 
         let mut bytes = [0u8; 32];
         OsRng.fill_bytes(&mut bytes);
@@ -378,7 +375,8 @@ mod tests {
             payload: b"hello from party 1".to_vec(),
         };
 
-        let envelope = SignedEnvelope::sign(msg.clone(), PartyId(1), 1, DEFAULT_TTL_SECS, &signing_key);
+        let envelope =
+            SignedEnvelope::sign(msg.clone(), PartyId(1), 1, DEFAULT_TTL_SECS, &signing_key);
 
         // Serialise and deserialise (simulating the NATS wire)
         let json = serde_json::to_vec(&envelope).unwrap();
@@ -393,8 +391,8 @@ mod tests {
     fn test_replay_blocked_in_nats_pipeline() {
         // Simulate two envelopes with seq_no 1, 1 (replay).
         use crate::transport::signed_envelope::SignedEnvelope;
-        use rand::RngCore;
         use rand::rngs::OsRng;
+        use rand::RngCore;
 
         let mut bytes = [0u8; 32];
         OsRng.fill_bytes(&mut bytes);
@@ -511,8 +509,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires live NATS server: NATS_URL=nats://localhost:4222"]
     async fn test_nats_signed_round_trip() {
-        use rand::RngCore;
         use rand::rngs::OsRng;
+        use rand::RngCore;
 
         let url = std::env::var("NATS_URL").unwrap_or("nats://localhost:4222".into());
         let session = uuid::Uuid::new_v4().to_string();
@@ -526,8 +524,12 @@ mod tests {
         let vk1 = k1.verifying_key();
         let vk2 = k2.verifying_key();
 
-        let mut t1 = NatsTransport::connect_signed(&url, PartyId(1), session.clone(), k1).await.unwrap();
-        let mut t2 = NatsTransport::connect_signed(&url, PartyId(2), session.clone(), k2).await.unwrap();
+        let mut t1 = NatsTransport::connect_signed(&url, PartyId(1), session.clone(), k1)
+            .await
+            .unwrap();
+        let mut t2 = NatsTransport::connect_signed(&url, PartyId(2), session.clone(), k2)
+            .await
+            .unwrap();
 
         t1.register_peer_key(PartyId(2), vk2);
         t2.register_peer_key(PartyId(1), vk1);

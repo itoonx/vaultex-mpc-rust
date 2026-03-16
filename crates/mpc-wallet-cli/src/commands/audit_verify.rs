@@ -19,9 +19,7 @@ pub async fn run(args: AuditVerifyArgs, format: OutputFormat) -> anyhow::Result<
         Ok(entry_count) => {
             let result = CliResult {
                 status: "success".into(),
-                message: format!(
-                    "Audit ledger verified: {entry_count} entries, hash chain intact"
-                ),
+                message: format!("Audit ledger verified: {entry_count} entries, hash chain intact"),
                 data: Some(serde_json::json!({
                     "verified": true,
                     "entry_count": entry_count,

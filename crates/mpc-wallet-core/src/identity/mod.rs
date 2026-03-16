@@ -3,7 +3,7 @@
 //! Provides [`JwtValidator`] to decode and validate JWTs, extracting RBAC roles
 //! and ABAC attributes into an [`AuthContext`](crate::rbac::AuthContext).
 
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use jsonwebtoken::{decode, DecodingKey, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
@@ -82,19 +82,20 @@ impl JwtValidator {
     }
 }
 
-/// Helper: create a signed JWT from claims (for testing and internal use).
-fn make_token(claims: &TokenClaims, secret: &[u8]) -> String {
-    encode(
-        &Header::default(),
-        claims,
-        &EncodingKey::from_secret(secret),
-    )
-    .expect("encoding should not fail in tests")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    /// Helper: create a signed JWT from claims (for testing).
+    fn make_token(claims: &TokenClaims, secret: &[u8]) -> String {
+        encode(
+            &Header::default(),
+            claims,
+            &EncodingKey::from_secret(secret),
+        )
+        .expect("encoding should not fail in tests")
+    }
 
     /// Return an `exp` value 1 hour in the future.
     fn future_exp() -> usize {

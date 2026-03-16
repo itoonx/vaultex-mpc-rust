@@ -33,10 +33,13 @@ fn test_simulation_result_construction_and_serde() {
     // Verify JSON serialization roundtrip
     let json = serde_json::to_string(&result).unwrap();
     let deserialized: SimulationResult = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.success, true);
+    assert!(deserialized.success);
     assert_eq!(deserialized.gas_used, 21000);
     assert_eq!(deserialized.return_data, vec![0xde, 0xad]);
-    assert_eq!(deserialized.risk_flags, vec!["proxy_detected", "large_approval"]);
+    assert_eq!(
+        deserialized.risk_flags,
+        vec!["proxy_detected", "large_approval"]
+    );
     assert_eq!(deserialized.risk_score, 42);
 }
 
@@ -67,7 +70,9 @@ async fn test_simulate_transaction_default_returns_not_implemented() {
         if let Err(e) = &result {
             let msg = e.to_string();
             assert!(
-                msg.contains("simulat") || msg.contains("configured") || msg.contains("not implemented"),
+                msg.contains("simulat")
+                    || msg.contains("configured")
+                    || msg.contains("not implemented"),
                 "error should mention simulation: {msg}"
             );
         }
