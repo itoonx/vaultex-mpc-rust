@@ -92,6 +92,21 @@ pub enum CoreError {
     #[error("session error: {0}")]
     SessionError(String),
 
+    /// An approval workflow error (e.g. insufficient quorum, SoD violation,
+    /// approver already submitted, or hold period not elapsed).
+    ///
+    /// Returned by [`crate::approvals::ApprovalStore`] when the approval
+    /// workflow rejects an operation (FR-C).
+    #[error("approval error: {0}")]
+    ApprovalRequired(String),
+
+    /// An audit ledger error (e.g. hash-chain integrity violation, service
+    /// signature failure, or append I/O error).
+    ///
+    /// Returned by [`crate::audit::AuditLedger`] operations (FR-F).
+    #[error("audit error: {0}")]
+    AuditError(String),
+
     /// A catch-all error variant for cases not covered by the more specific
     /// variants above. Prefer using a specific variant whenever possible so
     /// that callers can handle errors programmatically.
