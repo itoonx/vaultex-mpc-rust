@@ -56,3 +56,9 @@ pub mod identity;
 /// Use [`audit::AuditLedger`] to record every signing event. Call
 /// [`audit::AuditLedger::verify`] to check tamper-evident chain integrity.
 pub mod audit;
+/// Multi-cloud operations: node distribution constraints and health monitoring (Epic I).
+///
+/// Use [`ops::validate_distribution`] to enforce that MPC parties are spread across
+/// distinct cloud providers and regions. Use [`ops::assess_quorum_risk`] to evaluate
+/// signing quorum availability from node health reports.
+pub mod ops;
