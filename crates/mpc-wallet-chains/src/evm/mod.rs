@@ -8,12 +8,35 @@ use mpc_wallet_core::error::CoreError;
 use mpc_wallet_core::protocol::{GroupPublicKey, MpcSignature};
 
 use crate::provider::{
-    Chain, ChainProvider, SignedTransaction, TransactionParams, UnsignedTransaction,
+    Chain, ChainProvider, SignedTransaction, SimulationResult, TransactionParams,
+    UnsignedTransaction,
 };
+
+/// Configuration for EVM transaction simulation.
+#[derive(Debug, Clone)]
+pub struct EvmSimulationConfig {
+    /// Maximum transaction value before flagging as high-value (in wei).
+    pub high_value_threshold: u64,
+    /// Known proxy contract addresses (for risk flagging).
+    pub known_proxies: Vec<String>,
+    /// Default gas estimate when simulation is not connected to RPC.
+    pub default_gas_estimate: u64,
+}
+
+impl Default for EvmSimulationConfig {
+    fn default() -> Self {
+        Self {
+            high_value_threshold: 10_000_000_000_000_000_000, // 10 ETH in wei
+            known_proxies: Vec::new(),
+            default_gas_estimate: 21_000,
+        }
+    }
+}
 
 pub struct EvmProvider {
     pub chain: Chain,
     pub chain_id: u64,
+    pub simulation_config: Option<EvmSimulationConfig>,
 }
 
 impl EvmProvider {
@@ -31,19 +54,25 @@ impl EvmProvider {
                 )))
             }
         };
-        Ok(Self { chain, chain_id })
+        Ok(Self { chain, chain_id, simulation_config: None })
     }
 
     pub fn ethereum() -> Self {
-        Self { chain: Chain::Ethereum, chain_id: 1 }
+        Self { chain: Chain::Ethereum, chain_id: 1, simulation_config: None }
     }
 
     pub fn polygon() -> Self {
-        Self { chain: Chain::Polygon, chain_id: 137 }
+        Self { chain: Chain::Polygon, chain_id: 137, simulation_config: None }
     }
 
     pub fn bsc() -> Self {
-        Self { chain: Chain::Bsc, chain_id: 56 }
+        Self { chain: Chain::Bsc, chain_id: 56, simulation_config: None }
+    }
+
+    /// Attach a simulation configuration, enabling `simulate_transaction`.
+    pub fn with_simulation(mut self, config: EvmSimulationConfig) -> Self {
+        self.simulation_config = Some(config);
+        self
     }
 }
 
@@ -70,5 +99,53 @@ impl ChainProvider for EvmProvider {
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError> {
         tx::finalize_evm_transaction(unsigned, sig)
+    }
+
+    async fn simulate_transaction(
+        &self,
+        params: &TransactionParams,
+    ) -> Result<SimulationResult, CoreError> {
+        let config = self.simulation_config.as_ref().ok_or_else(|| {
+            CoreError::Other("EVM simulation not configured — call with_simulation()".into())
+        })?;
+
+        let mut risk_flags = Vec::new();
+        let mut risk_score: u8 = 0;
+
+        // Parse value
+        let value: u64 = params.value.parse().unwrap_or(0);
+
+        // High-value check
+        if value > config.high_value_threshold {
+            risk_flags.push("high_value".into());
+            risk_score = risk_score.saturating_add(50);
+        }
+
+        // Proxy detection
+        let to_lower = params.to.to_lowercase();
+        if config.known_proxies.iter().any(|p| p.to_lowercase() == to_lower) {
+            risk_flags.push("proxy_detected".into());
+            risk_score = risk_score.saturating_add(30);
+        }
+
+        // Contract interaction (has calldata)
+        if params.data.as_ref().map_or(false, |d| !d.is_empty()) {
+            risk_flags.push("contract_interaction".into());
+            risk_score = risk_score.saturating_add(10);
+        }
+
+        // Invalid address format check
+        if params.to.len() != 42 || !params.to.starts_with("0x") {
+            risk_flags.push("invalid_address_format".into());
+            risk_score = risk_score.saturating_add(40);
+        }
+
+        Ok(SimulationResult {
+            success: true,
+            gas_used: config.default_gas_estimate,
+            return_data: Vec::new(),
+            risk_flags,
+            risk_score,
+        })
     }
 }

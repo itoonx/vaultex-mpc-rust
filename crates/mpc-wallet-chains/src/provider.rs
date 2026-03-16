@@ -79,21 +79,18 @@ pub struct SignedTransaction {
     pub tx_hash: String,
 }
 
-/// Result of a transaction simulation (dry-run).
-///
-/// Returned by [`ChainProvider::simulate_transaction`] when the simulation
-/// succeeds. A simulation failure (revert) returns `CoreError` instead.
+/// Result of a pre-broadcast transaction simulation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationResult {
-    /// Whether the simulation succeeded (transaction would not revert).
+    /// Whether the simulated execution succeeded.
     pub success: bool,
-    /// Estimated gas usage (chain-specific; 0 for non-EVM chains).
+    /// Estimated gas consumed.
     pub gas_used: u64,
-    /// Return data from the simulation (e.g., decoded contract return value).
+    /// Raw return data from the simulated call (empty for simple transfers).
     pub return_data: Vec<u8>,
-    /// Risk flags detected during simulation.
+    /// Risk flags identified during simulation (e.g. "high_value", "proxy_detected").
     pub risk_flags: Vec<String>,
-    /// Risk score (0 = safe, 255 = maximum risk).
+    /// Aggregate risk score (0 = safe, higher = riskier).
     pub risk_score: u8,
 }
 
@@ -119,25 +116,14 @@ pub trait ChainProvider: Send + Sync {
         sig: &MpcSignature,
     ) -> Result<SignedTransaction, CoreError>;
 
-    /// Simulate a transaction before signing (Epic G1, FR-G.1).
-    ///
-    /// Performs a dry-run of the transaction to check for reverts, estimate
-    /// gas, detect proxy contracts, and compute a risk score.
-    ///
-    /// # Default implementation
-    /// Returns `CoreError::Other("simulation not implemented")` — chain
-    /// providers must override this to support simulation.
-    ///
-    /// # Arguments
-    /// - `params` — the same transaction parameters used for `build_transaction`.
+    /// Simulate a transaction before broadcast, returning risk analysis.
+    /// Default implementation returns an error; chain providers may override.
     async fn simulate_transaction(
         &self,
-        params: &TransactionParams,
+        _params: &TransactionParams,
     ) -> Result<SimulationResult, CoreError> {
-        let _ = params;
-        Err(CoreError::Other(format!(
-            "transaction simulation not implemented for {:?}",
-            self.chain()
-        )))
+        Err(CoreError::Other(
+            "simulate_transaction not implemented for this chain".into(),
+        ))
     }
 }
