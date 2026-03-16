@@ -34,9 +34,17 @@ pub enum Chain {
     OpBnb,
     Immutable,
     MantaPacific,
-    // Non-EVM
+    // Move chains
+    Aptos,
+    Movement,
+    // UTXO chains
     BitcoinMainnet,
     BitcoinTestnet,
+    Litecoin,
+    Dogecoin,
+    Zcash,
+    // CryptoNote
+    Monero,
     Solana,
     Sui,
 }
@@ -66,8 +74,14 @@ impl std::fmt::Display for Chain {
             Chain::OpBnb => write!(f, "opbnb"),
             Chain::Immutable => write!(f, "immutable"),
             Chain::MantaPacific => write!(f, "manta-pacific"),
+            Chain::Aptos => write!(f, "aptos"),
+            Chain::Movement => write!(f, "movement"),
             Chain::BitcoinMainnet => write!(f, "bitcoin-mainnet"),
             Chain::BitcoinTestnet => write!(f, "bitcoin-testnet"),
+            Chain::Litecoin => write!(f, "litecoin"),
+            Chain::Dogecoin => write!(f, "dogecoin"),
+            Chain::Zcash => write!(f, "zcash"),
+            Chain::Monero => write!(f, "monero"),
             Chain::Solana => write!(f, "solana"),
             Chain::Sui => write!(f, "sui"),
         }
@@ -101,8 +115,14 @@ impl std::str::FromStr for Chain {
             "opbnb" => Ok(Chain::OpBnb),
             "immutable" | "imx" => Ok(Chain::Immutable),
             "manta-pacific" | "manta" => Ok(Chain::MantaPacific),
+            "aptos" | "apt" => Ok(Chain::Aptos),
+            "movement" | "move" => Ok(Chain::Movement),
             "bitcoin" | "bitcoin-mainnet" | "btc" => Ok(Chain::BitcoinMainnet),
             "bitcoin-testnet" => Ok(Chain::BitcoinTestnet),
+            "litecoin" | "ltc" => Ok(Chain::Litecoin),
+            "dogecoin" | "doge" => Ok(Chain::Dogecoin),
+            "zcash" | "zec" => Ok(Chain::Zcash),
+            "monero" | "xmr" => Ok(Chain::Monero),
             "solana" | "sol" => Ok(Chain::Solana),
             "sui" => Ok(Chain::Sui),
             _ => Err(format!("unknown chain: {s}")),

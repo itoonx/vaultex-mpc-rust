@@ -7,12 +7,15 @@ use serde::{Deserialize, Serialize};
 
 use mpc_wallet_core::error::CoreError;
 
+use crate::aptos::AptosProvider;
 use crate::bitcoin::BitcoinProvider;
 use crate::evm::EvmProvider;
+use crate::monero::MoneroProvider;
 use crate::provider::{Chain, ChainProvider, SignedTransaction};
 use crate::rpc::RpcRegistry;
 use crate::solana::SolanaProvider;
 use crate::sui::SuiProvider;
+use crate::utxo::UtxoProvider;
 
 /// Network environment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +109,12 @@ impl ChainRegistry {
                 Box::new(p)
             }
             Chain::BitcoinTestnet => Box::new(BitcoinProvider::testnet()),
+            Chain::Aptos => Box::new(AptosProvider::new()),
+            Chain::Movement => Box::new(AptosProvider::movement()),
+            Chain::Litecoin => Box::new(UtxoProvider::litecoin()),
+            Chain::Dogecoin => Box::new(UtxoProvider::dogecoin()),
+            Chain::Zcash => Box::new(UtxoProvider::zcash()),
+            Chain::Monero => Box::new(MoneroProvider::new()),
             Chain::Solana => Box::new(SolanaProvider::new()),
             Chain::Sui => Box::new(SuiProvider::new()),
         };
@@ -142,9 +151,18 @@ impl ChainRegistry {
             Chain::OpBnb,
             Chain::Immutable,
             Chain::MantaPacific,
-            // Non-EVM
+            // Move chains
+            Chain::Aptos,
+            Chain::Movement,
+            // UTXO chains
             Chain::BitcoinMainnet,
             Chain::BitcoinTestnet,
+            Chain::Litecoin,
+            Chain::Dogecoin,
+            Chain::Zcash,
+            // CryptoNote
+            Chain::Monero,
+            // Other
             Chain::Solana,
             Chain::Sui,
         ]
@@ -207,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_supported_chains_count() {
-        assert_eq!(ChainRegistry::supported_chains().len(), 26);
+        assert_eq!(ChainRegistry::supported_chains().len(), 32);
     }
 
     #[test]
