@@ -29,7 +29,7 @@ use std::sync::RwLock;
 
 use crate::error::CoreError;
 use crate::policy::evaluator::{evaluate, EvalResult};
-pub use crate::policy::schema::{ChainPolicy, Policy, POLICY_SCHEMA_VERSION};
+pub use crate::policy::schema::{ChainPolicy, Policy, SignedPolicy, POLICY_SCHEMA_VERSION};
 
 /// In-memory store for the active signing policy.
 ///
@@ -96,6 +96,12 @@ impl PolicyStore {
     pub fn clear(&self) {
         *self.policy.write().unwrap() = None;
         self.velocity.write().unwrap().clear();
+    }
+
+    /// Load a signed policy bundle after verifying its Ed25519 signature (Epic B2).
+    pub fn load_signed(&self, signed: &SignedPolicy) -> Result<(), CoreError> {
+        let policy = signed.verify()?;
+        self.load(policy.clone())
     }
 
     /// Record a signed transaction for velocity tracking.
@@ -505,5 +511,46 @@ mod tests {
         store.load(policy).unwrap();
         // Velocity counter should be zero now
         assert!(store.check("ethereum", "0xabc", 900).is_ok());
+    }
+
+    #[test]
+    fn test_signed_policy_roundtrip() {
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let sk = SigningKey::from_bytes(&bytes);
+        let policy = Policy::allow_all("signed-test");
+        let signed = SignedPolicy::sign(policy, &sk);
+        assert!(signed.verify().is_ok());
+    }
+
+    #[test]
+    fn test_signed_policy_tampered_rejected() {
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let sk = SigningKey::from_bytes(&bytes);
+        let policy = Policy::allow_all("original");
+        let mut signed = SignedPolicy::sign(policy, &sk);
+        signed.policy.name = "TAMPERED".into();
+        assert!(signed.verify().is_err());
+    }
+
+    #[test]
+    fn test_load_signed_policy() {
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let sk = SigningKey::from_bytes(&bytes);
+        let store = PolicyStore::new();
+        let signed = SignedPolicy::sign(Policy::allow_all("test"), &sk);
+        store.load_signed(&signed).unwrap();
+        assert!(store.check("ethereum", "0xabc", 100).is_ok());
     }
 }
