@@ -177,6 +177,158 @@ impl MpcProtocol for FrostEd25519Protocol {
         })
     }
 
+    async fn refresh(
+        &self,
+        key_share: &KeyShare,
+        signers: &[PartyId],
+        transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        let _ = signers; // participants derived from config
+        let party_id = key_share.party_id;
+        let my_id = party_to_identifier(party_id)?;
+        let config = key_share.config;
+
+        // Deserialize current key package and pubkey package
+        let share_data: FrostEd25519ShareData =
+            serde_json::from_slice(&key_share.share_data)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let old_key_package: frost::keys::KeyPackage =
+            serde_json::from_slice(&share_data.key_package)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let old_pubkey_package: frost::keys::PublicKeyPackage =
+            serde_json::from_slice(&share_data.pubkey_package)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        // === Refresh Round 1: generate zero-secret polynomial and broadcast package ===
+        let (round1_secret, round1_package) = {
+            let rng = rand::thread_rng();
+            frost::keys::refresh::refresh_dkg_part1(
+                my_id,
+                config.total_parties,
+                config.threshold,
+                rng,
+            )
+            .map_err(|e| CoreError::Protocol(format!("FROST refresh DKG part1: {e}")))?
+        };
+
+        let round1_bytes = serde_json::to_vec(&round1_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        // Broadcast round1 package
+        transport
+            .send(ProtocolMessage {
+                from: party_id,
+                to: None,
+                round: 100,
+                payload: round1_bytes,
+            })
+            .await?;
+
+        // Collect round1 packages from all other parties
+        let mut round1_packages: BTreeMap<
+            frost::Identifier,
+            frost::keys::dkg::round1::Package,
+        > = BTreeMap::new();
+        for _ in 0..(config.total_parties - 1) {
+            let msg = transport.recv().await?;
+            let pkg: frost::keys::dkg::round1::Package =
+                serde_json::from_slice(&msg.payload)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            let from_id = party_to_identifier(msg.from)?;
+            round1_packages.insert(from_id, pkg);
+        }
+
+        // === Refresh Round 2: generate round2 packages ===
+        let (round2_secret, round2_messages) = {
+            let (round2_secret, round2_packages) =
+                frost::keys::refresh::refresh_dkg_part2(round1_secret, &round1_packages)
+                    .map_err(|e| CoreError::Protocol(format!("FROST refresh DKG part2: {e}")))?;
+
+            let mut messages = Vec::new();
+            for (target_id, pkg) in &round2_packages {
+                let target_party = (1..=config.total_parties)
+                    .find(|&p| {
+                        frost::Identifier::try_from(p)
+                            .map(|id| id == *target_id)
+                            .unwrap_or(false)
+                    })
+                    .ok_or_else(|| {
+                        CoreError::Protocol("cannot map identifier to party".into())
+                    })?;
+
+                let pkg_bytes = serde_json::to_vec(pkg)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+                messages.push((target_party, pkg_bytes));
+            }
+            (round2_secret, messages)
+        };
+
+        // Send round2 packages to each peer
+        for (target_party, pkg_bytes) in round2_messages {
+            transport
+                .send(ProtocolMessage {
+                    from: party_id,
+                    to: Some(PartyId(target_party)),
+                    round: 101,
+                    payload: pkg_bytes,
+                })
+                .await?;
+        }
+
+        // Collect round2 packages from all other parties
+        let mut round2_received: BTreeMap<
+            frost::Identifier,
+            frost::keys::dkg::round2::Package,
+        > = BTreeMap::new();
+        for _ in 0..(config.total_parties - 1) {
+            let msg = transport.recv().await?;
+            let pkg: frost::keys::dkg::round2::Package =
+                serde_json::from_slice(&msg.payload)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            let from_id = party_to_identifier(msg.from)?;
+            round2_received.insert(from_id, pkg);
+        }
+
+        // === Refresh Round 3: derive refreshed key package ===
+        let (new_key_package, new_pubkey_package) =
+            frost::keys::refresh::refresh_dkg_shares(
+                &round2_secret,
+                &round1_packages,
+                &round2_received,
+                old_pubkey_package,
+                old_key_package,
+            )
+            .map_err(|e| CoreError::Protocol(format!("FROST refresh DKG part3: {e}")))?;
+
+        // Extract the group verifying key (should be unchanged)
+        let verifying_key = new_pubkey_package.verifying_key();
+        let vk_bytes = verifying_key
+            .serialize()
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        // Serialize new packages for storage
+        let key_pkg_bytes = serde_json::to_vec(&new_key_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let pubkey_pkg_bytes = serde_json::to_vec(&new_pubkey_package)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        let new_share_data = FrostEd25519ShareData {
+            key_package: key_pkg_bytes,
+            pubkey_package: pubkey_pkg_bytes,
+        };
+
+        Ok(KeyShare {
+            scheme: CryptoScheme::FrostEd25519,
+            party_id,
+            config,
+            group_public_key: GroupPublicKey::Ed25519(vk_bytes),
+            share_data: zeroize::Zeroizing::new(
+                serde_json::to_vec(&new_share_data)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?,
+            ),
+        })
+    }
+
     async fn sign(
         &self,
         key_share: &KeyShare,
