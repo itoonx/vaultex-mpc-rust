@@ -83,70 +83,59 @@ cargo test --workspace     # 272 tests, ~4 seconds
 
 ### EVM Chains (22)
 
-| Chain | Chain ID | Type | Tx Format | Broadcast RPC |
-|-------|----------|------|-----------|---------------|
-| Ethereum | `1` | L1 | EIP-1559 | `eth_sendRawTransaction` |
-| Polygon | `137` | L1 | EIP-1559 | `eth_sendRawTransaction` |
-| BSC | `56` | L1 | EIP-1559 | `eth_sendRawTransaction` |
-| Arbitrum | `42161` | L2 (Optimistic) | EIP-1559 | `eth_sendRawTransaction` |
-| Optimism | `10` | L2 (OP Stack) | EIP-1559 | `eth_sendRawTransaction` |
-| Base | `8453` | L2 (OP Stack) | EIP-1559 | `eth_sendRawTransaction` |
-| Avalanche | `43114` | L1 (C-Chain) | EIP-1559 | `eth_sendRawTransaction` |
-| Linea | `59144` | L2 (zkEVM) | EIP-1559 | `eth_sendRawTransaction` |
-| zkSync Era | `324` | L2 (ZK Rollup) | EIP-1559 | `eth_sendRawTransaction` |
-| Scroll | `534352` | L2 (zkEVM) | EIP-1559 | `eth_sendRawTransaction` |
-| Mantle | `5000` | L2 (Modular) | EIP-1559 | `eth_sendRawTransaction` |
-| Blast | `81457` | L2 (Yield) | EIP-1559 | `eth_sendRawTransaction` |
-| Zora | `7777777` | L2 (OP Stack) | EIP-1559 | `eth_sendRawTransaction` |
-| Fantom | `250` | L1 (DAG) | EIP-1559 | `eth_sendRawTransaction` |
-| Gnosis | `100` | L1 (xDai) | EIP-1559 | `eth_sendRawTransaction` |
-| Cronos | `25` | L1 | EIP-1559 | `eth_sendRawTransaction` |
-| Celo | `42220` | L1 (Mobile) | EIP-1559 | `eth_sendRawTransaction` |
-| Moonbeam | `1284` | Parachain (EVM) | EIP-1559 | `eth_sendRawTransaction` |
-| Ronin | `2020` | L1 (Gaming) | EIP-1559 | `eth_sendRawTransaction` |
-| opBNB | `204` | L2 (BNB) | EIP-1559 | `eth_sendRawTransaction` |
-| Immutable | `13371` | L2 (zkEVM) | EIP-1559 | `eth_sendRawTransaction` |
-| Manta Pacific | `169` | L2 (Privacy) | EIP-1559 | `eth_sendRawTransaction` |
+| Chain | Chain ID | Type | Dwellir | Alchemy | Infura |
+|-------|----------|------|:-------:|:-------:|:------:|
+| Ethereum | `1` | L1 | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| Polygon | `137` | L1 | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| BSC | `56` | L1 | :white_check_mark: | | |
+| Arbitrum | `42161` | L2 (Optimistic) | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| Optimism | `10` | L2 (OP Stack) | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| Base | `8453` | L2 (OP Stack) | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| Avalanche | `43114` | L1 (C-Chain) | :white_check_mark: | | :white_check_mark: |
+| Linea | `59144` | L2 (zkEVM) | :white_check_mark: | | :white_check_mark: |
+| zkSync Era | `324` | L2 (ZK Rollup) | :white_check_mark: | | |
+| Scroll | `534352` | L2 (zkEVM) | :white_check_mark: | | |
+| Mantle | `5000` | L2 (Modular) | :white_check_mark: | | |
+| Blast | `81457` | L2 (Yield) | :white_check_mark: | | |
+| Zora | `7777777` | L2 (OP Stack) | :white_check_mark: | | |
+| Fantom | `250` | L1 (DAG) | :white_check_mark: | | |
+| Gnosis | `100` | L1 (xDai) | :white_check_mark: | | |
+| Cronos | `25` | L1 | :white_check_mark: | | |
+| Celo | `42220` | L1 (Mobile) | :white_check_mark: | | |
+| Moonbeam | `1284` | Parachain (EVM) | :white_check_mark: | | |
+| Ronin | `2020` | L1 (Gaming) | :white_check_mark: | | |
+| opBNB | `204` | L2 (BNB) | :white_check_mark: | | |
+| Immutable | `13371` | L2 (zkEVM) | :white_check_mark: | | |
+| Manta Pacific | `169` | L2 (Privacy) | :white_check_mark: | | |
 
-> All EVM chains use **GG20 ECDSA (secp256k1)** signing protocol.
+> All EVM chains use **GG20 ECDSA (secp256k1)** signing protocol and **EIP-1559** transaction format.
 
 ### UTXO Chains (5)
 
-| Chain | Address Format | Signing | Broadcast |
-|-------|---------------|---------|-----------|
-| Bitcoin (Mainnet) | Taproot P2TR (`bc1p...`) | FROST Schnorr (BIP-340) | REST `POST /tx` |
-| Bitcoin (Testnet) | Taproot P2TR (`tb1p...`) | FROST Schnorr (BIP-340) | REST `POST /tx` |
-| Litecoin | P2PKH (`L...`) / bech32 (`ltc1...`) | GG20 ECDSA (secp256k1) | REST `POST /tx` |
-| Dogecoin | P2PKH (`D...`) | GG20 ECDSA (secp256k1) | REST `POST /tx` |
-| Zcash | Transparent (`t1...`) | GG20 ECDSA (secp256k1) | REST `POST /tx` |
+| Chain | Address Format | Signing | Dwellir | Blockstream | Mempool |
+|-------|---------------|---------|:-------:|:-----------:|:-------:|
+| Bitcoin (Mainnet) | Taproot P2TR (`bc1p...`) | FROST Schnorr (BIP-340) | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| Bitcoin (Testnet) | Taproot P2TR (`tb1p...`) | FROST Schnorr (BIP-340) | | :white_check_mark: | :white_check_mark: |
+| Litecoin | P2PKH (`L...`) / bech32 (`ltc1...`) | GG20 ECDSA | :white_check_mark: | | |
+| Dogecoin | P2PKH (`D...`) | GG20 ECDSA | :white_check_mark: | | |
+| Zcash | Transparent (`t1...`) | GG20 ECDSA | :white_check_mark: | | |
 
 ### Move Chains (2)
 
-| Chain | Address Format | Signing | Broadcast |
-|-------|---------------|---------|-----------|
-| Aptos | `0x` + 64 hex (SHA3-256) | FROST Ed25519 | REST `POST /v1/transactions` |
-| Movement | `0x` + 64 hex (SHA3-256) | FROST Ed25519 | REST `POST /v1/transactions` |
+| Chain | Address Format | Signing | Dwellir |
+|-------|---------------|---------|:-------:|
+| Aptos | `0x` + 64 hex (SHA3-256) | FROST Ed25519 | :white_check_mark: |
+| Movement | `0x` + 64 hex (SHA3-256) | FROST Ed25519 | :white_check_mark: |
 
 ### Other Chains (3)
 
-| Chain | Address Format | Signing | Broadcast |
-|-------|---------------|---------|-----------|
-| Solana | Base58 (Ed25519) | FROST Ed25519 | `sendTransaction` JSON-RPC |
-| Sui | `0x` + 64 hex (Blake2b-256) | FROST Ed25519 | `sui_executeTransactionBlock` JSON-RPC |
-| Monero | Base58 (spend + view key) | FROST Ed25519 | `/send_raw_transaction` JSON-RPC |
+| Chain | Address Format | Signing | Dwellir |
+|-------|---------------|---------|:-------:|
+| Solana | Base58 (Ed25519) | FROST Ed25519 | :white_check_mark: |
+| Sui | `0x` + 64 hex (Blake2b-256) | FROST Ed25519 | :white_check_mark: |
+| Monero | Base58 (spend + view key) | FROST Ed25519 | :white_check_mark: |
 
-### RPC Providers
-
-| Provider | Protocol | Chains Supported |
-|----------|----------|-----------------|
-| **Dwellir** | JSON-RPC | All 32 chains (single API key) |
-| **Alchemy** | JSON-RPC | ETH, Polygon, Arbitrum, Optimism, Base |
-| **Infura** | JSON-RPC | ETH, Polygon, Arbitrum, Optimism, Base, Avalanche, Linea |
-| **Blockstream** | REST | Bitcoin (Mainnet/Testnet) |
-| **Mempool.space** | REST | Bitcoin (Mainnet/Testnet) |
-| **Custom** | Any | User-defined per-chain endpoints |
-
-> Registry supports **failover** (auto-switch on unhealthy), **health tracking** per endpoint, and **per-chain config** (timeout, retries).
+> RPC Registry supports **failover** (auto-switch on unhealthy), **health tracking** per endpoint, **per-chain config** (timeout, retries), and **custom providers**.
 
 ---
 
