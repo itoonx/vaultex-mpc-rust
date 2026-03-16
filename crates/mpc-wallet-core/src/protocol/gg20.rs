@@ -246,6 +246,15 @@ impl MpcProtocol for Gg20Protocol {
             distributed_sign(key_share, signers, message, transport).await
         }
     }
+
+    async fn refresh(
+        &self,
+        key_share: &KeyShare,
+        signers: &[PartyId],
+        transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        distributed_refresh(key_share, signers, transport).await
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -595,6 +604,123 @@ async fn distributed_sign(
             recovery_id: 0xff,
         })
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DISTRIBUTED key refresh — proactive re-sharing (Epic H1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Proactive key refresh for GG20 distributed ECDSA.
+///
+/// Each participating party generates a random degree-(t-1) polynomial `g_i(x)`
+/// with `g_i(0) = 0`, evaluates it at every other party's x-coordinate, and
+/// exchanges evaluations via transport.  Each party then adds the aggregated
+/// delta to its existing Shamir share:
+///
+/// ```text
+/// delta_j = Σ_i g_i(j)      (sum of all parties' evaluations at j)
+/// s'_j    = s_j + delta_j    (new share)
+/// ```
+///
+/// **Invariant:** The group public key `Q = x·G` is unchanged because
+/// `Σ_i g_i(0) = 0` for all parties' polynomials.
+///
+/// # Protocol rounds
+///
+/// **Round 100** — Each party sends `g_i(j)` to party `j` (unicast).
+/// **Receive** — Each party collects evaluations from all other parties.
+/// **Local** — Each party adds `delta_j` to its Shamir share scalar.
+async fn distributed_refresh(
+    key_share: &KeyShare,
+    signers: &[PartyId],
+    transport: &dyn Transport,
+) -> Result<KeyShare, CoreError> {
+    let my_party = key_share.party_id;
+    let t = key_share.config.threshold;
+
+    // Validate that we are in the signer set.
+    if !signers.contains(&my_party) {
+        return Err(CoreError::Protocol("party not in refresh signer set".into()));
+    }
+
+    // Deserialize our current Shamir share.
+    let share_data_copy = key_share.share_data.clone();
+    let my_share: Gg20ShareData = serde_json::from_slice(&share_data_copy)
+        .map_err(|e| CoreError::Serialization(format!("deserialize share for refresh: {e}")))?;
+
+    let old_y = Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
+        .into_option()
+        .ok_or_else(|| CoreError::Crypto("invalid Shamir share scalar in refresh".into()))?;
+
+    // Generate random polynomial g(x) with g(0) = 0, degree t-1.
+    // Coefficients: [0, c_1, c_2, ..., c_{t-1}]
+    // Note: rng is scoped in a block so it does not live across an await point
+    // (ThreadRng is !Send).
+    let coefficients = {
+        let mut rng = rand::thread_rng();
+        let mut coeffs = Vec::with_capacity(t as usize);
+        coeffs.push(Scalar::ZERO); // g(0) = 0 — preserves the secret
+        for _ in 1..t {
+            coeffs.push(Scalar::random(&mut rng));
+        }
+        coeffs
+    };
+
+    // Evaluate g(j) for each other signer j and send via unicast.
+    for &signer in signers {
+        if signer == my_party {
+            continue;
+        }
+        let x_j = Scalar::from(signer.0 as u64);
+        let eval = poly_eval(&coefficients, &x_j);
+
+        let msg = ProtocolMessage {
+            from: my_party,
+            to: Some(signer),
+            round: 100, // high round number to distinguish refresh from keygen/sign
+            payload: eval.to_repr().to_vec(),
+        };
+        transport.send(msg).await?;
+    }
+
+    // Evaluate g(my_x) for self.
+    let self_x = Scalar::from(my_share.x as u64);
+    let self_eval = poly_eval(&coefficients, &self_x);
+
+    // Receive evaluations from all other signers and sum into delta.
+    let mut delta = self_eval;
+    for &signer in signers {
+        if signer == my_party {
+            continue;
+        }
+        let msg = transport.recv().await?;
+        let eval_bytes: [u8; 32] = msg.payload.as_slice().try_into().map_err(|_| {
+            CoreError::Protocol("invalid refresh evaluation size (expected 32 bytes)".into())
+        })?;
+        let eval = Scalar::from_repr(*k256::FieldBytes::from_slice(&eval_bytes))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid scalar in refresh evaluation".into()))?;
+        delta += eval;
+    }
+
+    // Compute new share: s'_j = s_j + delta_j
+    let new_y = old_y + delta;
+
+    // Build new Gg20ShareData with updated share value, same x-coordinate.
+    let new_share_data = Gg20ShareData {
+        x: my_share.x,
+        y: new_y.to_repr().to_vec(),
+    };
+    let new_share_bytes = serde_json::to_vec(&new_share_data)
+        .map_err(|e| CoreError::Serialization(format!("serialize refreshed share: {e}")))?;
+
+    Ok(KeyShare {
+        scheme: key_share.scheme,
+        party_id: my_party,
+        config: key_share.config,
+        group_public_key: key_share.group_public_key.clone(),
+        share_data: Zeroizing::new(new_share_bytes),
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

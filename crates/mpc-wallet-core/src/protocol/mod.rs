@@ -186,4 +186,24 @@ pub trait MpcProtocol: Send + Sync {
         message: &[u8],
         transport: &dyn Transport,
     ) -> Result<MpcSignature, CoreError>;
+
+    /// Proactive key refresh: generate new shares while preserving the group public key.
+    ///
+    /// Each participating party generates a random zero-constant polynomial,
+    /// exchanges evaluations with other parties, and adds the aggregated delta
+    /// to their existing Shamir share. The group public key remains unchanged
+    /// because all zero-constant polynomials evaluate to 0 at x=0.
+    ///
+    /// The default implementation returns an error indicating that the protocol
+    /// does not support key refresh. Override this in protocols that do.
+    async fn refresh(
+        &self,
+        _key_share: &KeyShare,
+        _signers: &[PartyId],
+        _transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        Err(CoreError::Protocol(
+            "key refresh not supported by this protocol".into(),
+        ))
+    }
 }
