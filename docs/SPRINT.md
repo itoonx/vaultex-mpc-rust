@@ -1616,3 +1616,20 @@ fn _assert_share_data_zeroize_on_drop() {
   - R1 worktree: `/Users/thecoding/git/worktrees/mpc-r1`
   - R2 worktree: `/Users/thecoding/git/worktrees/mpc-r2`
   - R5: no dedicated worktree — use main repo or a fresh worktree `mpc-r5`
+
+---
+
+## Sprint 4 Gate Status Update (2026-03-16 — ALL MERGED)
+
+| Task | Agent | Branch | R6 Verdict | Merged | Resolves |
+|------|-------|--------|------------|--------|----------|
+| T-S4-00 | R0 | `agent/r0-s4-prep` | APPROVED | ✓ | SEC-004 root (`KeyShare.share_data` → `Zeroizing<Vec<u8>>`), SEC-015 (redacted Debug), `CoreError::PolicyRequired` + `SessionError` |
+| T-S4-01 | R1 | `agent/r1-s4-zeroize` | APPROVED | ✓ | SEC-004 protocol side — cleanup Sprint 3 workarounds, compile-time `ZeroizeOnDrop` assertions |
+| T-S4-02 | R4 | `agent/r4-policy` | APPROVED | ✓ | FR-B5 "no policy → no sign" — `PolicyStore`, `Policy` schema v1, allowlist + amount evaluator, 6 tests |
+| T-S4-03 | R4 | `agent/r4-session` | APPROVED | ✓ | FR-D1/D2 — `SessionManager` state machine (Pending→Signing→Completed/Failed), tx_fingerprint idempotency lock (TOCTOU safe), 9 tests |
+| T-S4-04 | R2 | `agent/r2-freeze` | APPROVED | ✓ | FR-H3 — real freeze/unfreeze persistence in `EncryptedFileStore` (frozen marker file, load checks before decrypt), 5 tests |
+
+**Sprint 4 result:** 85 tests pass (was 55). +30 new tests across policy, session, freeze/unfreeze.
+**SEC-004 status:** RESOLVED (root fix applied — `share_data` is now `Zeroizing<Vec<u8>>`).
+**SEC-015 status:** RESOLVED (manual `Debug` impl redacts `share_data` → `"[REDACTED]"`).
+**FR-B5, FR-D1/D2, FR-H3:** all delivered.

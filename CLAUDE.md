@@ -84,11 +84,11 @@ git commit -m "[R{N}] complete: {task summary}"
 
 ---
 
-## Current State (as of Sprint 3 complete)
+## Current State (as of Sprint 4 complete)
 
 ### Tests on `main`
 ```
-55 tests pass  (cargo test --workspace)
+85 tests pass  (cargo test --workspace)
 cargo check    clean
 .github/workflows/ci.yml  ← CI pipeline active
 ```
@@ -97,7 +97,15 @@ cargo check    clean
 - **Sprint 1:** COMPLETE — all 5 tasks merged (T-01, T-02, T-05, T-06, T-07)
 - **Sprint 2:** COMPLETE — all 5 tasks merged (T-S2-00 through T-S2-05)
 - **Sprint 3:** COMPLETE — all 5 tasks merged (T-S3-00 through T-S3-05)
-- **Sprint 4:** PENDING — Policy Engine, Approvals, Session Manager, SEC-004 root fix
+- **Sprint 4:** COMPLETE — all 5 tasks merged (T-S4-00 through T-S4-04)
+- **Sprint 5:** PENDING — Approvals/SoD, Audit Ledger, Transport mTLS/ECDH (SEC-007), Bitcoin SEC-009
+
+### New in Sprint 4
+- `mpc_wallet_core::policy` — Policy Engine with "no policy → no sign" gate (FR-B5)
+- `mpc_wallet_core::session` — Session Manager with tx_fingerprint idempotency lock (FR-D1/D2)
+- Real freeze/unfreeze persistence in `EncryptedFileStore` (FR-H3)
+- SEC-004 ROOT FIX: `KeyShare.share_data` is now `Zeroizing<Vec<u8>>`
+- SEC-015 FIX: `KeyShare::Debug` redacts `share_data` → `"[REDACTED]"`
 
 ### Open CRITICAL Security Findings (block production)
 | ID | Summary | Owner | Sprint |
@@ -115,14 +123,15 @@ cargo check    clean
 ### Open HIGH Findings (block merge)
 | ID | Summary | Owner |
 |----|---------|-------|
-| SEC-004 | `KeyShare.share_data` Vec<u8> not zeroized (copies now zeroized — root fix Sprint 4) | R0 |
-| SEC-007 | ProtocolMessage.from unauthenticated | R2/R0 |
+| SEC-007 | ProtocolMessage.from unauthenticated (requires transport MAC — Epic E2/E3) | R2/R0 |
 
 ### Resolved HIGH Findings
 | ID | Summary | Resolved |
 |----|---------|---------|
+| SEC-004 | `KeyShare.share_data` Vec<u8> not zeroized | Sprint 4 T-S4-00/T-S4-01 — `Zeroizing<Vec<u8>>` root fix |
 | SEC-005 | EncryptedFileStore password not zeroized | Sprint 3 T-S3-02 — Zeroizing<String> |
 | SEC-006 | Argon2 default params too weak | Sprint 3 T-S3-02 — 64MiB/3t/4p |
+| SEC-015 | KeyShare derives Debug — share bytes in logs | Sprint 4 T-S4-00 — manual Debug impl redacts share_data |
 
 Full findings log → `docs/SECURITY_FINDINGS.md`
 
