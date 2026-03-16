@@ -52,6 +52,9 @@ async-nats = "0.38"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# JWT
+jsonwebtoken = "9"
+
 # Utilities
 hex = "0.4"
 bs58 = "0.5"

@@ -116,6 +116,14 @@ pub enum CoreError {
     #[error("evm low-s violation: {0}")]
     EvmLowS(String),
 
+    /// An authentication or authorization failure (e.g. invalid JWT, expired
+    /// token, or insufficient permissions for the requested operation).
+    ///
+    /// Returned by [`crate::identity::JwtValidator`] and [`crate::rbac::Permissions`]
+    /// when a request is rejected (Epic A).
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+
     /// A catch-all error variant for cases not covered by the more specific
     /// variants above. Prefer using a specific variant whenever possible so
     /// that callers can handle errors programmatically.

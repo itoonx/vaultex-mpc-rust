@@ -41,6 +41,16 @@ pub mod session;
 /// Use [`approvals::ApprovalStore`] to register sessions, assign roles,
 /// collect Ed25519-signed approvals, and check quorum before signing (FR-C).
 pub mod approvals;
+/// Role-based and attribute-based access control (Epic A).
+///
+/// Provides [`rbac::ApiRole`] for RBAC, [`rbac::AbacAttributes`] for ABAC,
+/// [`rbac::AuthContext`] combining both, and [`rbac::Permissions`] for authorization gates.
+pub mod rbac;
+/// JWT-based identity validation (Epic A).
+///
+/// Provides [`identity::JwtValidator`] to decode and validate JWTs, extracting
+/// RBAC roles and ABAC attributes into an [`rbac::AuthContext`].
+pub mod identity;
 /// Append-only hash-chained audit ledger with Ed25519 service signatures (FR-F).
 ///
 /// Use [`audit::AuditLedger`] to record every signing event. Call

@@ -35,6 +35,9 @@ async-trait = { workspace = true }
 async-nats = { workspace = true }
 futures = { workspace = true }
 
+# JWT
+jsonwebtoken = { workspace = true }
+
 # Utilities
 hex = { workspace = true }
 uuid = { workspace = true }
