@@ -26,11 +26,12 @@ impl AlchemyProvider {
             (Chain::Ethereum, NetworkEnv::Testnet) => Some("eth-sepolia"),
             (Chain::Polygon, NetworkEnv::Mainnet) => Some("polygon-mainnet"),
             (Chain::Polygon, NetworkEnv::Testnet) => Some("polygon-amoy"),
-            (Chain::Bsc, _) => None, // Alchemy doesn't support BSC
-            (Chain::BitcoinMainnet, _) => None,
-            (Chain::BitcoinTestnet, _) => None,
-            (Chain::Solana, _) => None,
-            (Chain::Sui, _) => None,
+            (Chain::Arbitrum, NetworkEnv::Mainnet) => Some("arb-mainnet"),
+            (Chain::Arbitrum, NetworkEnv::Testnet) => Some("arb-sepolia"),
+            (Chain::Optimism, NetworkEnv::Mainnet) => Some("opt-mainnet"),
+            (Chain::Optimism, NetworkEnv::Testnet) => Some("opt-sepolia"),
+            (Chain::Base, NetworkEnv::Mainnet) => Some("base-mainnet"),
+            (Chain::Base, NetworkEnv::Testnet) => Some("base-sepolia"),
             _ => None,
         }
     }
@@ -42,7 +43,13 @@ impl RpcProvider for AlchemyProvider {
     }
 
     fn supported_chains(&self) -> Vec<Chain> {
-        vec![Chain::Ethereum, Chain::Polygon]
+        vec![
+            Chain::Ethereum,
+            Chain::Polygon,
+            Chain::Arbitrum,
+            Chain::Optimism,
+            Chain::Base,
+        ]
     }
 
     fn https_endpoint(&self, chain: Chain, network: &NetworkEnv) -> Option<String> {

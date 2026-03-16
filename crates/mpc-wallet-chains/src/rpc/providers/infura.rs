@@ -26,11 +26,16 @@ impl InfuraProvider {
             (Chain::Ethereum, NetworkEnv::Testnet) => Some("sepolia"),
             (Chain::Polygon, NetworkEnv::Mainnet) => Some("polygon-mainnet"),
             (Chain::Polygon, NetworkEnv::Testnet) => Some("polygon-amoy"),
-            (Chain::Bsc, _) => None,
-            (Chain::BitcoinMainnet, _) => None,
-            (Chain::BitcoinTestnet, _) => None,
-            (Chain::Solana, _) => None,
-            (Chain::Sui, _) => None,
+            (Chain::Arbitrum, NetworkEnv::Mainnet) => Some("arbitrum-mainnet"),
+            (Chain::Arbitrum, NetworkEnv::Testnet) => Some("arbitrum-sepolia"),
+            (Chain::Optimism, NetworkEnv::Mainnet) => Some("optimism-mainnet"),
+            (Chain::Optimism, NetworkEnv::Testnet) => Some("optimism-sepolia"),
+            (Chain::Base, NetworkEnv::Mainnet) => Some("base-mainnet"),
+            (Chain::Base, NetworkEnv::Testnet) => Some("base-sepolia"),
+            (Chain::Avalanche, NetworkEnv::Mainnet) => Some("avalanche-mainnet"),
+            (Chain::Avalanche, NetworkEnv::Testnet) => Some("avalanche-fuji"),
+            (Chain::Linea, NetworkEnv::Mainnet) => Some("linea-mainnet"),
+            (Chain::Linea, NetworkEnv::Testnet) => Some("linea-sepolia"),
             _ => None,
         }
     }
@@ -42,7 +47,15 @@ impl RpcProvider for InfuraProvider {
     }
 
     fn supported_chains(&self) -> Vec<Chain> {
-        vec![Chain::Ethereum, Chain::Polygon]
+        vec![
+            Chain::Ethereum,
+            Chain::Polygon,
+            Chain::Arbitrum,
+            Chain::Optimism,
+            Chain::Base,
+            Chain::Avalanche,
+            Chain::Linea,
+        ]
     }
 
     fn https_endpoint(&self, chain: Chain, network: &NetworkEnv) -> Option<String> {

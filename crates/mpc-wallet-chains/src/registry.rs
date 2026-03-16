@@ -76,7 +76,28 @@ impl ChainRegistry {
     /// This is the single entry point — no more per-chain match blocks.
     pub fn provider(&self, chain: Chain) -> Result<Box<dyn ChainProvider>, CoreError> {
         let provider: Box<dyn ChainProvider> = match chain {
-            Chain::Ethereum | Chain::Polygon | Chain::Bsc => Box::new(EvmProvider::new(chain)?),
+            Chain::Ethereum
+            | Chain::Polygon
+            | Chain::Bsc
+            | Chain::Arbitrum
+            | Chain::Optimism
+            | Chain::Base
+            | Chain::Avalanche
+            | Chain::Linea
+            | Chain::ZkSync
+            | Chain::Scroll
+            | Chain::Mantle
+            | Chain::Blast
+            | Chain::Zora
+            | Chain::Fantom
+            | Chain::Gnosis
+            | Chain::Cronos
+            | Chain::Celo
+            | Chain::Moonbeam
+            | Chain::Ronin
+            | Chain::OpBnb
+            | Chain::Immutable
+            | Chain::MantaPacific => Box::new(EvmProvider::new(chain)?),
             Chain::BitcoinMainnet => {
                 let p = match self.env {
                     NetworkEnv::Testnet | NetworkEnv::Devnet => BitcoinProvider::testnet(),
@@ -94,9 +115,34 @@ impl ChainRegistry {
     /// List all supported chains.
     pub fn supported_chains() -> Vec<Chain> {
         vec![
+            // EVM L1s
             Chain::Ethereum,
             Chain::Polygon,
             Chain::Bsc,
+            // EVM L2s — P0
+            Chain::Arbitrum,
+            Chain::Optimism,
+            Chain::Base,
+            // EVM L2s — P1
+            Chain::Avalanche,
+            Chain::Linea,
+            Chain::ZkSync,
+            Chain::Scroll,
+            // EVM L2s — P2
+            Chain::Mantle,
+            Chain::Blast,
+            Chain::Zora,
+            Chain::Fantom,
+            Chain::Gnosis,
+            // EVM L2s — P3
+            Chain::Cronos,
+            Chain::Celo,
+            Chain::Moonbeam,
+            Chain::Ronin,
+            Chain::OpBnb,
+            Chain::Immutable,
+            Chain::MantaPacific,
+            // Non-EVM
             Chain::BitcoinMainnet,
             Chain::BitcoinTestnet,
             Chain::Solana,
@@ -142,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_supported_chains_count() {
-        assert_eq!(ChainRegistry::supported_chains().len(), 7);
+        assert_eq!(ChainRegistry::supported_chains().len(), 26);
     }
 
     #[test]
