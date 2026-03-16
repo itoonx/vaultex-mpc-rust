@@ -185,6 +185,12 @@ fn lagrange_interpolate(shares: &[(u16, Scalar)]) -> Scalar {
 pub struct Gg20Protocol;
 
 impl Gg20Protocol {
+    /// Create a new `Gg20Protocol` instance.
+    ///
+    /// The struct is zero-sized; all signing state lives in the [`crate::protocol::KeyShare`]
+    /// passed to [`crate::protocol::MpcProtocol::sign`]. By default the distributed
+    /// (non-reconstructing) signing path is used. The insecure Lagrange-reconstruction
+    /// simulation path requires the `gg20-simulation` feature flag, which is **off by default**.
     pub fn new() -> Self {
         Self
     }

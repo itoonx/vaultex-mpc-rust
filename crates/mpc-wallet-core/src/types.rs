@@ -21,6 +21,13 @@ pub struct ThresholdConfig {
 }
 
 impl ThresholdConfig {
+    /// Create a validated `ThresholdConfig`.
+    ///
+    /// # Errors
+    /// Returns `Err` if any of the following invariants are violated:
+    /// - `threshold` must be ≥ 1 (a zero threshold is meaningless)
+    /// - `threshold` must be ≤ `total_parties` (cannot require more signers than exist)
+    /// - `total_parties` must be ≥ 2 (MPC requires at least two parties)
     pub fn new(threshold: u16, total_parties: u16) -> Result<Self, &'static str> {
         if threshold == 0 {
             return Err("threshold must be at least 1");

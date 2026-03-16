@@ -8,10 +8,19 @@ use crate::types::{CryptoScheme, ThresholdConfig};
 pub struct KeyGroupId(pub String);
 
 impl KeyGroupId {
+    /// Generate a new random `KeyGroupId` backed by a UUID v4.
+    ///
+    /// Each call produces a globally-unique identifier suitable for use as
+    /// a primary key in the key store.
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
 
+    /// Wrap an existing string as a `KeyGroupId`.
+    ///
+    /// Use this when deserializing or reconstructing an ID from an external
+    /// source (e.g. a database record or CLI argument). No validation is
+    /// performed on the string format.
     pub fn from_string(s: String) -> Self {
         Self(s)
     }

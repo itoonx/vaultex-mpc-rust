@@ -1,42 +1,82 @@
 use thiserror::Error;
 
+/// The top-level error type returned by all fallible operations in `mpc-wallet-core`.
+///
+/// Each variant carries a human-readable description of the failure. Callers
+/// should match on the variant to distinguish recoverable from non-recoverable
+/// failures, and forward the inner string to logs or user-facing messages.
 #[derive(Debug, Error)]
 pub enum CoreError {
+    /// The MPC protocol encountered an error during key generation or signing.
+    /// Contains a human-readable description of the failure. Callers should
+    /// treat this as non-recoverable for the current session; a fresh keygen
+    /// or signing round must be initiated.
     #[error("protocol error: {0}")]
     Protocol(String),
 
+    /// A failure occurred in the underlying transport layer (e.g. send timeout,
+    /// channel closed, or deserialization of an incoming message failed).
+    /// The current protocol round cannot continue; the session must be retried.
     #[error("transport error: {0}")]
     Transport(String),
 
+    /// A key store I/O or consistency error (e.g. failed to write an encrypted
+    /// share to disk, or the directory structure is unexpected). The inner string
+    /// includes the OS-level error where available.
     #[error("key store error: {0}")]
     KeyStore(String),
 
+    /// The caller supplied a configuration that violates an invariant (e.g.
+    /// `threshold > total_parties`, or an unsupported parameter combination).
+    /// The operation was rejected before any state was mutated.
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// Encoding or decoding of a protocol message, key share, or transaction
+    /// payload failed. This usually indicates a version mismatch or data
+    /// corruption rather than a programming error.
     #[error("serialization error: {0}")]
     Serialization(String),
 
+    /// A low-level cryptographic operation failed (e.g. signature verification,
+    /// elliptic-curve arithmetic, or hash computation returned an error).
+    /// This is distinct from [`CoreError::Protocol`] which covers higher-level
+    /// MPC round failures.
     #[error("cryptographic error: {0}")]
     Crypto(String),
 
+    /// AES-256-GCM encryption or decryption of a key share failed. Common
+    /// causes: wrong password (authentication tag mismatch), truncated ciphertext,
+    /// or corrupt salt/nonce bytes in the stored file.
     #[error("encryption error: {0}")]
     Encryption(String),
 
+    /// The requested resource (key share, key group, or transaction) could not
+    /// be found in the store. The inner string identifies what was looked up.
     #[error("not found: {0}")]
     NotFound(String),
 
     /// The key group has been frozen and cannot be used for signing.
+    /// Callers must unfreeze the group via [`crate::key_store::KeyStore::unfreeze`]
+    /// before any further signing operations.
     #[error("key group frozen: {0}")]
     KeyFrozen(String),
 
     /// A password is required but was not provided.
+    /// Returned by storage operations that need a key-derivation password when
+    /// none was supplied (e.g. opening an encrypted file store with an empty password).
     #[error("password required: {0}")]
     PasswordRequired(String),
 
+    /// The caller supplied an argument that fails basic validity checks (e.g.
+    /// an address string with an invalid prefix or wrong length). The inner
+    /// string identifies which argument was rejected and why.
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// A catch-all error variant for cases not covered by the more specific
+    /// variants above. Prefer using a specific variant whenever possible so
+    /// that callers can handle errors programmatically.
     #[error("{0}")]
     Other(String),
 }

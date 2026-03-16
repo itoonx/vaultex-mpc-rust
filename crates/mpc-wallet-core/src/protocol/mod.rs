@@ -1,5 +1,8 @@
+/// FROST threshold EdDSA protocol implementation for Ed25519 (Solana, Sui).
 pub mod frost_ed25519;
+/// FROST threshold Schnorr protocol implementation for secp256k1 with Taproot tweaks (Bitcoin).
 pub mod frost_secp256k1;
+/// GG20 threshold ECDSA protocol implementation for secp256k1 (EVM chains).
 pub mod gg20;
 
 use async_trait::async_trait;
@@ -66,17 +69,22 @@ impl GroupPublicKey {
 pub enum MpcSignature {
     /// ECDSA signature (for EVM chains).
     Ecdsa {
+        /// Big-endian `r` scalar of the ECDSA signature.
         r: Vec<u8>,
+        /// Big-endian `s` scalar of the ECDSA signature.
         s: Vec<u8>,
+        /// Recovery ID (0 or 1) needed to recover the public key from the signature.
         recovery_id: u8,
     },
     /// Schnorr signature (BIP-340, for Bitcoin Taproot).
     Schnorr {
+        /// 64-byte BIP-340 Schnorr signature (`r || s`, big-endian).
         #[serde(with = "serde_byte_array_64")]
         signature: [u8; 64],
     },
     /// EdDSA signature (for Solana/Sui).
     EdDsa {
+        /// 64-byte Ed25519 signature in the standard `R || S` encoding.
         #[serde(with = "serde_byte_array_64")]
         signature: [u8; 64],
     },
