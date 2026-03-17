@@ -62,6 +62,9 @@ Vaultex is a **Rust workspace** for building enterprise-grade **threshold multi-
 | **[Changelog](CHANGELOG.md)** | Version history and release notes |
 | **[Chain Roadmap](docs/CHAIN_ROADMAP.md)** | 54-chain expansion plan: EVM L2s, Move, Substrate, TON, Cosmos |
 | **[Standards & References](docs/STANDARDS.md)** | All cryptographic standards, RFCs, EIPs, BIPs implemented |
+| **[API Reference](docs/API_REFERENCE.md)** | REST API endpoints, auth methods, HMAC signing |
+| **[Auth Spec](specs/AUTH_SPEC.md)** | Key-exchange handshake protocol (28 sections) |
+| **[Security Audit](docs/SECURITY_AUDIT_AUTH.md)** | Auth security audit (57 tests, all findings resolved) |
 | **[Security Findings](docs/SECURITY_FINDINGS.md)** | Full audit trail (0 CRITICAL/HIGH open) |
 
 ---
@@ -91,6 +94,82 @@ cargo test --workspace     # 325 tests, ~4 seconds
 | **Enterprise** | RBAC, ABAC, MFA, policy engine, approval workflows, audit ledger |
 | **Simulation** | Pre-sign risk scoring for all chains |
 | **Operations** | Multi-cloud constraints, RPC failover, chaos framework, DR |
+
+---
+
+## Authentication & API Gateway
+
+The API Gateway provides defense-in-depth authentication with three methods:
+
+```
+Client                          Gateway                           MPC Nodes
+┌──────────┐  key exchange  ┌─────────────────┐  sign auth    ┌──────────┐
+│ Ed25519 + │───────────────│ X25519 ECDH     │──────────────│ Verify   │
+│ X25519   │  handshake    │ session key     │  proof       │ gateway  │
+│          │               │                 │              │ signature│
+│ Per-req  │  session JWT  │ Verify HS256    │  SignAuth    │ before   │
+│ JWT sign │───────────────│ with shared key │──────────────│ signing  │
+└──────────┘               └─────────────────┘              └──────────┘
+```
+
+### Three Auth Methods (priority order)
+
+| Method | Header | Use Case |
+|--------|--------|----------|
+| **Session JWT** | `X-Session-Token: <jwt>` | SDK clients — JWT signed with key-exchange derived key (HS256) |
+| **API Key** | `X-API-Key: sk_...` | Service-to-service — HMAC-SHA256 hashed, constant-time verify |
+| **Bearer JWT** | `Authorization: Bearer <jwt>` | User-facing — RS256/ES256/HS256 with RBAC claims |
+
+### Key Exchange Handshake
+
+Mutual authentication with forward secrecy — establishes shared session key:
+
+```bash
+# 1. Client sends ephemeral X25519 pubkey + Ed25519 key ID
+POST /v1/auth/hello
+
+# 2. Server responds with ephemeral key + challenge + Ed25519 signature
+# 3. Client signs transcript hash with Ed25519 static key
+POST /v1/auth/verify    # → returns session_id + session_token
+
+# 4. Client signs per-request JWT with derived session key
+curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9..." /v1/wallets
+```
+
+**Session JWT claims** (signed with `client_write_key` from handshake):
+```json
+{ "sid": "session_id", "ip": "203.0.113.42", "fp": "device_fingerprint",
+  "ua": "SDK/1.0", "rid": "request_id", "iat": 1710768000, "exp": 1710768120 }
+```
+
+### API Key Management
+
+```bash
+# Create key (admin only) — raw key shown ONCE, never stored
+POST /v1/api-keys  →  { "key_id": "vxk_...", "raw_key": "sk_initiator_..." }
+
+# List keys (metadata only, no secrets)
+GET  /v1/api-keys
+
+# Delete key
+DELETE /v1/api-keys/:id
+```
+
+### Security Features
+
+| Feature | Implementation |
+|---------|---------------|
+| **Forward secrecy** | Per-session ephemeral X25519 keys |
+| **Mutual authentication** | Ed25519 transcript signatures (both sides) |
+| **Rate limiting** | 10 req/sec per client_key_id on handshake |
+| **Session store** | 100k cap + background prune (60s) |
+| **Key zeroization** | `Zeroize + ZeroizeOnDrop` on all session keys |
+| **Dynamic revocation** | `POST /v1/auth/revoke-key` (admin, no restart) |
+| **Sign authorization** | MPC nodes independently verify gateway proof before signing |
+| **Audit trail** | Encrypted request context (ChaCha20-Poly1305) + millisecond timeline |
+| **Mainnet safety** | `SERVER_SIGNING_KEY` + `CLIENT_KEYS_FILE` required on mainnet |
+
+> Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Protocol spec: [`specs/AUTH_SPEC.md`](specs/AUTH_SPEC.md)
 
 ---
 
@@ -230,11 +309,13 @@ Run benchmarks: `cargo bench -p mpc-wallet-core --bench mpc_benchmarks`
 ```
 crates/
   mpc-wallet-core/     ← MPC protocols, transport, key store, policy, identity
-  mpc-wallet-chains/   ← Chain adapters: 50 chains (EVM, Bitcoin, Substrate, Move, Cosmos, UTXO, TON, TRON, Starknet, Monero)
+  mpc-wallet-chains/   ← Chain adapters: 50 chains across 8 ecosystems
   mpc-wallet-cli/      ← CLI binary
-scripts/
-  demo.sh              ← Interactive local demo (no external services)
-docs/                  ← Architecture, security, CLI guide, sprint history
+services/
+  api-gateway/         ← REST API server, auth (key exchange + JWT + API keys), RBAC
+specs/                 ← AUTH_SPEC.md, SIGN_AUTHORIZATION_SPEC.md
+retro/                 ← Decision records, lessons learned, security audits
+docs/                  ← Architecture, security, CLI guide, API reference
 ```
 
 ---
@@ -242,7 +323,7 @@ docs/                  ← Architecture, security, CLI guide, sprint history
 ## Metrics
 
 ```
-  Chains:    50          Tests:     325 pass
+  Chains:    50          Tests:     ~450 pass
   Protocols: 6           CI:        fmt + clippy + test + audit
   Sprints:   20          Findings:  0 CRITICAL | 0 HIGH open
 ```
