@@ -22,6 +22,7 @@
 pub mod api_keys;
 pub mod client;
 pub mod handshake;
+pub mod mtls;
 pub mod session;
 pub mod session_jwt;
 pub mod types;

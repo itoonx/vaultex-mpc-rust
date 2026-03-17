@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub revoked_keys_file: Option<String>,
     /// Session TTL in seconds. Default: 3600 (1 hour).
     pub session_ttl: u64,
+    /// mTLS service registry file (JSON array of MtlsServiceEntry).
+    pub mtls_services_file: Option<String>,
 }
 
 /// Configuration for a single scoped API key.
@@ -99,6 +101,7 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3600),
+            mtls_services_file: std::env::var("MTLS_SERVICES_FILE").ok(),
         };
         config.validate();
         config
@@ -202,6 +205,7 @@ impl AppConfig {
             client_keys_file: None,
             revoked_keys_file: None,
             session_ttl: 3600,
+            mtls_services_file: None,
         }
     }
 }

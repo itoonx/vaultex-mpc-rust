@@ -1,6 +1,6 @@
-//! Authentication middleware: session JWT, API key, and external JWT validation.
+//! Authentication middleware: mTLS, session JWT, API key, and external JWT validation.
 //!
-//! Priority order: X-Session-Token (JWT) → X-API-Key → Authorization: Bearer.
+//! Priority order: mTLS → X-Session-Token (JWT) → X-API-Key → Authorization: Bearer.
 //! If a header is PRESENT but invalid, auth fails immediately — no fall-through.
 
 use axum::{
@@ -11,6 +11,7 @@ use axum::{
 
 use mpc_wallet_core::rbac::{AbacAttributes, ApiRole, AuthContext};
 
+use crate::auth::mtls::MtlsIdentity;
 use crate::auth::session_jwt::{extract_session_id, verify_session_jwt_with_key};
 use crate::auth::types::auth_failed;
 use crate::state::AppState;
@@ -37,6 +38,34 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     let headers = request.headers();
+
+    // Path 0: mTLS (service-to-service via client certificate).
+    // TLS terminator sets X-Client-Cert-* headers after verifying the cert.
+    if state.mtls_registry.is_enabled() {
+        if let Some(identity) = MtlsIdentity::from_headers(headers) {
+            match state
+                .mtls_registry
+                .verify(&identity.cn, identity.fingerprint.as_deref())
+            {
+                Some(entry) => {
+                    tracing::debug!(
+                        cn = %entry.cn,
+                        role = %entry.role,
+                        label = %entry.label,
+                        "mTLS auth success"
+                    );
+                    let ctx = entry.auth_context();
+                    request.extensions_mut().insert(ctx);
+                    return next.run(request).await;
+                }
+                None => {
+                    state.metrics.auth_failures.inc();
+                    tracing::warn!(cn = %identity.cn, "mTLS auth failed: unknown service");
+                    return auth_failed().into_response();
+                }
+            }
+        }
+    }
 
     // Path 1: X-Session-Token (JWT signed with handshake-derived key).
     if headers.contains_key("x-session-token") {

@@ -112,9 +112,9 @@ Client                          Gateway                           MPC Nodes
 └──────────┘               └─────────────────┘              └──────────┘
 ```
 
-### Three Auth Methods (priority order)
+### Four Auth Methods (priority order)
 
-The gateway checks headers in this order. If a header is **present** but invalid, auth fails immediately — it does not fall through to the next method.
+The gateway checks in this order: **mTLS → Session JWT → API Key → Bearer JWT**. If a header is **present** but invalid, auth fails immediately — no fall-through to the next method.
 
 #### 1. Session JWT (`X-Session-Token`) — for SDK clients
 
@@ -170,9 +170,52 @@ curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9.eyJzaWQiOi..." \
 
 ---
 
-#### 2. API Key (`X-API-Key`) — for service-to-service
+#### 2. mTLS (Mutual TLS) — for service-to-service (recommended)
 
-**When to use:** Backend services calling the API programmatically. No interactive handshake needed — just include the key in every request. Simpler than session JWT but without forward secrecy.
+**When to use:** Backend services in a trusted infrastructure where you can manage TLS certificates. This is the **best practice** for service-to-service auth — identity is verified at the transport level before any application code runs.
+
+**How it works:**
+
+```
+Service A                   TLS Terminator (nginx/envoy)        Gateway
+┌──────────┐  presents     ┌──────────────────────────┐       ┌─────────┐
+│ client   │──────────────│ 1. Verify cert against CA │──────│ Extract │
+│ cert +   │  TLS handshk │ 2. Extract CN + fingerprint│      │ identity│
+│ key      │              │ 3. Set X-Client-Cert-* hdrs│      │ Map role│
+└──────────┘              └──────────────────────────┘       └─────────┘
+```
+
+**No shared secrets, no tokens in headers.** The TLS terminator handles certificate verification and passes identity to the gateway via headers:
+
+- `X-Client-Cert-Verified: SUCCESS` — cert was verified against the CA
+- `X-Client-Cert-CN: trading-service.internal` — Common Name
+- `X-Client-Cert-Fingerprint: sha256:abcdef...` — certificate fingerprint
+
+The gateway maps CN → service identity + RBAC role via `MTLS_SERVICES_FILE`:
+
+```json
+[
+  {
+    "cn": "trading-service.internal",
+    "fingerprint": "sha256:abcdef1234567890",
+    "role": "initiator",
+    "label": "Trading Service"
+  },
+  {
+    "cn": "monitoring.internal",
+    "role": "viewer",
+    "label": "Monitoring Dashboard"
+  }
+]
+```
+
+**Security:** No secrets to rotate (just certs). Identity at transport level. Certificate pinning via fingerprint. Standard infrastructure (Kubernetes, Istio, Consul all support mTLS).
+
+---
+
+#### 3. API Key (`X-API-Key`) — for simple service integration
+
+**When to use:** Quick integrations, CI/CD pipelines, or environments where managing TLS certificates is impractical. Simpler than mTLS but requires careful secret management.
 
 **How it works:**
 
@@ -220,7 +263,7 @@ DELETE /v1/api-keys/:id   # Delete permanently
 
 ---
 
-#### 3. Bearer JWT (`Authorization: Bearer`) — for user-facing apps
+#### 4. Bearer JWT (`Authorization: Bearer`) — for user-facing apps
 
 **When to use:** Web/mobile apps where users authenticate via an identity provider (Auth0, Okta, Firebase, etc.) that issues JWTs. The gateway validates the JWT signature and extracts user identity + roles.
 
@@ -257,11 +300,13 @@ curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
 
 | Scenario | Recommended Method | Why |
 |----------|--------------------|-----|
-| SDK / native app | **Session JWT** | Best security: forward secrecy, mutual auth, per-request context |
-| Backend microservice | **API Key** | Simple, no handshake needed, HMAC protects mutations |
-| Web app with IdP | **Bearer JWT** | Users authenticate via Auth0/Okta, no key management needed |
-| CI/CD pipeline | **API Key** | Script-friendly, scoped to specific wallets/chains |
+| Backend microservice | **mTLS** | Best practice: no shared secrets, transport-level identity, cert rotation |
+| Kubernetes / service mesh | **mTLS** | Native support in Istio, Linkerd, Consul Connect |
+| SDK / native app | **Session JWT** | Forward secrecy, mutual auth, per-request context binding |
 | Mobile app | **Session JWT** | Device fingerprint in JWT claims for audit trail |
+| CI/CD pipeline | **API Key** | Script-friendly, no cert management needed |
+| Quick integration / PoC | **API Key** | Simplest setup, no handshake or cert infrastructure |
+| Web app with IdP | **Bearer JWT** | Users authenticate via Auth0/Okta, no key management needed |
 | Admin dashboard | **Bearer JWT + MFA** | User identity + MFA step-up for sensitive operations |
 
 ### Security Features

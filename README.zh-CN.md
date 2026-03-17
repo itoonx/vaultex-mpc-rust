@@ -112,9 +112,9 @@ API 网关提供多层纵深防御认证，支持三种认证方式：
 └──────────┘            └─────────────────┘            └──────────┘
 ```
 
-### 三种认证方式（按优先级排列）
+### 四种认证方式（按优先级排列）
 
-网关按此顺序检查请求头。如果请求头**存在**但无效，认证立即失败 — 不会降级到下一种方式。
+网关按此顺序检查：**mTLS → 会话 JWT → API 密钥 → Bearer JWT**。如果请求头**存在**但无效，认证立即失败 — 不会降级到下一种方式。
 
 #### 1. 会话 JWT (`X-Session-Token`) — 适用于 SDK 客户端
 
@@ -170,9 +170,47 @@ curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9.eyJzaWQiOi..." \
 
 ---
 
-#### 2. API 密钥 (`X-API-Key`) — 适用于服务间通信
+#### 2. mTLS (双向 TLS) — 适用于服务间通信（推荐）
 
-**适用场景：** 后端服务以编程方式调用 API。无需交互式握手 — 只需在每个请求中包含密钥。比会话 JWT 简单，但没有前向保密。
+**适用场景：** 可管理 TLS 证书的可信基础设施中的后端服务。这是服务间认证的**最佳实践** — 身份在传输层验证，应用代码运行前即已完成。
+
+**工作原理：**
+
+```
+服务 A                    TLS 终端（nginx/envoy）           网关
+┌──────────┐  提交证书   ┌──────────────────────────┐     ┌─────────┐
+│ 客户端   │────────────│ 1. 验证证书（对比 CA）     │────│ 提取    │
+│ 证书 +   │  TLS 握手  │ 2. 提取 CN + 指纹         │    │ 身份    │
+│ 密钥     │           │ 3. 设置 X-Client-Cert-* 头 │    │ 映射角色│
+└──────────┘           └──────────────────────────┘     └─────────┘
+```
+
+**无共享密钥，请求头中无令牌。** TLS 终端处理证书验证并通过请求头传递身份：
+
+- `X-Client-Cert-Verified: SUCCESS` — 证书已通过 CA 验证
+- `X-Client-Cert-CN: trading-service.internal` — 通用名称
+- `X-Client-Cert-Fingerprint: sha256:abcdef...` — 证书指纹
+
+网关通过 `MTLS_SERVICES_FILE` 将 CN 映射到服务身份 + RBAC 角色：
+
+```json
+[
+  {
+    "cn": "trading-service.internal",
+    "fingerprint": "sha256:abcdef1234567890",
+    "role": "initiator",
+    "label": "交易服务"
+  }
+]
+```
+
+**安全性：** 无需轮换密钥（只需更新证书）。传输层身份验证。支持证书指纹绑定。Kubernetes、Istio、Consul 原生支持。
+
+---
+
+#### 3. API 密钥 (`X-API-Key`) — 适用于简单服务集成
+
+**适用场景：** 快速集成、CI/CD 流水线，或不方便管理 TLS 证书的环境。比 mTLS 简单但需要妥善管理密钥。
 
 **工作原理：**
 
@@ -220,7 +258,7 @@ DELETE /v1/api-keys/:id   # 永久删除
 
 ---
 
-#### 3. Bearer JWT (`Authorization: Bearer`) — 适用于用户端应用
+#### 4. Bearer JWT (`Authorization: Bearer`) — 适用于用户端应用
 
 **适用场景：** Web/移动应用，用户通过身份提供商（Auth0、Okta、Firebase 等）认证后获得 JWT。网关验证 JWT 签名并提取用户身份和角色。
 
@@ -257,11 +295,13 @@ curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
 
 | 场景 | 推荐方式 | 原因 |
 |------|---------|------|
-| SDK / 原生应用 | **会话 JWT** | 最高安全性：前向保密、双向认证、每请求上下文 |
-| 后端微服务 | **API 密钥** | 简单，无需握手，HMAC 保护变更操作 |
-| 使用 IdP 的 Web 应用 | **Bearer JWT** | 用户通过 Auth0/Okta 认证，无需密钥管理 |
-| CI/CD 流水线 | **API 密钥** | 脚本友好，可限定到特定钱包/链 |
+| 后端微服务 | **mTLS** | 最佳实践：无共享密钥，传输层身份验证，证书轮换 |
+| Kubernetes / 服务网格 | **mTLS** | Istio、Linkerd、Consul Connect 原生支持 |
+| SDK / 原生应用 | **会话 JWT** | 前向保密、双向认证、每请求上下文绑定 |
 | 移动应用 | **会话 JWT** | JWT 声明中包含设备指纹用于审计 |
+| CI/CD 流水线 | **API 密钥** | 脚本友好，无需证书管理 |
+| 快速集成 / PoC | **API 密钥** | 最简单的设置，无需握手或证书基础设施 |
+| 使用 IdP 的 Web 应用 | **Bearer JWT** | 用户通过 Auth0/Okta 认证，无需密钥管理 |
 | 管理后台 | **Bearer JWT + MFA** | 用户身份 + 敏感操作需 MFA 二次验证 |
 
 ### 安全特性

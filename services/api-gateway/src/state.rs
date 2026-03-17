@@ -11,6 +11,7 @@ use mpc_wallet_core::identity::JwtValidator;
 use mpc_wallet_core::rbac::ApiRole;
 
 use crate::auth::api_keys::ApiKeyStore;
+use crate::auth::mtls::{MtlsServiceEntry, MtlsServiceRegistry};
 use crate::auth::session::SessionStore;
 use crate::config::AppConfig;
 use crate::middleware::rate_limit::RateLimiter;
@@ -137,6 +138,8 @@ pub struct AppState {
     pub replay_cache: ReplayCache,
     /// Rate limiter for handshake endpoints.
     pub handshake_limiter: RateLimiter,
+    /// mTLS service identity registry (service-to-service auth).
+    pub mtls_registry: Arc<MtlsServiceRegistry>,
     /// Session TTL in seconds.
     pub session_ttl: u64,
     /// Prometheus metrics registry.
@@ -281,6 +284,18 @@ impl AppState {
             HashSet::new()
         };
 
+        // Load mTLS service registry.
+        let mtls_registry = if let Some(ref path) = config.mtls_services_file {
+            let content = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("failed to read MTLS_SERVICES_FILE at {path}: {e}"));
+            let entries: Vec<MtlsServiceEntry> = serde_json::from_str(&content)
+                .unwrap_or_else(|e| panic!("failed to parse MTLS_SERVICES_FILE: {e}"));
+            tracing::info!(count = entries.len(), "mTLS service registry loaded");
+            MtlsServiceRegistry::from_entries(entries)
+        } else {
+            MtlsServiceRegistry::new()
+        };
+
         let metrics = Metrics::new();
         metrics.register();
 
@@ -302,6 +317,7 @@ impl AppState {
             revoked_keys: Arc::new(RwLock::new(revoked_keys)),
             replay_cache: ReplayCache::new(),
             handshake_limiter: RateLimiter::new(10), // 10 req/sec per key
+            mtls_registry: Arc::new(mtls_registry),
             session_ttl: config.session_ttl,
             metrics: Arc::new(metrics),
         }
