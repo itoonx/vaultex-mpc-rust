@@ -68,6 +68,10 @@ pub fn build_router(state: AppState, cors_origins: &[String]) -> Router {
     let auth_routes = Router::new()
         .route("/v1/auth/hello", post(routes::auth::auth_hello))
         .route("/v1/auth/verify", post(routes::auth::auth_verify))
+        .route(
+            "/v1/auth/refresh-session",
+            post(routes::auth::refresh_session),
+        )
         .route("/v1/auth/revoked-keys", get(routes::auth::revoked_keys))
         .with_state(auth_state);
 
