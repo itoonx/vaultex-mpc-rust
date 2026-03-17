@@ -114,46 +114,155 @@ Client                          Gateway                           MPC Nodes
 
 ### Three Auth Methods (priority order)
 
-| Method | Header | Use Case |
-|--------|--------|----------|
-| **Session JWT** | `X-Session-Token: <jwt>` | SDK clients — JWT signed with key-exchange derived key (HS256) |
-| **API Key** | `X-API-Key: sk_...` | Service-to-service — HMAC-SHA256 hashed, constant-time verify |
-| **Bearer JWT** | `Authorization: Bearer <jwt>` | User-facing — RS256/ES256/HS256 with RBAC claims |
+The gateway checks headers in this order. If a header is **present** but invalid, auth fails immediately — it does not fall through to the next method.
 
-### Key Exchange Handshake
+#### 1. Session JWT (`X-Session-Token`) — for SDK clients
 
-Mutual authentication with forward secrecy — establishes shared session key:
+**When to use:** Your app performs a key-exchange handshake at startup, then uses the derived session key to sign every request. This is the most secure method — provides mutual authentication, forward secrecy, and per-request context binding.
+
+**How it works:**
+
+```
+Step 1: Key Exchange (once per session)
+  Client                              Server
+  ──────                              ──────
+  Generate ephemeral X25519 key  ───► Validate, generate server ephemeral key
+  Ed25519 key ID                      Sign transcript with Ed25519
+                                 ◄─── ServerHello (challenge + signature)
+  Sign transcript with Ed25519   ───► Verify client signature
+  ClientAuth                          Derive shared key via ECDH + HKDF
+                                 ◄─── SessionEstablished (session_id)
+  Both sides now have:
+    client_write_key (32 bytes) ← for signing JWTs
+    server_write_key (32 bytes) ← for future encrypted responses
+
+Step 2: Per-Request JWT (every API call)
+  Client builds JWT:
+    { "sid": "session_id",
+      "ip": "203.0.113.42",       ← request context for audit
+      "fp": "device_fingerprint",
+      "ua": "SDK/1.0",
+      "rid": "req_unique_id",
+      "iat": 1710768000,
+      "exp": 1710768120 }         ← short-lived (2 min)
+  Signs with HS256(client_write_key)
+  Sends: X-Session-Token: eyJhbG...
+
+  Server:
+    1. Decode JWT → extract session_id (no signature check yet)
+    2. Look up session → retrieve stored client_write_key
+    3. Verify HS256 signature with that key
+       → Wrong key? 401. Tampered payload? 401. Expired? 401.
+    4. Extract request context for audit trail
+```
 
 ```bash
-# 1. Client sends ephemeral X25519 pubkey + Ed25519 key ID
-POST /v1/auth/hello
+# Handshake
+POST /v1/auth/hello   # → ServerHello
+POST /v1/auth/verify  # → { session_id, session_token }
 
-# 2. Server responds with ephemeral key + challenge + Ed25519 signature
-# 3. Client signs transcript hash with Ed25519 static key
-POST /v1/auth/verify    # → returns session_id + session_token
-
-# 4. Client signs per-request JWT with derived session key
-curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9..." /v1/wallets
+# Authenticated request
+curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9.eyJzaWQiOi..." \
+     https://api.example.com/v1/wallets
 ```
 
-**Session JWT claims** (signed with `client_write_key` from handshake):
-```json
-{ "sid": "session_id", "ip": "203.0.113.42", "fp": "device_fingerprint",
-  "ua": "SDK/1.0", "rid": "request_id", "iat": 1710768000, "exp": 1710768120 }
+**Security:** forward secrecy (ephemeral keys), mutual auth (both sides sign), replay protection (short-lived JWT + nonce), request context binding (IP/device in signed claims).
+
+---
+
+#### 2. API Key (`X-API-Key`) — for service-to-service
+
+**When to use:** Backend services calling the API programmatically. No interactive handshake needed — just include the key in every request. Simpler than session JWT but without forward secrecy.
+
+**How it works:**
+
+```
+Operator provisions key via JSON file or API:
+  { "key": "sk_prod_a1b2c3...", "role": "initiator", "label": "trading-bot" }
+                    ↓
+Server hashes with HMAC-SHA256 at startup → stores hash only, never raw key
+                    ↓
+Client sends:  X-API-Key: sk_prod_a1b2c3...
+Server:  HMAC-SHA256(raw_key) → constant-time compare with stored hash
+  Match? → authenticated with the key's role
+  No match? → 401
 ```
 
-### API Key Management
+For **POST** requests (mutations), API keys also require **HMAC request signing** to prevent replay and tampering:
 
 ```bash
-# Create key (admin only) — raw key shown ONCE, never stored
-POST /v1/api-keys  →  { "key_id": "vxk_...", "raw_key": "sk_initiator_..." }
+# GET requests — key only
+curl -H "X-API-Key: sk_prod_a1b2c3..." /v1/wallets
 
-# List keys (metadata only, no secrets)
-GET  /v1/api-keys
+# POST requests — key + HMAC signature
+TIMESTAMP=$(date +%s)
+BODY='{"label":"My Wallet","scheme":"gg20-ecdsa","threshold":2,"total_parties":3}'
+BODY_HASH=$(echo -n "$BODY" | sha256sum | cut -d' ' -f1)
+SIGNATURE=$(echo -n "${TIMESTAMP}.POST./v1/wallets.${BODY_HASH}" \
+  | openssl dgst -sha256 -hmac "sk_prod_a1b2c3..." -hex | cut -d' ' -f2)
 
-# Delete key
-DELETE /v1/api-keys/:id
+curl -X POST \
+  -H "X-API-Key: sk_prod_a1b2c3..." \
+  -H "X-Signature: v1=${SIGNATURE}" \
+  -H "X-Timestamp: ${TIMESTAMP}" \
+  -H "Content-Type: application/json" \
+  -d "$BODY" /v1/wallets
 ```
+
+**Self-service key management** (admin only):
+```bash
+POST   /v1/api-keys      # Create — raw key shown ONCE
+GET    /v1/api-keys       # List — metadata only, no secrets
+DELETE /v1/api-keys/:id   # Delete permanently
+```
+
+**Roles:** `admin` (full access), `initiator` (sign + create), `approver` (sign + freeze), `viewer` (read-only).
+
+---
+
+#### 3. Bearer JWT (`Authorization: Bearer`) — for user-facing apps
+
+**When to use:** Web/mobile apps where users authenticate via an identity provider (Auth0, Okta, Firebase, etc.) that issues JWTs. The gateway validates the JWT signature and extracts user identity + roles.
+
+**How it works:**
+
+```
+Identity Provider (Auth0, Okta, etc.)
+  ↓ issues JWT with claims:
+  { "sub": "user_123", "roles": ["initiator"], "iss": "mpc-wallet",
+    "aud": "mpc-wallet-api", "exp": 1710771600,
+    "dept": "trading", "risk_tier": "standard", "mfa_verified": true }
+  ↓
+Client sends: Authorization: Bearer eyJhbGciOiJSUzI1NiJ9...
+  ↓
+Server validates:
+  1. Signature (RS256/ES256/HS256) against configured secret/key
+  2. Issuer (iss) matches JWT_ISSUER config
+  3. Audience (aud) matches JWT_AUDIENCE config
+  4. Not expired (exp > now)
+  5. Extract roles → map to RBAC permissions
+  6. Extract ABAC attributes (dept, risk_tier, mfa_verified)
+```
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
+     https://api.example.com/v1/wallets
+```
+
+**No HMAC signing needed** — the JWT itself has integrity guarantees from its signature.
+
+---
+
+#### Which method should I use?
+
+| Scenario | Recommended Method | Why |
+|----------|--------------------|-----|
+| SDK / native app | **Session JWT** | Best security: forward secrecy, mutual auth, per-request context |
+| Backend microservice | **API Key** | Simple, no handshake needed, HMAC protects mutations |
+| Web app with IdP | **Bearer JWT** | Users authenticate via Auth0/Okta, no key management needed |
+| CI/CD pipeline | **API Key** | Script-friendly, scoped to specific wallets/chains |
+| Mobile app | **Session JWT** | Device fingerprint in JWT claims for audit trail |
+| Admin dashboard | **Bearer JWT + MFA** | User identity + MFA step-up for sensitive operations |
 
 ### Security Features
 

@@ -114,40 +114,155 @@ API 网关提供多层纵深防御认证，支持三种认证方式：
 
 ### 三种认证方式（按优先级排列）
 
-| 方式 | Header | 使用场景 |
-|------|--------|---------|
-| **会话 JWT** | `X-Session-Token: <jwt>` | SDK 客户端 — 使用密钥交换派生密钥签名 (HS256) |
-| **API 密钥** | `X-API-Key: sk_...` | 服务间通信 — HMAC-SHA256 哈希，恒定时间验证 |
-| **Bearer JWT** | `Authorization: Bearer <jwt>` | 用户端 — RS256/ES256/HS256，携带 RBAC 声明 |
+网关按此顺序检查请求头。如果请求头**存在**但无效，认证立即失败 — 不会降级到下一种方式。
 
-### 密钥交换握手
+#### 1. 会话 JWT (`X-Session-Token`) — 适用于 SDK 客户端
 
-双向认证 + 前向保密 — 建立共享会话密钥：
+**适用场景：** 应用在启动时执行密钥交换握手，然后使用派生的会话密钥签名每个请求。安全性最高 — 提供双向认证、前向保密和每请求上下文绑定。
 
-```bash
-# 1. 客户端发送临时 X25519 公钥 + Ed25519 密钥 ID
-POST /v1/auth/hello
+**工作原理：**
 
-# 2. 服务端响应临时密钥 + 挑战 + Ed25519 签名
-# 3. 客户端使用 Ed25519 静态密钥签名会话摘要
-POST /v1/auth/verify    # → 返回 session_id + session_token
+```
+步骤 1：密钥交换（每个会话仅一次）
+  客户端                                服务端
+  ──────                                ──────
+  生成临时 X25519 密钥对          ───►   验证，生成服务端临时密钥
+  Ed25519 密钥 ID                       使用 Ed25519 签名会话摘要
+                                 ◄───   ServerHello（挑战 + 签名）
+  使用 Ed25519 签名会话摘要       ───►   验证客户端签名
+  ClientAuth                            通过 ECDH + HKDF 派生共享密钥
+                                 ◄───   SessionEstablished（session_id）
+  双方现在拥有：
+    client_write_key（32字节）← 用于签名 JWT
+    server_write_key（32字节）← 用于未来的加密响应
 
-# 4. 客户端使用派生会话密钥签名每个请求的 JWT
-curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9..." /v1/wallets
+步骤 2：每请求 JWT（每次 API 调用）
+  客户端构建 JWT：
+    { "sid": "session_id",
+      "ip": "203.0.113.42",       ← 请求上下文（用于审计）
+      "fp": "设备指纹",
+      "ua": "SDK/1.0",
+      "rid": "唯一请求ID",
+      "iat": 1710768000,
+      "exp": 1710768120 }         ← 短期有效（2分钟）
+  使用 HS256(client_write_key) 签名
+  发送：X-Session-Token: eyJhbG...
+
+  服务端：
+    1. 解码 JWT → 提取 session_id（此时不验证签名）
+    2. 查找会话 → 获取存储的 client_write_key
+    3. 使用该密钥验证 HS256 签名
+       → 密钥不匹配？401。载荷被篡改？401。已过期？401。
+    4. 提取请求上下文用于审计追踪
 ```
 
-### API 密钥管理
+```bash
+# 握手
+POST /v1/auth/hello   # → ServerHello
+POST /v1/auth/verify  # → { session_id, session_token }
+
+# 认证请求
+curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9.eyJzaWQiOi..." \
+     https://api.example.com/v1/wallets
+```
+
+**安全性：** 前向保密（临时密钥）、双向认证（双方签名）、防重放（短期JWT + 随机数）、请求上下文绑定（IP/设备信息在签名声明中）。
+
+---
+
+#### 2. API 密钥 (`X-API-Key`) — 适用于服务间通信
+
+**适用场景：** 后端服务以编程方式调用 API。无需交互式握手 — 只需在每个请求中包含密钥。比会话 JWT 简单，但没有前向保密。
+
+**工作原理：**
+
+```
+运维人员通过 JSON 文件或 API 配置密钥：
+  { "key": "sk_prod_a1b2c3...", "role": "initiator", "label": "交易机器人" }
+                    ↓
+服务端启动时使用 HMAC-SHA256 哈希 → 仅存储哈希值，永不存储原始密钥
+                    ↓
+客户端发送：X-API-Key: sk_prod_a1b2c3...
+服务端：HMAC-SHA256(原始密钥) → 恒定时间比较已存储的哈希
+  匹配？→ 使用该密钥的角色进行认证
+  不匹配？→ 401
+```
+
+对于 **POST** 请求（变更操作），API 密钥还需要 **HMAC 请求签名**以防止重放和篡改：
 
 ```bash
-# 创建密钥（仅管理员）— 原始密钥只显示一次，永不存储
-POST /v1/api-keys  →  { "key_id": "vxk_...", "raw_key": "sk_initiator_..." }
+# GET 请求 — 仅需密钥
+curl -H "X-API-Key: sk_prod_a1b2c3..." /v1/wallets
 
-# 列出密钥（仅元数据，无密钥明文）
-GET  /v1/api-keys
+# POST 请求 — 密钥 + HMAC 签名
+TIMESTAMP=$(date +%s)
+BODY='{"label":"我的钱包","scheme":"gg20-ecdsa","threshold":2,"total_parties":3}'
+BODY_HASH=$(echo -n "$BODY" | sha256sum | cut -d' ' -f1)
+SIGNATURE=$(echo -n "${TIMESTAMP}.POST./v1/wallets.${BODY_HASH}" \
+  | openssl dgst -sha256 -hmac "sk_prod_a1b2c3..." -hex | cut -d' ' -f2)
 
-# 删除密钥
-DELETE /v1/api-keys/:id
+curl -X POST \
+  -H "X-API-Key: sk_prod_a1b2c3..." \
+  -H "X-Signature: v1=${SIGNATURE}" \
+  -H "X-Timestamp: ${TIMESTAMP}" \
+  -H "Content-Type: application/json" \
+  -d "$BODY" /v1/wallets
 ```
+
+**自助密钥管理**（仅管理员）：
+```bash
+POST   /v1/api-keys      # 创建 — 原始密钥只显示一次
+GET    /v1/api-keys       # 列出 — 仅元数据，无密钥明文
+DELETE /v1/api-keys/:id   # 永久删除
+```
+
+**角色权限：** `admin`（完全访问）、`initiator`（签名+创建）、`approver`（签名+冻结）、`viewer`（只读）。
+
+---
+
+#### 3. Bearer JWT (`Authorization: Bearer`) — 适用于用户端应用
+
+**适用场景：** Web/移动应用，用户通过身份提供商（Auth0、Okta、Firebase 等）认证后获得 JWT。网关验证 JWT 签名并提取用户身份和角色。
+
+**工作原理：**
+
+```
+身份提供商（Auth0、Okta 等）
+  ↓ 颁发包含声明的 JWT：
+  { "sub": "user_123", "roles": ["initiator"], "iss": "mpc-wallet",
+    "aud": "mpc-wallet-api", "exp": 1710771600,
+    "dept": "交易部", "risk_tier": "standard", "mfa_verified": true }
+  ↓
+客户端发送：Authorization: Bearer eyJhbGciOiJSUzI1NiJ9...
+  ↓
+服务端验证：
+  1. 签名（RS256/ES256/HS256）是否与配置的密钥匹配
+  2. 签发者（iss）是否与 JWT_ISSUER 配置匹配
+  3. 受众（aud）是否与 JWT_AUDIENCE 配置匹配
+  4. 是否未过期（exp > 当前时间）
+  5. 提取角色 → 映射到 RBAC 权限
+  6. 提取 ABAC 属性（部门、风险等级、MFA 状态）
+```
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
+     https://api.example.com/v1/wallets
+```
+
+**无需 HMAC 签名** — JWT 本身通过其签名提供完整性保证。
+
+---
+
+#### 如何选择认证方式？
+
+| 场景 | 推荐方式 | 原因 |
+|------|---------|------|
+| SDK / 原生应用 | **会话 JWT** | 最高安全性：前向保密、双向认证、每请求上下文 |
+| 后端微服务 | **API 密钥** | 简单，无需握手，HMAC 保护变更操作 |
+| 使用 IdP 的 Web 应用 | **Bearer JWT** | 用户通过 Auth0/Okta 认证，无需密钥管理 |
+| CI/CD 流水线 | **API 密钥** | 脚本友好，可限定到特定钱包/链 |
+| 移动应用 | **会话 JWT** | JWT 声明中包含设备指纹用于审计 |
+| 管理后台 | **Bearer JWT + MFA** | 用户身份 + 敏感操作需 MFA 二次验证 |
 
 ### 安全特性
 
