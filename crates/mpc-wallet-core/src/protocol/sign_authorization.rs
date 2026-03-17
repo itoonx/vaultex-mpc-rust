@@ -29,6 +29,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::request_context::EncryptedRequestContext;
 use crate::error::CoreError;
 
 /// Maximum age of a sign authorization (seconds).
@@ -57,6 +58,11 @@ pub struct AuthorizationPayload {
     pub timestamp: u64,
     /// Session ID for correlation.
     pub session_id: String,
+    /// Encrypted request context (IP, device, fingerprint) — for audit/tracing.
+    /// Encrypted with ChaCha20-Poly1305 using the session's derived key.
+    /// MPC nodes store this opaque blob for audit without needing to decrypt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_context: Option<EncryptedRequestContext>,
 }
 
 /// Evidence from a single approver.
@@ -227,6 +233,7 @@ mod tests {
             ],
             timestamp: now,
             session_id: "session-xyz".into(),
+            encrypted_context: None,
         }
     }
 
