@@ -142,6 +142,7 @@ impl ServerHandshake {
         &mut self,
         client_auth: &ClientAuth,
         client_hello: &ClientHello,
+        session_ttl: u64,
     ) -> Result<AuthenticatedSession, HandshakeError> {
         if self.state != HandshakeState::HelloSent {
             return Err(HandshakeError::InvalidState);
@@ -221,7 +222,7 @@ impl ServerHandshake {
             client_key_id: client_hello.client_key_id.clone(),
             client_write_key,
             server_write_key,
-            expires_at: now + DEFAULT_SESSION_TTL_SECS,
+            expires_at: now + session_ttl,
             created_at: now,
         })
     }
@@ -310,7 +311,9 @@ mod tests {
         assert_eq!(hs.state(), HandshakeState::HelloSent);
 
         let client_auth = make_client_auth(&client_key, &client_hello, &server_hello);
-        let session = hs.process_client_auth(&client_auth, &client_hello).unwrap();
+        let session = hs
+            .process_client_auth(&client_auth, &client_hello, 3600)
+            .unwrap();
         assert_eq!(hs.state(), HandshakeState::Authenticated);
 
         assert!(!session.session_id.is_empty());
@@ -361,7 +364,7 @@ mod tests {
         let mut bad_auth = make_client_auth(&wrong_key, &hello, &sh);
         bad_auth.client_static_pubkey = hex::encode(client_key.verifying_key().to_bytes());
         assert_eq!(
-            hs.process_client_auth(&bad_auth, &hello).unwrap_err(),
+            hs.process_client_auth(&bad_auth, &hello, 3600).unwrap_err(),
             HandshakeError::InvalidSignature
         );
     }
@@ -379,7 +382,7 @@ mod tests {
         let sh = hs.process_client_hello(&hello).unwrap();
         let auth = make_client_auth(&client_key, &hello, &sh);
         assert_eq!(
-            hs.process_client_auth(&auth, &hello).unwrap_err(),
+            hs.process_client_auth(&auth, &hello, 3600).unwrap_err(),
             HandshakeError::KeyIdMismatch
         );
     }
@@ -408,14 +411,14 @@ mod tests {
         let mut hs1 = ServerHandshake::new(server_key.clone());
         let sh1 = hs1.process_client_hello(&h1).unwrap();
         let a1 = make_client_auth(&client_key, &h1, &sh1);
-        let s1 = hs1.process_client_auth(&a1, &h1).unwrap();
+        let s1 = hs1.process_client_auth(&a1, &h1, 3600).unwrap();
 
         let e2 = X25519Secret::random_from_rng(rand::rngs::OsRng);
         let h2 = make_client_hello(&client_key, &X25519Public::from(&e2));
         let mut hs2 = ServerHandshake::new(server_key);
         let sh2 = hs2.process_client_hello(&h2).unwrap();
         let a2 = make_client_auth(&client_key, &h2, &sh2);
-        let s2 = hs2.process_client_auth(&a2, &h2).unwrap();
+        let s2 = hs2.process_client_auth(&a2, &h2, 3600).unwrap();
 
         assert_ne!(s1.client_write_key, s2.client_write_key);
         assert_ne!(s1.session_id, s2.session_id);

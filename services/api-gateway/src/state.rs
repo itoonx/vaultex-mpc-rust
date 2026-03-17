@@ -137,6 +137,8 @@ pub struct AppState {
     pub replay_cache: ReplayCache,
     /// Rate limiter for handshake endpoints.
     pub handshake_limiter: RateLimiter,
+    /// Session TTL in seconds.
+    pub session_ttl: u64,
     /// Prometheus metrics registry.
     pub metrics: Arc<Metrics>,
 }
@@ -300,6 +302,7 @@ impl AppState {
             revoked_keys: Arc::new(RwLock::new(revoked_keys)),
             replay_cache: ReplayCache::new(),
             handshake_limiter: RateLimiter::new(10), // 10 req/sec per key
+            session_ttl: config.session_ttl,
             metrics: Arc::new(metrics),
         }
     }

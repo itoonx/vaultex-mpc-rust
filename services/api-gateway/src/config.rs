@@ -28,6 +28,8 @@ pub struct AppConfig {
     pub client_keys_file: Option<String>,
     /// Revoked key IDs file (JSON array of hex key_id strings).
     pub revoked_keys_file: Option<String>,
+    /// Session TTL in seconds. Default: 3600 (1 hour).
+    pub session_ttl: u64,
 }
 
 /// Configuration for a single scoped API key.
@@ -77,7 +79,9 @@ impl AppConfig {
             jwt_issuer: std::env::var("JWT_ISSUER").unwrap_or_else(|_| "mpc-wallet".into()),
             jwt_audience: std::env::var("JWT_AUDIENCE").unwrap_or_else(|_| "mpc-wallet-api".into()),
             api_keys,
-            network: std::env::var("NETWORK").unwrap_or_else(|_| "testnet".into()),
+            network: std::env::var("NETWORK")
+                .unwrap_or_else(|_| "testnet".into())
+                .to_lowercase(),
             rate_limit_rps: std::env::var("RATE_LIMIT_RPS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -91,6 +95,10 @@ impl AppConfig {
             server_signing_key: std::env::var("SERVER_SIGNING_KEY").ok(),
             client_keys_file: std::env::var("CLIENT_KEYS_FILE").ok(),
             revoked_keys_file: std::env::var("REVOKED_KEYS_FILE").ok(),
+            session_ttl: std::env::var("SESSION_TTL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
         };
         config.validate();
         config
@@ -135,6 +143,22 @@ impl AppConfig {
             "NETWORK must be one of: mainnet, testnet, devnet (got '{}')",
             self.network
         );
+        assert!(
+            self.session_ttl >= 60,
+            "SESSION_TTL must be at least 60 seconds (got {})",
+            self.session_ttl
+        );
+        // Mainnet safety: require explicit keys, no auto-generation.
+        if self.network == "mainnet" {
+            assert!(
+                self.server_signing_key.is_some(),
+                "SERVER_SIGNING_KEY is required on mainnet (auto-generation disabled)"
+            );
+            assert!(
+                self.client_keys_file.is_some(),
+                "CLIENT_KEYS_FILE is required on mainnet (open enrollment disabled)"
+            );
+        }
     }
 
     /// Create a test configuration (bypasses env var requirements).
@@ -177,6 +201,7 @@ impl AppConfig {
             server_signing_key: None, // auto-generated in AppState for tests
             client_keys_file: None,
             revoked_keys_file: None,
+            session_ttl: 3600,
         }
     }
 }

@@ -52,6 +52,8 @@ uuid = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 
+base64 = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 reqwest = { workspace = true }

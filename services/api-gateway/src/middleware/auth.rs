@@ -1,6 +1,6 @@
-//! Authentication middleware: JWT, API key, and session token validation.
+//! Authentication middleware: session JWT, API key, and external JWT validation.
 //!
-//! Priority order: X-Session-Token → X-API-Key → Authorization: Bearer.
+//! Priority order: X-Session-Token (JWT) → X-API-Key → Authorization: Bearer.
 //! If a header is PRESENT but invalid, auth fails immediately — no fall-through.
 
 use axum::{
@@ -11,8 +11,25 @@ use axum::{
 
 use mpc_wallet_core::rbac::{AbacAttributes, ApiRole, AuthContext};
 
+use crate::auth::session_jwt::{extract_session_id, verify_session_jwt_with_key};
 use crate::auth::types::auth_failed;
 use crate::state::AppState;
+
+/// Build AuthContext from a session's client_key_id.
+fn session_auth_context(state: &AppState, client_key_id: &str) -> AuthContext {
+    let role = state
+        .client_registry
+        .keys
+        .get(client_key_id)
+        .map(|e| e.api_role())
+        .unwrap_or(ApiRole::Viewer);
+    AuthContext::with_attributes(
+        format!("session:{client_key_id}"),
+        vec![role],
+        AbacAttributes::default(),
+        false,
+    )
+}
 
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -21,71 +38,84 @@ pub async fn auth_middleware(
 ) -> Response {
     let headers = request.headers();
 
-    // Path 1: X-Session-Token (key-exchange handshake session).
-    // If the header is PRESENT (even if malformed), we must resolve here — no fall-through.
+    // Path 1: X-Session-Token (JWT signed with handshake-derived key).
     if headers.contains_key("x-session-token") {
-        let session_id = headers
+        let token = headers
             .get("x-session-token")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        if session_id.is_empty() {
+        if token.is_empty() {
             state.metrics.auth_failures.inc();
-            tracing::warn!("session token auth failed: empty or non-UTF8 header");
             return auth_failed().into_response();
         }
 
-        match state.session_store.get(session_id).await {
-            Some(session) => {
-                tracing::debug!(
-                    session_id = %session.session_id,
-                    client_key_id = %session.client_key_id,
-                    "session token auth success"
-                );
-                let role = state
-                    .client_registry
-                    .keys
-                    .get(&session.client_key_id)
-                    .map(|e| e.api_role())
-                    .unwrap_or(ApiRole::Viewer);
-                let ctx = AuthContext::with_attributes(
-                    format!("session:{}", session.client_key_id),
-                    vec![role],
-                    AbacAttributes::default(),
-                    false,
-                );
-                request.extensions_mut().insert(ctx);
-                return next.run(request).await;
+        if token.contains('.') {
+            // JWT path: extract session_id → async lookup → verify sig.
+            let sid = match extract_session_id(token) {
+                Ok(sid) => sid,
+                Err(_) => {
+                    state.metrics.auth_failures.inc();
+                    return auth_failed().into_response();
+                }
+            };
+
+            // Single async lookup — no block_on(), no double fetch.
+            let session = match state.session_store.get(&sid).await {
+                Some(s) => s,
+                None => {
+                    state.metrics.auth_failures.inc();
+                    return auth_failed().into_response();
+                }
+            };
+
+            // Verify HS256 signature with the session's write key.
+            match verify_session_jwt_with_key(token, &session.client_write_key) {
+                Ok(req_ctx) => {
+                    tracing::debug!(
+                        session_id = %session.session_id,
+                        client_key_id = %session.client_key_id,
+                        client_ip = ?req_ctx.client_ip,
+                        device_fp = ?req_ctx.device_fingerprint,
+                        "session JWT auth success"
+                    );
+                    let ctx = session_auth_context(&state, &session.client_key_id);
+                    request.extensions_mut().insert(ctx);
+                    request.extensions_mut().insert(req_ctx);
+                    return next.run(request).await;
+                }
+                Err(e) => {
+                    state.metrics.auth_failures.inc();
+                    tracing::warn!("session JWT verify failed: {e}");
+                    return auth_failed().into_response();
+                }
             }
-            None => {
-                state.metrics.auth_failures.inc();
-                tracing::warn!("session token auth failed: invalid or expired");
-                return auth_failed().into_response();
+        } else {
+            // Legacy opaque session_id (backward compatible).
+            match state.session_store.get(token).await {
+                Some(session) => {
+                    let ctx = session_auth_context(&state, &session.client_key_id);
+                    request.extensions_mut().insert(ctx);
+                    return next.run(request).await;
+                }
+                None => {
+                    state.metrics.auth_failures.inc();
+                    return auth_failed().into_response();
+                }
             }
         }
     }
 
-    // Path 2: X-API-Key (service-to-service or user-created).
+    // Path 2: X-API-Key.
     if let Some(api_key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
         match state.api_key_store.verify(api_key).await {
             Some(meta) => {
-                tracing::debug!(
-                    key_label = %meta.label,
-                    key_id = %meta.key_id,
-                    role = ?meta.role,
-                    origin = ?meta.origin,
-                    "API key auth success"
-                );
                 let ctx = meta.auth_context();
                 request.extensions_mut().insert(ctx);
                 return next.run(request).await;
             }
             None => {
                 state.metrics.auth_failures.inc();
-                tracing::warn!(
-                    key_prefix = &api_key[..api_key.len().min(8)],
-                    "API key auth failed"
-                );
                 return auth_failed().into_response();
             }
         }
@@ -96,13 +126,11 @@ pub async fn auth_middleware(
         if let Some(token) = auth_header.strip_prefix("Bearer ") {
             match state.jwt_validator.validate(token) {
                 Ok(ctx) => {
-                    tracing::debug!(user_id = %ctx.user_id, "JWT auth success");
                     request.extensions_mut().insert(ctx);
                     return next.run(request).await;
                 }
-                Err(e) => {
+                Err(_) => {
                     state.metrics.auth_failures.inc();
-                    tracing::warn!("JWT auth failed: {e}");
                     return auth_failed().into_response();
                 }
             }
