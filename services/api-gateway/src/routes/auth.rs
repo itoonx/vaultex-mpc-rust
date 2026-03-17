@@ -228,6 +228,92 @@ pub async fn auth_verify(
     Ok(Json(ApiResponse::ok(response)))
 }
 
+/// Request body for session refresh.
+#[derive(Debug, serde::Deserialize)]
+pub struct RefreshSessionRequest {
+    /// Current session token.
+    pub session_token: String,
+}
+
+/// Response for session refresh.
+#[derive(Debug, serde::Serialize)]
+pub struct RefreshSessionResponse {
+    /// New session ID (unchanged).
+    pub session_id: String,
+    /// New expiration time (extended).
+    pub expires_at: u64,
+    /// Session token (unchanged).
+    pub session_token: String,
+}
+
+/// `POST /v1/auth/refresh-session` — extend session TTL.
+///
+/// Requires a valid, non-expired session token. Extends the expiration
+/// by another `DEFAULT_SESSION_TTL_SECS` from the current time.
+pub async fn refresh_session(
+    State(state): State<AuthRouteState>,
+    Json(req): Json<RefreshSessionRequest>,
+) -> Result<Json<ApiResponse<RefreshSessionResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Retrieve and validate current session.
+    let session = state
+        .app
+        .session_store
+        .get(&req.session_token)
+        .await
+        .ok_or_else(|| {
+            tracing::warn!("session refresh: invalid or expired session");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiResponse::err("authentication failed")),
+            )
+        })?;
+
+    // Check if client_key_id is revoked.
+    if state.app.is_key_revoked(&session.client_key_id) {
+        state.app.session_store.revoke(&session.session_id).await;
+        tracing::warn!(
+            session_id = %session.session_id,
+            "session refresh: key revoked"
+        );
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::err("authentication failed")),
+        ));
+    }
+
+    // Extend expiration.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let new_expires_at = now + crate::auth::types::DEFAULT_SESSION_TTL_SECS;
+
+    // Create refreshed session (same keys, new expiry).
+    let refreshed = crate::auth::types::AuthenticatedSession {
+        session_id: session.session_id.clone(),
+        client_pubkey: session.client_pubkey,
+        client_key_id: session.client_key_id.clone(),
+        client_write_key: session.client_write_key,
+        server_write_key: session.server_write_key,
+        expires_at: new_expires_at,
+        created_at: session.created_at,
+    };
+
+    state.app.session_store.store(refreshed).await;
+
+    tracing::info!(
+        session_id = %session.session_id,
+        new_expires_at,
+        "session refreshed"
+    );
+
+    Ok(Json(ApiResponse::ok(RefreshSessionResponse {
+        session_id: session.session_id,
+        expires_at: new_expires_at,
+        session_token: req.session_token,
+    })))
+}
+
 /// `GET /v1/auth/revoked-keys` — list revoked key IDs.
 pub async fn revoked_keys(State(state): State<AuthRouteState>) -> Json<ApiResponse<Vec<String>>> {
     let keys: Vec<String> = state.app.revoked_keys.iter().cloned().collect();
