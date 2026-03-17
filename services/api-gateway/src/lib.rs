@@ -35,7 +35,6 @@ pub fn build_router(state: AppState, cors_origins: &[String]) -> Router {
             post(routes::auth::refresh_session),
         )
         .route("/v1/auth/revoked-keys", get(routes::auth::revoked_keys))
-        .route("/v1/auth/revoke-key", post(routes::auth::revoke_key))
         .with_state(auth_state);
 
     // Public routes (no auth required) — health, chains, and auth handshake.
@@ -74,6 +73,8 @@ pub fn build_router(state: AppState, cors_origins: &[String]) -> Router {
             "/v1/chains/{chain}/address/{id}",
             get(routes::chains::derive_address),
         )
+        // Admin operations (behind auth + HMAC).
+        .route("/v1/auth/revoke-key", post(routes::auth::revoke_key))
         // API key management (admin only, behind auth + HMAC).
         .route("/v1/api-keys", post(routes::api_keys::create_api_key))
         .route("/v1/api-keys", get(routes::api_keys::list_api_keys))

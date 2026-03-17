@@ -191,7 +191,7 @@ mod tests {
             .unwrap();
 
         let server_session = server_hs
-            .process_client_auth(&client_auth, &bundle.client_hello)
+            .process_client_auth(&client_auth, &bundle.client_hello, 3600)
             .unwrap();
 
         // Both sides derive the same keys.
@@ -248,7 +248,7 @@ mod tests {
             .unwrap();
 
         assert!(server_hs
-            .process_client_auth(&client_auth, &bundle.client_hello)
+            .process_client_auth(&client_auth, &bundle.client_hello, 3600)
             .is_ok());
     }
 

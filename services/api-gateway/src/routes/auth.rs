@@ -176,7 +176,11 @@ pub async fn auth_verify(
 
     let session = pending
         .handshake
-        .process_client_auth(&req.client_auth, &pending.client_hello)
+        .process_client_auth(
+            &req.client_auth,
+            &pending.client_hello,
+            state.app.session_ttl,
+        )
         .map_err(|e| {
             state.app.metrics.handshake_failures.inc();
             tracing::warn!(error = %e, "handshake ClientAuth failed");
@@ -241,7 +245,7 @@ pub async fn refresh_session(
         return Err(auth_failed());
     }
 
-    let new_expires_at = unix_now() + DEFAULT_SESSION_TTL_SECS;
+    let new_expires_at = unix_now() + state.app.session_ttl;
     let session_id = session.session_id.clone();
     let refreshed = AuthenticatedSession {
         session_id: session.session_id.clone(),
@@ -283,12 +287,33 @@ pub struct RevokeKeyRequest {
 }
 
 /// `POST /v1/auth/revoke-key` — Admin-only dynamic key revocation.
+///
+/// This endpoint is behind auth + HMAC middleware (protected route).
+/// Only admin role can revoke keys.
 pub async fn revoke_key(
-    State(state): State<AuthRouteState>,
+    State(state): State<crate::state::AppState>,
+    axum::Extension(ctx): axum::Extension<mpc_wallet_core::rbac::AuthContext>,
     Json(req): Json<RevokeKeyRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let is_new = state.app.revoke_key(req.key_id.clone()).await;
-    tracing::info!(key_id = %req.key_id, is_new, "key revoked dynamically");
+    // Require admin role.
+    mpc_wallet_core::rbac::Permissions::require_role(
+        &ctx,
+        &[mpc_wallet_core::rbac::ApiRole::Admin],
+    )
+    .map_err(|_| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err("admin role required")),
+        )
+    })?;
+
+    let is_new = state.revoke_key(req.key_id.clone()).await;
+    tracing::info!(
+        key_id = %req.key_id,
+        revoked_by = %ctx.user_id,
+        is_new,
+        "key revoked dynamically"
+    );
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "key_id": req.key_id,
         "revoked": true,

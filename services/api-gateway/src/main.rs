@@ -497,7 +497,9 @@ mod tests {
             client_static_pubkey: cpk,
         };
 
-        let session = hs.process_client_auth(&client_auth, &client_hello).unwrap();
+        let session = hs
+            .process_client_auth(&client_auth, &client_hello, 3600)
+            .unwrap();
         let session_id = session.session_id.clone();
         assert_eq!(session.client_key_id, client_key_id);
 

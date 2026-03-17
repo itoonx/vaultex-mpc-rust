@@ -84,7 +84,7 @@ mod helpers {
             .unwrap();
 
         let session = server_hs
-            .process_client_auth(&client_auth, &bundle.client_hello)
+            .process_client_auth(&client_auth, &bundle.client_hello, 3600)
             .unwrap();
 
         let session_id = session.session_id.clone();
@@ -180,7 +180,7 @@ async fn test_e2e_client_server_key_agreement() {
         .unwrap();
 
     let server_session = server_hs
-        .process_client_auth(&client_auth, &bundle.client_hello)
+        .process_client_auth(&client_auth, &bundle.client_hello, 3600)
         .unwrap();
 
     assert_eq!(derived.client_write_key, server_session.client_write_key);
@@ -327,12 +327,28 @@ async fn test_rate_limit_on_handshake() {
 async fn test_dynamic_key_revocation() {
     let (app, _state) = test_app().await;
 
-    // Revoke a key dynamically.
+    // Revoke a key dynamically — requires admin auth + HMAC.
     let body = serde_json::to_string(&serde_json::json!({
         "key_id": "deadbeef12345678"
     }))
     .unwrap();
-    let req = json_post("/v1/auth/revoke-key", body);
+    let timestamp = unix_now();
+    let sig = mpc_wallet_api::middleware::hmac::compute_signature(
+        "test-admin-key",
+        timestamp,
+        "POST",
+        "/v1/auth/revoke-key",
+        body.as_bytes(),
+    );
+    let req = Request::builder()
+        .uri("/v1/auth/revoke-key")
+        .method("POST")
+        .header("x-api-key", "test-admin-key")
+        .header("x-signature", &sig)
+        .header("x-timestamp", timestamp.to_string())
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
@@ -350,6 +366,34 @@ async fn test_dynamic_key_revocation() {
     assert!(
         keys.iter().any(|k| k.as_str() == Some("deadbeef12345678")),
         "dynamically revoked key should appear in list"
+    );
+
+    // Non-admin should be rejected.
+    let body2 = serde_json::to_string(&serde_json::json!({
+        "key_id": "another_key"
+    }))
+    .unwrap();
+    let sig2 = mpc_wallet_api::middleware::hmac::compute_signature(
+        "test-viewer-key",
+        timestamp,
+        "POST",
+        "/v1/auth/revoke-key",
+        body2.as_bytes(),
+    );
+    let req = Request::builder()
+        .uri("/v1/auth/revoke-key")
+        .method("POST")
+        .header("x-api-key", "test-viewer-key")
+        .header("x-signature", &sig2)
+        .header("x-timestamp", timestamp.to_string())
+        .header("content-type", "application/json")
+        .body(Body::from(body2))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "non-admin must not be able to revoke keys"
     );
 }
 
@@ -879,7 +923,7 @@ async fn test_key_id_spoofing_rejected() {
         client_static_pubkey: pubkey_hex,
     };
 
-    let result = server_hs.process_client_auth(&client_auth, &client_hello);
+    let result = server_hs.process_client_auth(&client_auth, &client_hello, 3600);
     assert!(result.is_err(), "key_id spoofing must be detected");
 }
 
