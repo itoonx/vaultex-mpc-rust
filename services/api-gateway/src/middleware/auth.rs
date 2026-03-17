@@ -11,7 +11,7 @@ use axum::{
 
 use mpc_wallet_core::rbac::{AbacAttributes, ApiRole, AuthContext};
 
-use crate::auth::session_jwt::{verify_session_jwt, ActualRequestMeta};
+use crate::auth::session_jwt::verify_session_jwt;
 use crate::auth::types::auth_failed;
 use crate::state::AppState;
 
@@ -23,7 +23,6 @@ pub async fn auth_middleware(
     let headers = request.headers();
 
     // Path 1: X-Session-Token (JWT signed with handshake-derived key).
-    // Contains session_id + request context (IP, device, fingerprint).
     if headers.contains_key("x-session-token") {
         let token = headers
             .get("x-session-token")
@@ -36,92 +35,46 @@ pub async fn auth_middleware(
             return auth_failed().into_response();
         }
 
-        // Check if token looks like a JWT (has dots) or is a legacy opaque session_id.
+        // JWT path (contains dots) — verify HS256 signature with session key.
         if token.contains('.') {
-            // Extract actual request metadata for cross-verification.
-            let real_ip = headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.split(',').next().unwrap_or("").trim().to_string())
-                .or_else(|| {
-                    headers
-                        .get("x-real-ip")
-                        .and_then(|v| v.to_str().ok())
-                        .map(String::from)
-                });
-            let real_user_agent = headers
-                .get("user-agent")
-                .and_then(|v| v.to_str().ok())
-                .map(String::from);
-            let actual_meta = ActualRequestMeta {
-                real_ip,
-                real_user_agent,
-            };
-
-            // JWT path: verify signature + cross-check context.
             let session_store = state.session_store.clone();
-            let result = verify_session_jwt(
-                token,
-                |sid| {
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async { session_store.get(sid).await.map(|s| s.client_write_key) })
-                },
-                &actual_meta,
-                false, // log mismatch but don't reject (configurable per deployment)
-            );
+            let result = verify_session_jwt(token, |sid| {
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(async { session_store.get(sid).await.map(|s| s.client_write_key) })
+            });
 
             match result {
-                Ok((session_id, req_ctx)) => {
-                    // Warn on context mismatch (possible spoofing).
-                    if req_ctx.context_mismatch {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            claimed_ip = ?req_ctx.client_ip,
-                            actual_ip = ?actual_meta.real_ip,
-                            ip_verified = req_ctx.ip_verified,
-                            claimed_ua = ?req_ctx.user_agent,
-                            actual_ua = ?actual_meta.real_user_agent,
-                            ua_verified = req_ctx.ua_verified,
-                            "session JWT context mismatch — possible spoofing"
+                Ok((session_id, req_ctx)) => match state.session_store.get(&session_id).await {
+                    Some(session) => {
+                        tracing::debug!(
+                            session_id = %session.session_id,
+                            client_key_id = %session.client_key_id,
+                            client_ip = ?req_ctx.client_ip,
+                            device_fp = ?req_ctx.device_fingerprint,
+                            "session JWT auth success"
                         );
+                        let role = state
+                            .client_registry
+                            .keys
+                            .get(&session.client_key_id)
+                            .map(|e| e.api_role())
+                            .unwrap_or(ApiRole::Viewer);
+                        let ctx = AuthContext::with_attributes(
+                            format!("session:{}", session.client_key_id),
+                            vec![role],
+                            AbacAttributes::default(),
+                            false,
+                        );
+                        request.extensions_mut().insert(ctx);
+                        request.extensions_mut().insert(req_ctx);
+                        return next.run(request).await;
                     }
-
-                    // Look up full session for role assignment.
-                    match state.session_store.get(&session_id).await {
-                        Some(session) => {
-                            tracing::debug!(
-                                session_id = %session.session_id,
-                                client_key_id = %session.client_key_id,
-                                client_ip = ?req_ctx.client_ip,
-                                ip_verified = req_ctx.ip_verified,
-                                device_fp = ?req_ctx.device_fingerprint,
-                                "session JWT auth success"
-                            );
-                            let role = state
-                                .client_registry
-                                .keys
-                                .get(&session.client_key_id)
-                                .map(|e| e.api_role())
-                                .unwrap_or(ApiRole::Viewer);
-                            let ctx = AuthContext::with_attributes(
-                                format!("session:{}", session.client_key_id),
-                                vec![role],
-                                AbacAttributes::default(),
-                                false,
-                            );
-                            request.extensions_mut().insert(ctx);
-                            request.extensions_mut().insert(req_ctx);
-                            return next.run(request).await;
-                        }
-                        None => {
-                            state.metrics.auth_failures.inc();
-                            tracing::warn!(
-                                "session JWT: session expired between verify and lookup"
-                            );
-                            return auth_failed().into_response();
-                        }
+                    None => {
+                        state.metrics.auth_failures.inc();
+                        tracing::warn!("session JWT: session expired between verify and lookup");
+                        return auth_failed().into_response();
                     }
-                }
+                },
                 Err(e) => {
                     state.metrics.auth_failures.inc();
                     tracing::warn!("session JWT auth failed: {e}");
