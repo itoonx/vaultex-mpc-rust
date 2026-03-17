@@ -147,5 +147,4 @@ mod tests {
         config.network = "invalid".into();
         config.validate();
     }
-
 }

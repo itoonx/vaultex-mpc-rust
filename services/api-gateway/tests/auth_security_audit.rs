@@ -1504,4 +1504,3 @@ async fn test_same_client_multiple_sessions() {
     assert!(state.session_store.get(&t2).await.is_none());
     assert!(state.session_store.get(&t3).await.is_some());
 }
-
