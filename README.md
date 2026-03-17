@@ -99,26 +99,48 @@ cargo test --workspace     # 325 tests, ~4 seconds
 
 ## Authentication & API Gateway
 
-The API Gateway provides defense-in-depth authentication with three methods:
+Three auth methods — each serves a different purpose at a different layer:
 
 ```
-Client                          Gateway                           MPC Nodes
-┌──────────┐  key exchange  ┌─────────────────┐  sign auth    ┌──────────┐
-│ Ed25519 + │───────────────│ X25519 ECDH     │──────────────│ Verify   │
-│ X25519   │  handshake    │ session key     │  proof       │ gateway  │
-│          │               │                 │              │ signature│
-│ Per-req  │  session JWT  │ Verify HS256    │  SignAuth    │ before   │
-│ JWT sign │───────────────│ with shared key │──────────────│ signing  │
-└──────────┘               └─────────────────┘              └──────────┘
+mTLS          =  Machine → Machine   ("I am a trusted service")
+Session JWT   =  App → Server        ("I completed the key-exchange handshake")
+Bearer JWT    =  Human → System      ("I am a user verified by the IdP")
 ```
+
+```
+Service (mTLS)              SDK Client (Session JWT)         User (Bearer JWT)
+┌──────────┐               ┌──────────┐                    ┌──────────┐
+│ TLS cert │               │ Ed25519 + │                    │ Auth0 /  │
+│ issued   │               │ X25519   │                    │ Okta     │
+│ by CA    │               │ handshake │                    │ issues   │
+└────┬─────┘               └────┬─────┘                    └────┬─────┘
+     │                          │                               │
+     │  X-Client-Cert-CN       │  X-Session-Token: <jwt>      │  Authorization: Bearer <jwt>
+     ▼                          ▼                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                         API Gateway                                   │
+│  Priority: mTLS (0) → Session JWT (1) → Bearer JWT (2) → 401         │
+│                                                                       │
+│  If header is PRESENT but invalid → fail immediately (no fall-through)│
+└──────────────────────────────────────┬───────────────────────────────┘
+                                       │
+                                       ▼
+                              ┌─────────────────┐
+                              │   MPC Nodes      │
+                              │   (verify        │
+                              │   SignAuthorization│
+                              │   before signing) │
+                              └─────────────────┘
+```
+
+All three can be used simultaneously in the same deployment — for example, mTLS between internal services, Session JWT for SDK clients, and Bearer JWT for the admin web UI.
 
 ### Three Auth Methods (priority order)
 
-The gateway checks in this order: **mTLS → Session JWT → Bearer JWT**. If a header is **present** but invalid, auth fails immediately — no fall-through to the next method.
+#### 1. Session JWT (`X-Session-Token`) — App talks to Server
 
-#### 1. Session JWT (`X-Session-Token`) — for SDK clients
-
-**When to use:** Your app performs a key-exchange handshake at startup, then uses the derived session key to sign every request. This is the most secure method — provides mutual authentication, forward secrecy, and per-request context binding.
+**Who uses it:** SDK clients, native apps, mobile apps, desktop wallets.
+**Purpose:** Application-level identity — "this client completed the key-exchange handshake and this request is genuinely from them."
 
 **How it works:**
 
@@ -170,9 +192,10 @@ curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9.eyJzaWQiOi..." \
 
 ---
 
-#### 2. mTLS (Mutual TLS) — for service-to-service (recommended)
+#### 2. mTLS (Mutual TLS) — Machine talks to Machine
 
-**When to use:** Backend services in a trusted infrastructure where you can manage TLS certificates. This is the **best practice** for service-to-service auth — identity is verified at the transport level before any application code runs.
+**Who uses it:** Backend services, microservices, MPC nodes.
+**Purpose:** Infrastructure-level identity — "this machine is a service we trust." No secrets in code or headers — identity comes from TLS certificates issued by your organization's CA. Kubernetes/Istio manage certs automatically.
 
 **How it works:**
 
@@ -213,9 +236,10 @@ The gateway maps CN → service identity + RBAC role via `MTLS_SERVICES_FILE`:
 
 ---
 
-#### 3. Bearer JWT (`Authorization: Bearer`) — for user-facing apps
+#### 3. Bearer JWT (`Authorization: Bearer`) — Human talks to System
 
-**When to use:** Web/mobile apps where users authenticate via an identity provider (Auth0, Okta, Firebase, etc.) that issues JWTs. The gateway validates the JWT signature and extracts user identity + roles.
+**Who uses it:** End users via web apps, admin dashboards.
+**Purpose:** User-level identity — "this person is who they claim to be and has these permissions." JWTs are issued by an Identity Provider (Auth0, Okta, Firebase) — the gateway doesn't manage passwords.
 
 **How it works:**
 
@@ -245,6 +269,36 @@ curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
 **No HMAC signing needed** — the JWT itself has integrity guarantees from its signature.
 
 ---
+
+#### Real-World Deployment Example
+
+A typical enterprise deployment uses all three methods simultaneously:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Production Environment                        │
+│                                                                  │
+│  ┌──────────────┐  mTLS    ┌──────────┐  mTLS   ┌────────────┐ │
+│  │ Trading      │─────────│          │────────│ MPC Node 1  │ │
+│  │ Service      │  cert    │   API    │  cert   │ (party 1)  │ │
+│  └──────────────┘         │ Gateway  │        ├────────────┤ │
+│                            │          │        │ MPC Node 2  │ │
+│  ┌──────────────┐ Session │          │        │ (party 2)  │ │
+│  │ Mobile App   │──JWT───│          │        ├────────────┤ │
+│  │ (Vaultex SDK)│ (HS256) │          │        │ MPC Node 3  │ │
+│  └──────────────┘         │          │        │ (party 3)  │ │
+│                            │          │        └────────────┘ │
+│  ┌──────────────┐ Bearer  │          │                        │
+│  │ Admin Web UI │──JWT───│          │                        │
+│  │ (Auth0 SSO)  │ (RS256) │          │                        │
+│  └──────────────┘         └──────────┘                        │
+│                                                                  │
+│  Each layer has its own purpose:                                 │
+│  • mTLS: "Is this a trusted service?"                           │
+│  • Session JWT: "Did this client pass the handshake?"           │
+│  • Bearer JWT: "Which user is this and what can they do?"       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 #### Which method should I use?
 
