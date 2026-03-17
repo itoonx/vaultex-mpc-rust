@@ -79,7 +79,9 @@ impl AppConfig {
             jwt_issuer: std::env::var("JWT_ISSUER").unwrap_or_else(|_| "mpc-wallet".into()),
             jwt_audience: std::env::var("JWT_AUDIENCE").unwrap_or_else(|_| "mpc-wallet-api".into()),
             api_keys,
-            network: std::env::var("NETWORK").unwrap_or_else(|_| "testnet".into()),
+            network: std::env::var("NETWORK")
+                .unwrap_or_else(|_| "testnet".into())
+                .to_lowercase(),
             rate_limit_rps: std::env::var("RATE_LIMIT_RPS")
                 .ok()
                 .and_then(|v| v.parse().ok())

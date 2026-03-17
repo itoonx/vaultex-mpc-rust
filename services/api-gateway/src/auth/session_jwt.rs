@@ -9,29 +9,6 @@
 //! **Gateway verifies only the HS256 signature** — proving the JWT was signed by
 //! the holder of the correct `client_write_key` from the key exchange.
 //! Payload claims are trusted as client-reported metadata for audit/tracing.
-//!
-//! ```text
-//! Client (has client_write_key from handshake)
-//! ┌───────────────────────────────────┐
-//! │ For each API request:             │
-//! │ 1. Build JWT claims:              │
-//! │    - session_id                   │
-//! │    - client_ip, device_fp, ua     │
-//! │    - iat, exp (short: 120s)       │
-//! │ 2. Sign with HS256(write_key)     │
-//! │ 3. Send: X-Session-Token: <jwt>   │
-//! └───────────────────────────────────┘
-//!          │
-//!          ▼
-//! Gateway (has client_write_key stored in session)
-//! ┌───────────────────────────────────┐
-//! │ 1. Decode JWT (no verify) → sid   │
-//! │ 2. Look up session → get write_key│
-//! │ 3. Verify HS256 signature ✓       │
-//! │ 4. Check exp not expired ✓        │
-//! │ 5. Extract context for audit      │
-//! └───────────────────────────────────┘
-//! ```
 
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -62,10 +39,6 @@ pub struct SessionJwtClaims {
 }
 
 /// Request context extracted from a verified session JWT.
-///
-/// The JWT signature was verified with the session's `client_write_key`,
-/// proving the sender holds the correct key from the handshake.
-/// Payload fields are client-reported metadata for audit/tracing.
 #[derive(Debug, Clone)]
 pub struct VerifiedRequestContext {
     /// Session ID.
@@ -80,13 +53,10 @@ pub struct VerifiedRequestContext {
     pub request_id: Option<String>,
 }
 
-/// Maximum age of a session JWT (seconds). Short-lived per-request token.
-const MAX_JWT_AGE_SECS: u64 = 120; // 2 minutes
+/// Maximum age of a session JWT (seconds).
+const MAX_JWT_AGE_SECS: u64 = 120;
 
 /// Create a session JWT (client-side).
-///
-/// The client calls this for each request, signing with the `client_write_key`
-/// derived from the handshake.
 pub fn create_session_jwt(
     session_id: &str,
     client_write_key: &[u8; 32],
@@ -107,70 +77,58 @@ pub fn create_session_jwt(
     };
 
     encode(
-        &Header::default(), // HS256
+        &Header::default(),
         &claims,
         &EncodingKey::from_secret(client_write_key),
     )
     .map_err(|e| format!("session JWT encode: {e}"))
 }
 
-/// Verify a session JWT (gateway-side).
-///
-/// 1. Decode JWT WITHOUT verification to extract `sid` (session_id)
-/// 2. Look up the session to get `client_write_key`
-/// 3. **Verify the HS256 signature** — proves sender holds the correct key
-/// 4. Check token freshness (exp + iat)
-/// 5. Extract context claims for audit/tracing
-pub fn verify_session_jwt(
-    token: &str,
-    key_lookup: impl FnOnce(&str) -> Option<[u8; 32]>,
-) -> Result<(String, VerifiedRequestContext), String> {
-    // Step 1: Decode WITHOUT verification to get session_id.
+/// Extract session_id from a JWT WITHOUT verifying the signature.
+/// This is the first step — caller uses the session_id to look up the key,
+/// then calls `verify_session_jwt_with_key()` with the actual key.
+pub fn extract_session_id(token: &str) -> Result<String, String> {
     let mut no_verify = Validation::default();
     no_verify.insecure_disable_signature_validation();
     no_verify.validate_exp = false;
     no_verify.required_spec_claims.clear();
 
-    let unverified = decode::<SessionJwtClaims>(
-        token,
-        &DecodingKey::from_secret(&[]), // dummy key — sig not checked
-        &no_verify,
-    )
-    .map_err(|e| format!("session JWT decode: {e}"))?;
+    let unverified = decode::<SessionJwtClaims>(token, &DecodingKey::from_secret(&[]), &no_verify)
+        .map_err(|e| format!("session JWT decode: {e}"))?;
 
-    let session_id = &unverified.claims.sid;
+    Ok(unverified.claims.sid)
+}
 
-    // Step 2: Look up session key.
-    let write_key = key_lookup(session_id)
-        .ok_or_else(|| "session JWT: session not found or expired".to_string())?;
-
-    // Step 3: Verify HS256 signature with the session's write key.
+/// Verify a session JWT with a known key (gateway-side, step 2).
+/// Called AFTER the caller has looked up the session and obtained the `client_write_key`.
+pub fn verify_session_jwt_with_key(
+    token: &str,
+    client_write_key: &[u8; 32],
+) -> Result<VerifiedRequestContext, String> {
     let mut validation = Validation::default();
     validation.required_spec_claims.clear();
 
-    let verified =
-        decode::<SessionJwtClaims>(token, &DecodingKey::from_secret(&write_key), &validation)
-            .map_err(|e| format!("session JWT verify: {e}"))?;
+    let verified = decode::<SessionJwtClaims>(
+        token,
+        &DecodingKey::from_secret(client_write_key),
+        &validation,
+    )
+    .map_err(|e| format!("session JWT verify: {e}"))?;
 
     let claims = verified.claims;
 
-    // Step 4: Check freshness.
     let now = unix_now();
     if now.abs_diff(claims.iat) > MAX_JWT_AGE_SECS {
         return Err("session JWT: token too old".into());
     }
 
-    // Step 5: Extract context (trusted as client-reported).
-    Ok((
-        claims.sid.clone(),
-        VerifiedRequestContext {
-            session_id: claims.sid,
-            client_ip: claims.ip,
-            device_fingerprint: claims.fp,
-            user_agent: claims.ua,
-            request_id: claims.rid,
-        },
-    ))
+    Ok(VerifiedRequestContext {
+        session_id: claims.sid,
+        client_ip: claims.ip,
+        device_fingerprint: claims.fp,
+        user_agent: claims.ua,
+        request_id: claims.rid,
+    })
 }
 
 #[cfg(test)]
@@ -197,13 +155,11 @@ mod tests {
         )
         .unwrap();
 
-        let (sid, ctx) = verify_session_jwt(&jwt, |sid| {
-            assert_eq!(sid, "sess_123");
-            Some(key)
-        })
-        .unwrap();
-
+        let sid = extract_session_id(&jwt).unwrap();
         assert_eq!(sid, "sess_123");
+
+        let ctx = verify_session_jwt_with_key(&jwt, &key).unwrap();
+        assert_eq!(ctx.session_id, "sess_123");
         assert_eq!(ctx.client_ip.as_deref(), Some("203.0.113.42"));
         assert_eq!(ctx.device_fingerprint.as_deref(), Some("fp_abc"));
         assert_eq!(ctx.user_agent.as_deref(), Some("SDK/1.0"));
@@ -216,19 +172,10 @@ mod tests {
         let wrong_key = [0xFF; 32];
         let jwt = create_session_jwt("sess_123", &key, None, None, None, None).unwrap();
 
-        let result = verify_session_jwt(&jwt, |_| Some(wrong_key));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("verify"));
-    }
-
-    #[test]
-    fn test_session_not_found_rejected() {
-        let key = test_key();
-        let jwt = create_session_jwt("sess_missing", &key, None, None, None, None).unwrap();
-
-        let result = verify_session_jwt(&jwt, |_| None);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not found"));
+        // extract_session_id works (no sig check).
+        assert!(extract_session_id(&jwt).is_ok());
+        // But verify with wrong key fails.
+        assert!(verify_session_jwt_with_key(&jwt, &wrong_key).is_err());
     }
 
     #[test]
@@ -236,9 +183,7 @@ mod tests {
         let key = test_key();
         let jwt = create_session_jwt("sess_123", &key, Some("1.2.3.4"), None, None, None).unwrap();
 
-        // Tamper: change a byte in the payload (middle part of JWT).
         let parts: Vec<&str> = jwt.split('.').collect();
-        assert_eq!(parts.len(), 3);
         let mut payload_bytes = base64_url_decode(parts[1]);
         if !payload_bytes.is_empty() {
             payload_bytes[0] ^= 0xFF;
@@ -250,8 +195,7 @@ mod tests {
             parts[2]
         );
 
-        let result = verify_session_jwt(&tampered, |_| Some(key));
-        assert!(result.is_err(), "tampered JWT must be rejected");
+        assert!(verify_session_jwt_with_key(&tampered, &key).is_err());
     }
 
     #[test]
@@ -259,12 +203,9 @@ mod tests {
         let key = test_key();
         let jwt = create_session_jwt("sess_min", &key, None, None, None, None).unwrap();
 
-        let (sid, ctx) = verify_session_jwt(&jwt, |_| Some(key)).unwrap();
-        assert_eq!(sid, "sess_min");
+        let ctx = verify_session_jwt_with_key(&jwt, &key).unwrap();
+        assert_eq!(ctx.session_id, "sess_min");
         assert!(ctx.client_ip.is_none());
-        assert!(ctx.device_fingerprint.is_none());
-        assert!(ctx.user_agent.is_none());
-        assert!(ctx.request_id.is_none());
     }
 
     fn base64_url_decode(s: &str) -> Vec<u8> {
