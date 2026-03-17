@@ -29,6 +29,7 @@ docs/
   DECISIONS.md        ← DEC-001..N decision log
 specs/
   AUTH_SPEC.md        ← Key-exchange auth protocol spec (28 sections)
+  SIGN_AUTHORIZATION_SPEC.md ← MPC node independent verification spec
 retro/
   RETRO.md            ← Retrospective index (decisions, lessons, security)
   decisions/          ← DEC-001..010 architectural decision records
@@ -136,6 +137,24 @@ All HIGH/MEDIUM findings resolved: rate limiting wired, session store capped + p
 Remaining LOW/INFO: HMAC 30s replay window (accepted), all-zeros X25519 key (accepted), hardcoded session TTL, 422 vs 401 on downgrade.
 
 Full spec: `specs/AUTH_SPEC.md` (28 sections, 1,067 lines)
+
+### Sign Authorization (MPC node independent verification)
+
+**Problem:** Gateway is a single point of trust. If compromised, attacker can sign any transaction.
+**Solution:** `SignAuthorization` — Ed25519-signed proof that gateway produces after auth + policy + approvals.
+Each MPC node **independently verifies** before participating in signing (DEC-012).
+
+```
+Gateway (creates proof)    →    MPC Node (verifies before sign)
+  - requester_id                  ✓ gateway signature valid
+  - message_hash (binding)        ✓ message hash matches
+  - policy_passed                 ✓ policy check passed
+  - approval_count/required       ✓ approval quorum met
+  - timestamp (2-min TTL)         ✓ not expired
+```
+
+**File:** `crates/mpc-wallet-core/src/protocol/sign_authorization.rs` (9 tests)
+**Spec:** `specs/SIGN_AUTHORIZATION_SPEC.md`
 
 ### Tests on `main`
 ```
@@ -267,6 +286,7 @@ Full findings log → `docs/SECURITY_FINDINGS.md`
 | DEC-009 | Work on `dev` branch; PR to `main` only after CI green |
 | DEC-010 | Split api-gateway into lib.rs + main.rs for integration test access |
 | DEC-011 | Session keys use `Zeroize + ZeroizeOnDrop`; revoked_keys behind `RwLock` for dynamic revocation |
+| DEC-012 | Sign Authorization: MPC nodes independently verify gateway proof before signing |
 
 Full decision log → `docs/DECISIONS.md` and `retro/decisions/`
 

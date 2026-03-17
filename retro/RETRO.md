@@ -32,6 +32,7 @@ retro/
 | [DEC-009](decisions/DEC-009_dev-branch.md) | 2026-03-15 | Work on dev branch, PR to main | Decided: enforced |
 | [DEC-010](decisions/DEC-010_auth-lib-split.md) | 2026-03-17 | Split api-gateway into lib+bin | Decided: for integration tests |
 | [DEC-011](decisions/DEC-011_auth-hardening.md) | 2026-03-17 | Auth production hardening architecture | Decided: rate limit + session cap + dynamic revoke + zeroize |
+| [DEC-012](decisions/DEC-012_sign-authorization.md) | 2026-03-17 | MPC node independent verification | Decided: SignAuthorization proof before every sign |
 
 ---
 
