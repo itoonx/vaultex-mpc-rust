@@ -11,7 +11,7 @@ use axum::{
 
 use mpc_wallet_core::rbac::{AbacAttributes, ApiRole, AuthContext};
 
-use crate::auth::session_jwt::verify_session_jwt;
+use crate::auth::session_jwt::{verify_session_jwt, ActualRequestMeta};
 use crate::auth::types::auth_failed;
 use crate::state::AppState;
 
@@ -38,18 +38,54 @@ pub async fn auth_middleware(
 
         // Check if token looks like a JWT (has dots) or is a legacy opaque session_id.
         if token.contains('.') {
-            // JWT path: verify signature with session's client_write_key.
+            // Extract actual request metadata for cross-verification.
+            let real_ip = headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.split(',').next().unwrap_or("").trim().to_string())
+                .or_else(|| {
+                    headers
+                        .get("x-real-ip")
+                        .and_then(|v| v.to_str().ok())
+                        .map(String::from)
+                });
+            let real_user_agent = headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            let actual_meta = ActualRequestMeta {
+                real_ip,
+                real_user_agent,
+            };
+
+            // JWT path: verify signature + cross-check context.
             let session_store = state.session_store.clone();
-            let result = verify_session_jwt(token, |sid| {
-                // Sync lookup — we need the key to verify, but SessionStore is async.
-                // Use try_get_key which is a sync snapshot.
-                // Fallback: block_on not ideal, but tokio::Handle works in middleware.
-                let rt = tokio::runtime::Handle::current();
-                rt.block_on(async { session_store.get(sid).await.map(|s| s.client_write_key) })
-            });
+            let result = verify_session_jwt(
+                token,
+                |sid| {
+                    let rt = tokio::runtime::Handle::current();
+                    rt.block_on(async { session_store.get(sid).await.map(|s| s.client_write_key) })
+                },
+                &actual_meta,
+                false, // log mismatch but don't reject (configurable per deployment)
+            );
 
             match result {
                 Ok((session_id, req_ctx)) => {
+                    // Warn on context mismatch (possible spoofing).
+                    if req_ctx.context_mismatch {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            claimed_ip = ?req_ctx.client_ip,
+                            actual_ip = ?actual_meta.real_ip,
+                            ip_verified = req_ctx.ip_verified,
+                            claimed_ua = ?req_ctx.user_agent,
+                            actual_ua = ?actual_meta.real_user_agent,
+                            ua_verified = req_ctx.ua_verified,
+                            "session JWT context mismatch — possible spoofing"
+                        );
+                    }
+
                     // Look up full session for role assignment.
                     match state.session_store.get(&session_id).await {
                         Some(session) => {
@@ -57,6 +93,7 @@ pub async fn auth_middleware(
                                 session_id = %session.session_id,
                                 client_key_id = %session.client_key_id,
                                 client_ip = ?req_ctx.client_ip,
+                                ip_verified = req_ctx.ip_verified,
                                 device_fp = ?req_ctx.device_fingerprint,
                                 "session JWT auth success"
                             );

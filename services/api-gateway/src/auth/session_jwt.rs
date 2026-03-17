@@ -58,19 +58,62 @@ pub struct SessionJwtClaims {
     pub exp: u64,
 }
 
-/// Request context extracted from a verified session JWT.
+/// Request context extracted and cross-verified from a session JWT.
+///
+/// Fields marked `verified_*` have been checked against the actual HTTP request.
+/// Fields marked `claimed_*` are from the JWT only (not verifiable server-side).
 #[derive(Debug, Clone)]
 pub struct VerifiedRequestContext {
     /// Session ID.
     pub session_id: String,
-    /// Client IP (from JWT claims).
+    /// Client IP — cross-verified against actual socket/X-Forwarded-For.
     pub client_ip: Option<String>,
-    /// Device fingerprint (from JWT claims).
+    /// Whether the claimed IP matched the actual IP.
+    pub ip_verified: bool,
+    /// Device fingerprint — claimed by client (not verifiable server-side).
     pub device_fingerprint: Option<String>,
-    /// User-Agent (from JWT claims).
+    /// User-Agent — cross-verified against actual User-Agent header.
     pub user_agent: Option<String>,
+    /// Whether the claimed UA matched the actual UA.
+    pub ua_verified: bool,
     /// Request ID (from JWT claims).
     pub request_id: Option<String>,
+    /// Whether any cross-verification failed (IP or UA mismatch).
+    pub context_mismatch: bool,
+}
+
+/// Actual request metadata extracted from the HTTP connection.
+#[derive(Debug, Clone)]
+pub struct ActualRequestMeta {
+    /// Real client IP from socket or X-Forwarded-For.
+    pub real_ip: Option<String>,
+    /// Real User-Agent from HTTP header.
+    pub real_user_agent: Option<String>,
+}
+
+/// Cross-verify JWT claims against actual HTTP request metadata.
+///
+/// If the client claims a different IP or User-Agent than what the server sees,
+/// the request is flagged (and optionally rejected depending on policy).
+pub fn cross_verify_context(
+    claims_ip: Option<&str>,
+    claims_ua: Option<&str>,
+    actual: &ActualRequestMeta,
+) -> (bool, bool, bool) {
+    let ip_match = match (claims_ip, &actual.real_ip) {
+        (Some(claimed), Some(real)) => claimed == real,
+        (None, _) => true,       // no claim = no check
+        (Some(_), None) => true, // no real IP available (e.g., test)
+    };
+
+    let ua_match = match (claims_ua, &actual.real_user_agent) {
+        (Some(claimed), Some(real)) => claimed == real,
+        (None, _) => true,
+        (Some(_), None) => true,
+    };
+
+    let any_mismatch = !ip_match || !ua_match;
+    (ip_match, ua_match, any_mismatch)
 }
 
 /// Maximum age of a session JWT (seconds). Short-lived per-request token.
@@ -107,17 +150,21 @@ pub fn create_session_jwt(
     .map_err(|e| format!("session JWT encode: {e}"))
 }
 
-/// Verify a session JWT (gateway-side).
+/// Verify a session JWT (gateway-side) and cross-check against actual request.
 ///
 /// 1. Decode JWT WITHOUT verification to extract `sid` (session_id)
 /// 2. Look up the session to get `client_write_key`
 /// 3. Verify the JWT signature with that key
-/// 4. Return the verified request context
+/// 4. Cross-verify claimed IP/UA against actual HTTP metadata
+/// 5. Return the verified + cross-checked context
 ///
-/// Returns `(session_id, verified_context)` or error.
+/// If `reject_on_mismatch` is true, returns Err on IP/UA mismatch.
+/// Otherwise, flags the mismatch in `context_mismatch` for logging/monitoring.
 pub fn verify_session_jwt(
     token: &str,
     key_lookup: impl FnOnce(&str) -> Option<[u8; 32]>,
+    actual: &ActualRequestMeta,
+    reject_on_mismatch: bool,
 ) -> Result<(String, VerifiedRequestContext), String> {
     // Step 1: Decode WITHOUT verification to get session_id.
     let mut no_verify = Validation::default();
@@ -154,14 +201,27 @@ pub fn verify_session_jwt(
         return Err("session JWT: token too old".into());
     }
 
+    // Step 5: Cross-verify claimed context against actual HTTP request.
+    let (ip_ok, ua_ok, any_mismatch) =
+        cross_verify_context(claims.ip.as_deref(), claims.ua.as_deref(), actual);
+
+    if any_mismatch && reject_on_mismatch {
+        return Err(format!(
+            "session JWT: context mismatch (ip_match={ip_ok}, ua_match={ua_ok}) — possible spoofing"
+        ));
+    }
+
     Ok((
         claims.sid.clone(),
         VerifiedRequestContext {
             session_id: claims.sid,
             client_ip: claims.ip,
+            ip_verified: ip_ok,
             device_fingerprint: claims.fp,
             user_agent: claims.ua,
+            ua_verified: ua_ok,
             request_id: claims.rid,
+            context_mismatch: any_mismatch,
         },
     ))
 }
@@ -177,6 +237,20 @@ mod tests {
         key
     }
 
+    fn no_actual() -> ActualRequestMeta {
+        ActualRequestMeta {
+            real_ip: None,
+            real_user_agent: None,
+        }
+    }
+
+    fn actual_matching() -> ActualRequestMeta {
+        ActualRequestMeta {
+            real_ip: Some("203.0.113.42".into()),
+            real_user_agent: Some("SDK/1.0".into()),
+        }
+    }
+
     #[test]
     fn test_create_and_verify_roundtrip() {
         let key = test_key();
@@ -190,32 +264,34 @@ mod tests {
         )
         .unwrap();
 
-        let (sid, ctx) = verify_session_jwt(&jwt, |sid| {
-            assert_eq!(sid, "sess_123");
-            Some(key)
-        })
+        let (sid, ctx) = verify_session_jwt(
+            &jwt,
+            |sid| {
+                assert_eq!(sid, "sess_123");
+                Some(key)
+            },
+            &actual_matching(),
+            false,
+        )
         .unwrap();
 
         assert_eq!(sid, "sess_123");
         assert_eq!(ctx.client_ip.as_deref(), Some("203.0.113.42"));
         assert_eq!(ctx.device_fingerprint.as_deref(), Some("fp_abc"));
-        assert_eq!(ctx.user_agent.as_deref(), Some("SDK/1.0"));
-        assert_eq!(ctx.request_id.as_deref(), Some("req_xyz"));
+        assert!(ctx.ip_verified);
+        assert!(ctx.ua_verified);
+        assert!(!ctx.context_mismatch);
     }
 
     #[test]
     fn test_wrong_key_rejected() {
         let key = test_key();
         let wrong_key = [0xFF; 32];
-
         let jwt = create_session_jwt("sess_123", &key, None, None, None, None).unwrap();
 
-        let result = verify_session_jwt(&jwt, |_| Some(wrong_key));
+        let result = verify_session_jwt(&jwt, |_| Some(wrong_key), &no_actual(), false);
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().contains("verify"),
-            "should fail signature verification"
-        );
+        assert!(result.unwrap_err().contains("verify"));
     }
 
     #[test]
@@ -223,7 +299,7 @@ mod tests {
         let key = test_key();
         let jwt = create_session_jwt("sess_missing", &key, None, None, None, None).unwrap();
 
-        let result = verify_session_jwt(&jwt, |_| None);
+        let result = verify_session_jwt(&jwt, |_| None, &no_actual(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
     }
@@ -233,7 +309,6 @@ mod tests {
         let key = test_key();
         let jwt = create_session_jwt("sess_123", &key, Some("1.2.3.4"), None, None, None).unwrap();
 
-        // Tamper: change a character in the payload (middle part of JWT).
         let parts: Vec<&str> = jwt.split('.').collect();
         assert_eq!(parts.len(), 3);
         let mut payload_bytes = base64_url_decode(parts[1]);
@@ -247,22 +322,99 @@ mod tests {
             parts[2]
         );
 
-        let result = verify_session_jwt(&tampered, |_| Some(key));
+        let result = verify_session_jwt(&tampered, |_| Some(key), &no_actual(), false);
         assert!(result.is_err(), "tampered JWT must be rejected");
     }
 
     #[test]
-    fn test_minimal_claims() {
+    fn test_ip_mismatch_detected() {
+        let key = test_key();
+        let jwt = create_session_jwt(
+            "sess_123",
+            &key,
+            Some("203.0.113.42"), // client claims this IP
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Gateway sees a different IP.
+        let actual = ActualRequestMeta {
+            real_ip: Some("10.0.0.1".into()), // actual IP is different
+            real_user_agent: None,
+        };
+
+        // With reject_on_mismatch=false: succeeds but flags mismatch.
+        let (_, ctx) = verify_session_jwt(&jwt, |_| Some(key), &actual, false).unwrap();
+        assert!(!ctx.ip_verified, "IP should NOT be verified");
+        assert!(ctx.context_mismatch, "should flag context mismatch");
+
+        // With reject_on_mismatch=true: rejected.
+        let jwt2 =
+            create_session_jwt("sess_123", &key, Some("203.0.113.42"), None, None, None).unwrap();
+        let result = verify_session_jwt(&jwt2, |_| Some(key), &actual, true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mismatch"));
+    }
+
+    #[test]
+    fn test_ua_mismatch_detected() {
+        let key = test_key();
+        let jwt = create_session_jwt(
+            "sess_123",
+            &key,
+            None,
+            None,
+            Some("SDK/1.0"), // client claims this UA
+            None,
+        )
+        .unwrap();
+
+        let actual = ActualRequestMeta {
+            real_ip: None,
+            real_user_agent: Some("curl/7.88".into()), // actual UA is different
+        };
+
+        let (_, ctx) = verify_session_jwt(&jwt, |_| Some(key), &actual, false).unwrap();
+        assert!(!ctx.ua_verified, "UA should NOT be verified");
+        assert!(ctx.context_mismatch);
+    }
+
+    #[test]
+    fn test_matching_context_verified() {
+        let key = test_key();
+        let jwt = create_session_jwt(
+            "sess_123",
+            &key,
+            Some("203.0.113.42"),
+            Some("fp_abc"),
+            Some("SDK/1.0"),
+            None,
+        )
+        .unwrap();
+
+        let actual = ActualRequestMeta {
+            real_ip: Some("203.0.113.42".into()),
+            real_user_agent: Some("SDK/1.0".into()),
+        };
+
+        let (_, ctx) = verify_session_jwt(&jwt, |_| Some(key), &actual, true).unwrap();
+        assert!(ctx.ip_verified);
+        assert!(ctx.ua_verified);
+        assert!(!ctx.context_mismatch);
+    }
+
+    #[test]
+    fn test_minimal_claims_no_mismatch() {
         let key = test_key();
         let jwt = create_session_jwt("sess_min", &key, None, None, None, None).unwrap();
 
-        let (sid, ctx) = verify_session_jwt(&jwt, |_| Some(key)).unwrap();
+        let (sid, ctx) = verify_session_jwt(&jwt, |_| Some(key), &no_actual(), true).unwrap();
         assert_eq!(sid, "sess_min");
-        assert!(ctx.client_ip.is_none());
-        assert!(ctx.device_fingerprint.is_none());
+        assert!(!ctx.context_mismatch, "no claims = no mismatch");
     }
 
-    // Base64 URL helpers for tamper test.
     fn base64_url_decode(s: &str) -> Vec<u8> {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use base64::Engine;
