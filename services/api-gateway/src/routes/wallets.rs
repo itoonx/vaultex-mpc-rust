@@ -98,7 +98,7 @@ pub async fn create_wallet(
         Json(ApiResponse::ok(WalletResponse {
             id: record.group_id,
             label: record.label,
-            scheme: format!("{:?}", record.scheme),
+            scheme: record.scheme.to_string(),
             threshold: record.config.threshold,
             total_parties: record.config.total_parties,
             created_at: record.created_at,
@@ -128,7 +128,7 @@ pub async fn list_wallets(
         .map(|r| WalletResponse {
             id: r.group_id,
             label: r.label,
-            scheme: format!("{:?}", r.scheme),
+            scheme: r.scheme.to_string(),
             threshold: r.config.threshold,
             total_parties: r.config.total_parties,
             created_at: r.created_at,
@@ -161,30 +161,29 @@ pub async fn get_wallet(
         .await
         .ok_or_else(|| ApiError::not_found(format!("wallet {wallet_id} not found")))?;
 
-    // Derive addresses for common chains.
-    let mut addresses = Vec::new();
-    let chains_to_derive = match record.scheme {
+    // Derive addresses for common chains matching the wallet's signing scheme.
+    use mpc_wallet_chains::provider::Chain;
+    let chains_to_derive: Vec<Chain> = match record.scheme {
         mpc_wallet_core::types::CryptoScheme::Gg20Ecdsa => {
-            vec!["ethereum", "polygon", "bsc", "arbitrum"]
+            vec![Chain::Ethereum, Chain::Polygon, Chain::Bsc, Chain::Arbitrum]
         }
         mpc_wallet_core::types::CryptoScheme::FrostEd25519 => {
-            vec!["solana", "sui", "aptos"]
+            vec![Chain::Solana, Chain::Sui, Chain::Aptos]
         }
         mpc_wallet_core::types::CryptoScheme::FrostSecp256k1Tr => {
-            vec!["bitcoin-testnet", "bitcoin-mainnet"]
+            vec![Chain::BitcoinTestnet, Chain::BitcoinMainnet]
         }
         _ => vec![],
     };
 
-    for chain_name in chains_to_derive {
-        if let Ok(chain) = chain_name.parse::<mpc_wallet_chains::provider::Chain>() {
-            if let Ok(provider) = state.chain_registry.provider(chain) {
-                if let Ok(addr) = provider.derive_address(&record.group_public_key) {
-                    addresses.push(AddressEntry {
-                        chain: chain_name.to_string(),
-                        address: addr,
-                    });
-                }
+    let mut addresses = Vec::new();
+    for chain in chains_to_derive {
+        if let Ok(provider) = state.chain_registry.provider(chain) {
+            if let Ok(addr) = provider.derive_address(&record.group_public_key) {
+                addresses.push(AddressEntry {
+                    chain: chain.to_string(),
+                    address: addr,
+                });
             }
         }
     }
@@ -192,7 +191,7 @@ pub async fn get_wallet(
     Ok(Json(ApiResponse::ok(WalletDetailResponse {
         id: record.group_id,
         label: record.label,
-        scheme: format!("{:?}", record.scheme),
+        scheme: record.scheme.to_string(),
         threshold: record.config.threshold,
         total_parties: record.config.total_parties,
         created_at: record.created_at,

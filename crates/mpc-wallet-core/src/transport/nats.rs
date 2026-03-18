@@ -254,50 +254,40 @@ impl NatsTransport {
         *seq += 1;
         *seq
     }
+
+    /// Sign, serialize, and publish a message to a specific party.
+    async fn publish_to(&self, msg: ProtocolMessage, target: PartyId) -> Result<(), CoreError> {
+        let seq_no = self.next_seq_no();
+        let envelope = SignedEnvelope::sign(
+            msg,
+            self.party_id,
+            seq_no,
+            DEFAULT_TTL_SECS,
+            &self.signing_key,
+        );
+        let subject = Self::party_subject(&self.session_id, target);
+        let payload =
+            serde_json::to_vec(&envelope).map_err(|e| CoreError::Serialization(e.to_string()))?;
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| CoreError::Transport(format!("NATS publish failed: {e}")))?;
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl Transport for NatsTransport {
     async fn send(&self, msg: ProtocolMessage) -> Result<(), CoreError> {
         if let Some(target) = msg.to {
-            // Unicast: send to specific party.
-            let seq_no = self.next_seq_no();
-            let envelope = SignedEnvelope::sign(
-                msg,
-                self.party_id,
-                seq_no,
-                DEFAULT_TTL_SECS,
-                &self.signing_key,
-            );
-            let subject = Self::party_subject(&self.session_id, target);
-            let payload = serde_json::to_vec(&envelope)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
-            self.client
-                .publish(subject, payload.into())
-                .await
-                .map_err(|e| CoreError::Transport(format!("NATS publish failed: {e}")))?;
+            self.publish_to(msg, target).await?;
         } else {
             // Broadcast: send to all registered peers (one message per peer).
             let peers: Vec<PartyId> = self.peer_keys.keys().copied().collect();
             for peer_id in peers {
-                let seq_no = self.next_seq_no();
-                let envelope = SignedEnvelope::sign(
-                    msg.clone(),
-                    self.party_id,
-                    seq_no,
-                    DEFAULT_TTL_SECS,
-                    &self.signing_key,
-                );
-                let subject = Self::party_subject(&self.session_id, peer_id);
-                let payload = serde_json::to_vec(&envelope)
-                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
-                self.client
-                    .publish(subject, payload.into())
-                    .await
-                    .map_err(|e| CoreError::Transport(format!("NATS publish failed: {e}")))?;
+                self.publish_to(msg.clone(), peer_id).await?;
             }
         }
-
         Ok(())
     }
 

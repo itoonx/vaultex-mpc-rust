@@ -30,6 +30,18 @@ pub struct WalletRecord {
     pub frozen: bool,
 }
 
+/// Wallet metadata (no key shares — safe to return to API clients).
+#[derive(Clone)]
+pub struct WalletMetadata {
+    pub group_id: String,
+    pub label: String,
+    pub scheme: CryptoScheme,
+    pub config: ThresholdConfig,
+    pub group_public_key: GroupPublicKey,
+    pub created_at: u64,
+    pub frozen: bool,
+}
+
 /// In-memory wallet store.
 #[derive(Clone, Default)]
 pub struct WalletStore {
@@ -100,20 +112,20 @@ impl WalletStore {
         group_id: &str,
         message: &[u8],
     ) -> Result<MpcSignature, mpc_wallet_core::error::CoreError> {
-        let wallets = self.wallets.read().await;
-        let wallet = wallets.get(group_id).ok_or_else(|| {
-            mpc_wallet_core::error::CoreError::NotFound(format!("wallet {group_id} not found"))
-        })?;
-
-        if wallet.frozen {
-            return Err(mpc_wallet_core::error::CoreError::KeyFrozen(format!(
-                "wallet {group_id} is frozen"
-            )));
-        }
-
-        let shares = &wallet.shares;
-        let config = wallet.config;
-        let scheme = wallet.scheme;
+        // Clone needed data and drop the lock before the signing ceremony.
+        // Signing is multi-round — holding the lock would block all concurrent mutations.
+        let (shares, config, scheme) = {
+            let wallets = self.wallets.read().await;
+            let wallet = wallets.get(group_id).ok_or_else(|| {
+                mpc_wallet_core::error::CoreError::NotFound(format!("wallet {group_id} not found"))
+            })?;
+            if wallet.frozen {
+                return Err(mpc_wallet_core::error::CoreError::KeyFrozen(format!(
+                    "wallet {group_id} is frozen"
+                )));
+            }
+            (wallet.shares.clone(), wallet.config, wallet.scheme)
+        }; // lock dropped here
 
         // Use first t parties as signers (coordinator = Party 1).
         let t = config.threshold as usize;
@@ -148,29 +160,53 @@ impl WalletStore {
         self.wallets.read().await.get(group_id).cloned()
     }
 
-    /// List all wallets (metadata only, no shares).
-    pub async fn list(&self) -> Vec<WalletRecord> {
-        self.wallets.read().await.values().cloned().collect()
+    /// List all wallets (metadata only — does NOT clone key shares).
+    pub async fn list(&self) -> Vec<WalletMetadata> {
+        self.wallets
+            .read()
+            .await
+            .values()
+            .map(|r| WalletMetadata {
+                group_id: r.group_id.clone(),
+                label: r.label.clone(),
+                scheme: r.scheme,
+                config: r.config,
+                group_public_key: r.group_public_key.clone(),
+                created_at: r.created_at,
+                frozen: r.frozen,
+            })
+            .collect()
     }
 
     /// Freeze a wallet.
     pub async fn freeze(&self, group_id: &str) -> Result<(), mpc_wallet_core::error::CoreError> {
-        let mut wallets = self.wallets.write().await;
-        let wallet = wallets.get_mut(group_id).ok_or_else(|| {
-            mpc_wallet_core::error::CoreError::NotFound(format!("wallet {group_id} not found"))
-        })?;
-        wallet.frozen = true;
-        Ok(())
+        self.set_frozen(group_id, true).await
     }
 
     /// Unfreeze a wallet.
     pub async fn unfreeze(&self, group_id: &str) -> Result<(), mpc_wallet_core::error::CoreError> {
-        let mut wallets = self.wallets.write().await;
+        self.set_frozen(group_id, false).await
+    }
+
+    fn set_frozen_sync(
+        wallets: &mut HashMap<String, WalletRecord>,
+        group_id: &str,
+        frozen: bool,
+    ) -> Result<(), mpc_wallet_core::error::CoreError> {
         let wallet = wallets.get_mut(group_id).ok_or_else(|| {
             mpc_wallet_core::error::CoreError::NotFound(format!("wallet {group_id} not found"))
         })?;
-        wallet.frozen = false;
+        wallet.frozen = frozen;
         Ok(())
+    }
+
+    async fn set_frozen(
+        &self,
+        group_id: &str,
+        frozen: bool,
+    ) -> Result<(), mpc_wallet_core::error::CoreError> {
+        let mut wallets = self.wallets.write().await;
+        Self::set_frozen_sync(&mut wallets, group_id, frozen)
     }
 
     /// Create the MPC protocol for a given scheme.
