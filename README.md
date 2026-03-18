@@ -324,6 +324,9 @@ A typical enterprise deployment uses all three methods simultaneously:
 | **Sign authorization** | MPC nodes independently verify gateway proof before signing |
 | **Audit trail** | Encrypted request context (ChaCha20-Poly1305) + millisecond timeline |
 | **Mainnet safety** | `SERVER_SIGNING_KEY` + `CLIENT_KEYS_FILE` required on mainnet |
+| **Secrets management** | KMS/HSM recommended — `KmsSigner` + `KeyEncryptionProvider` traits ready |
+
+> **Production:** Never store secrets (`JWT_SECRET`, `SERVER_SIGNING_KEY`, `SESSION_ENCRYPTION_KEY`) as plaintext env vars or config files. Use AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, or Kubernetes External Secrets. For highest security, use KMS/HSM so signing keys never leave the hardware boundary — see [`docs/API_REFERENCE.md#secrets-management`](docs/API_REFERENCE.md#secrets-management).
 
 > Full API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Protocol spec: [`specs/AUTH_SPEC.md`](specs/AUTH_SPEC.md)
 

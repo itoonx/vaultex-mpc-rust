@@ -72,21 +72,122 @@ If a header is **present** but invalid, auth fails immediately — no fall-throu
 
 ### Environment Variables Reference
 
+#### Secrets (sensitive — use KMS/HSM in production)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `JWT_SECRET` | yes | HMAC secret for JWT validation (>= 32 bytes) |
+| `SERVER_SIGNING_KEY` | no (auto-generated) | Hex-encoded 32-byte Ed25519 secret for handshake |
+| `SESSION_ENCRYPTION_KEY` | no | Hex 32-byte KEK for Redis session encryption (ChaCha20-Poly1305) |
+| `REDIS_URL` | no | Redis connection URL (may contain password) |
+
+> **Production requirement:** These secrets MUST NOT be stored as plaintext environment variables, config files, or checked into source control. See [Secrets Management](#secrets-management) below.
+
+#### Configuration (non-sensitive)
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | yes | — | HMAC secret for JWT validation (>= 32 bytes) |
-| `SERVER_SIGNING_KEY` | no | auto-generated | Hex-encoded 32-byte Ed25519 secret for handshake |
 | `CLIENT_KEYS_FILE` | no | — | Path to JSON array of trusted client Ed25519 pubkeys |
 | `REVOKED_KEYS_FILE` | no | — | Path to JSON array of revoked key_id strings |
 | `MTLS_SERVICES_FILE` | no | — | Path to JSON array of mTLS service entries |
 | `SESSION_BACKEND` | no | `memory` | Session backend: `memory` or `redis` |
-| `REDIS_URL` | no | — | Redis URL (required when SESSION_BACKEND=redis) |
-| `SESSION_ENCRYPTION_KEY` | no | — | Hex 32-byte KEK for Redis session encryption |
 | `SESSION_TTL` | no | `3600` | Session TTL in seconds |
 | `NETWORK` | no | `testnet` | `mainnet`, `testnet`, or `devnet` |
 | `PORT` | no | `3000` | HTTP listen port |
 | `RATE_LIMIT_RPS` | no | `100` | Max requests/second per IP |
 | `CORS_ALLOWED_ORIGINS` | no | (permissive) | Comma-separated origins |
+
+### Secrets Management
+
+Secrets (`JWT_SECRET`, `SERVER_SIGNING_KEY`, `SESSION_ENCRYPTION_KEY`, `REDIS_URL`) require different handling depending on the environment:
+
+#### Development / Local
+
+```bash
+# OK for local dev only — NEVER in production
+export JWT_SECRET=$(openssl rand -hex 32)
+export SERVER_SIGNING_KEY=$(openssl rand -hex 32)
+```
+
+#### Staging / Production — use a secrets manager
+
+| Platform | Recommended Approach |
+|----------|---------------------|
+| **AWS** | Secrets Manager or SSM Parameter Store (SecureString) → injected at container start |
+| **GCP** | Secret Manager → mounted as volume or injected via workload identity |
+| **Azure** | Key Vault → injected via managed identity |
+| **Kubernetes** | External Secrets Operator syncing from cloud KMS → `Secret` → env/volume |
+| **HashiCorp Vault** | Dynamic secrets with short TTL, agent sidecar injects at runtime |
+
+**AWS example (ECS/EKS):**
+```json
+{
+  "containerDefinitions": [{
+    "secrets": [
+      { "name": "JWT_SECRET", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456:secret:mpc-wallet/jwt-secret" },
+      { "name": "SERVER_SIGNING_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456:secret:mpc-wallet/signing-key" },
+      { "name": "SESSION_ENCRYPTION_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456:secret:mpc-wallet/session-kek" }
+    ]
+  }]
+}
+```
+
+**Kubernetes External Secrets example:**
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mpc-wallet-secrets
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  target:
+    name: mpc-wallet-secrets
+  data:
+    - secretKey: JWT_SECRET
+      remoteRef:
+        key: mpc-wallet/jwt-secret
+    - secretKey: SERVER_SIGNING_KEY
+      remoteRef:
+        key: mpc-wallet/signing-key
+    - secretKey: SESSION_ENCRYPTION_KEY
+      remoteRef:
+        key: mpc-wallet/session-kek
+```
+
+#### KMS/HSM for Key Material (recommended for high-security)
+
+For the highest security level, signing keys should never leave the HSM boundary:
+
+| Secret | KMS/HSM Integration | Status |
+|--------|---------------------|--------|
+| `SERVER_SIGNING_KEY` | AWS KMS `Sign` API (Ed25519) — key never exported | `KmsSigner` trait ready, stub impl |
+| `SESSION_ENCRYPTION_KEY` | AWS KMS `GenerateDataKey` — envelope encryption | `KeyEncryptionProvider` trait ready |
+| `JWT_SECRET` | Secrets Manager with auto-rotation | Use cloud-native rotation |
+
+The gateway supports trait-based signer backends (`AuthSigner`):
+- **`LocalSigner`** — Ed25519 key in memory (current default)
+- **`KmsSigner`** — delegates signing to AWS KMS (key never leaves HSM)
+
+```rust
+// config selects backend at startup
+let signer: Arc<dyn AuthSigner> = match config.signer_backend {
+    SignerBackend::Local => Arc::new(LocalSigner::new(key)),
+    SignerBackend::Kms   => Arc::new(KmsSigner::new(kms_key_id)),
+};
+```
+
+> See `specs/REDIS_KMS_MIGRATION_SPEC.md` for full KMS/HSM migration plan.
+
+#### What NOT to do
+
+- **`export JWT_SECRET=...` in `.bashrc` or `.env` files** — survives in shell history, process listing (`/proc/*/environ`), and crash dumps
+- **Plaintext in config files** (`api-keys.json`, `config.toml`) — readable by any process with file access, often committed to git by accident
+- **Docker `--env` or `docker-compose.yml` environment** — visible in `docker inspect`, stored in image layers
+- **Kubernetes `ConfigMap`** — not encrypted at rest, visible to anyone with namespace read access
+- **Hardcoded in source code** — obvious but still happens
 
 ---
 

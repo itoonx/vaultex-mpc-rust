@@ -318,6 +318,9 @@ curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
 | **签名授权** | MPC 节点在签名前独立验证网关证明 |
 | **审计追踪** | 加密请求上下文 (ChaCha20-Poly1305) + 毫秒级时间线 |
 | **主网安全** | 主网强制要求 `SERVER_SIGNING_KEY` + `CLIENT_KEYS_FILE` |
+| **密钥管理** | 推荐 KMS/HSM — `KmsSigner` + `KeyEncryptionProvider` trait 已就绪 |
+
+> **生产环境：** 切勿将密钥（`JWT_SECRET`、`SERVER_SIGNING_KEY`、`SESSION_ENCRYPTION_KEY`）以明文环境变量或配置文件存储。请使用 AWS Secrets Manager、GCP Secret Manager、HashiCorp Vault 或 Kubernetes External Secrets。最高安全级别请使用 KMS/HSM，确保签名密钥永不离开硬件边界 — 详见 [`docs/API_REFERENCE.md#secrets-management`](docs/API_REFERENCE.md#secrets-management)。
 
 > 完整 API 参考：[`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | 协议规范：[`specs/AUTH_SPEC.md`](specs/AUTH_SPEC.md)
 
