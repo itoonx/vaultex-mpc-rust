@@ -300,7 +300,7 @@ impl AppState {
             chain_registry: Arc::new(chain_registry),
             jwt_validator: Arc::new(jwt_validator),
             server_signing_key: Arc::new(server_signing_key),
-            session_store: SessionStore::new(),
+            session_store: SessionStore::in_memory(),
             client_registry: Arc::new(client_registry),
             revoked_keys: Arc::new(RwLock::new(revoked_keys)),
             replay_cache: ReplayCache::new(),

@@ -335,7 +335,7 @@ async fn test_dynamic_key_revocation() {
 
 #[tokio::test]
 async fn test_session_store_capacity_limit() {
-    let store = mpc_wallet_api::auth::session::SessionStore::new();
+    let store = mpc_wallet_api::auth::session::SessionStore::in_memory();
     let now = unix_now();
 
     // Fill up to capacity and verify rejection.
@@ -1344,7 +1344,7 @@ async fn test_session_refresh_revokes_on_key_revocation() {
 
 #[tokio::test]
 async fn test_session_store_handles_many_sessions() {
-    let store = mpc_wallet_api::auth::session::SessionStore::new();
+    let store = mpc_wallet_api::auth::session::SessionStore::in_memory();
     let now = unix_now();
 
     // Insert 1000 sessions.
@@ -1368,7 +1368,7 @@ async fn test_session_store_handles_many_sessions() {
 
 #[tokio::test]
 async fn test_expired_session_pruning() {
-    let store = mpc_wallet_api::auth::session::SessionStore::new();
+    let store = mpc_wallet_api::auth::session::SessionStore::in_memory();
     let now = unix_now();
 
     // Insert a mix of expired and active sessions.

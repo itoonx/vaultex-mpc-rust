@@ -17,6 +17,9 @@ path = "src/main.rs"
 mpc-wallet-core = { path = "../../crates/mpc-wallet-core" }
 mpc-wallet-chains = { path = "../../crates/mpc-wallet-chains" }
 
+# Async
+async-trait = { workspace = true }
+
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace"] }
