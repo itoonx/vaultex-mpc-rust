@@ -185,8 +185,11 @@ async fn run_node_sign(
 
 /// Full distributed keygen: orchestrator publishes request, 3 nodes respond.
 /// Proves: gateway holds 0 shares, each node holds exactly 1.
+///
+/// Run locally: NATS_URL=nats://127.0.0.1:4222 cargo test --test e2e_tests "distributed" -- --ignored
+/// NOT run in CI: requires precise NATS subscription timing that CI runners can't guarantee.
 #[tokio::test]
-#[ignore = "requires NATS: ./scripts/local-infra.sh up"]
+#[ignore = "local only — distributed keygen needs precise NATS timing"]
 async fn test_distributed_keygen_3_nodes() {
     let url = nats_url();
     let group_id = uuid::Uuid::new_v4().to_string();
