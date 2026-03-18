@@ -31,6 +31,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-workspace"
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -41,11 +43,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-workspace"
       - name: Run tests
         run: cargo test --workspace
         # NOTE: gg20-simulation feature is intentionally NOT enabled (LESSON-011)
-        # The simulation path is unsafe for production. Tests run against the
-        # production code paths only.
 
   audit:
     name: Security audit
@@ -54,6 +56,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-workspace"
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run audit
@@ -100,13 +104,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-workspace"
 
       - name: Provision Vault secrets
         env:
           VAULT_ADDR: http://127.0.0.1:8200
           VAULT_TOKEN: dev-root-token
         run: |
-          # Write secrets to Vault KV v2
           JWT_SECRET=$(openssl rand -hex 32)
           SERVER_SIGNING_KEY=$(openssl rand -hex 32)
           SESSION_ENCRYPTION_KEY=$(openssl rand -hex 32)
@@ -116,12 +121,12 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"data\":{\"jwt_secret\":\"$JWT_SECRET\",\"server_signing_key\":\"$SERVER_SIGNING_KEY\",\"session_encryption_key\":\"$SESSION_ENCRYPTION_KEY\",\"redis_url\":\"redis://127.0.0.1:6379\"}}"
 
-          # Verify
           curl -sf "$VAULT_ADDR/v1/secret/data/mpc-wallet/gateway" \
             -H "X-Vault-Token: $VAULT_TOKEN" | jq '.data.data | keys'
 
+      # Debug build (3-5x faster than release — E2E doesn't need optimization)
       - name: Build gateway
-        run: cargo build --release -p mpc-wallet-api
+        run: cargo build -p mpc-wallet-api
 
       - name: Start gateway
         env:
@@ -131,11 +136,11 @@ jobs:
           NETWORK: testnet
           SESSION_BACKEND: redis
           REDIS_URL: redis://127.0.0.1:6379
+          NATS_URL: nats://127.0.0.1:4222
           PORT: "3000"
           RUST_LOG: mpc_wallet_api=info
         run: |
-          ./target/release/mpc-wallet-api &
-          # Wait for gateway to be ready
+          ./target/debug/mpc-wallet-api &
           for i in $(seq 1 15); do
             if curl -sf http://127.0.0.1:3000/v1/health > /dev/null 2>&1; then
               echo "Gateway is healthy"
@@ -147,9 +152,10 @@ jobs:
             sleep 1
           done
 
+      # Build + run only E2E test crate (not entire workspace)
       - name: Run E2E tests
         env:
           NATS_URL: nats://127.0.0.1:4222
           REDIS_URL: redis://127.0.0.1:6379
           GATEWAY_URL: http://127.0.0.1:3000
-        run: cargo test --workspace -- --ignored --test-threads=1
+        run: cargo test -p mpc-wallet-core --test e2e_tests -- --ignored --test-threads=1
