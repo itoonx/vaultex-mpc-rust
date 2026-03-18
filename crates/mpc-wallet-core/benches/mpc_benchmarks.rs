@@ -326,7 +326,7 @@ fn bench_scaling(c: &mut Criterion) {
 // ─── Auth Benchmarks ──────────────────────────────────────────────────────
 
 fn bench_auth(c: &mut Criterion) {
-    use ed25519_dalek::{Signer, SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
+    use ed25519_dalek::{Signer, SigningKey as EdSigningKey};
 
     let mut group = c.benchmark_group("auth");
 
@@ -375,7 +375,7 @@ fn bench_auth(c: &mut Criterion) {
     group.bench_function("jwt_hs256_create_verify", |b| {
         use mpc_wallet_core::identity::JwtValidator;
         let secret = [0x42u8; 32];
-        let validator = JwtValidator::from_hmac_secret_strict(&secret, "bench", "bench");
+        let _validator = JwtValidator::from_hmac_secret_strict(&secret, "bench", "bench");
         // We benchmark the validator's verify path with a pre-created token
         b.iter(|| {
             // Token creation is not exposed directly, so we benchmark the validator construction

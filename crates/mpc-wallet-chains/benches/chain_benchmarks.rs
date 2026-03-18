@@ -7,11 +7,11 @@
 //!
 //! Run: `cargo bench -p mpc-wallet-chains`
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 use mpc_wallet_chains::provider::{Chain, TransactionParams};
 use mpc_wallet_chains::registry::ChainRegistry;
-use mpc_wallet_core::protocol::{GroupPublicKey, KeyShare, MpcProtocol};
+use mpc_wallet_core::protocol::{KeyShare, MpcProtocol};
 use mpc_wallet_core::transport::local::LocalTransportNetwork;
 use mpc_wallet_core::types::{PartyId, ThresholdConfig};
 
@@ -146,8 +146,8 @@ fn bench_address_derivation(c: &mut Criterion) {
 
 fn bench_tx_building(c: &mut Criterion) {
     let runtime = rt();
-    let ecdsa_shares = gen_ecdsa_shares();
-    let ed25519_shares = gen_ed25519_shares();
+    let _ecdsa_shares = gen_ecdsa_shares();
+    let _ed25519_shares = gen_ed25519_shares();
     let registry = ChainRegistry::default_testnet();
 
     let mut group = c.benchmark_group("tx_building");
