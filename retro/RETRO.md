@@ -60,6 +60,14 @@ retro/
 
 ---
 
+## Session Retrospectives
+
+| Report | Dates | Scope | Key Metrics |
+|--------|-------|-------|-------------|
+| [SESSION_RETRO_AUTH](SESSION_RETRO_AUTH.md) | 2026-03-17 ~ 2026-03-18 | Auth system build (mTLS, Session JWT, Bearer JWT, Redis) | ~30 commits, +147 tests, 5 decisions, v0.2.0 |
+
+---
+
 ## How to Add Entries
 
 ### Decisions
