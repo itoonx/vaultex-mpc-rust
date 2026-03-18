@@ -8,6 +8,7 @@ pub mod models;
 pub mod routes;
 pub mod state;
 pub mod vault;
+pub mod wallet_store;
 
 use axum::{
     http::{header, HeaderName, Method},

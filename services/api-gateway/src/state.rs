@@ -390,6 +390,8 @@ pub struct AppState {
     pub session_ttl: u64,
     /// Prometheus metrics registry.
     pub metrics: Arc<Metrics>,
+    /// In-memory wallet store (MPC key shares).
+    pub wallet_store: crate::wallet_store::WalletStore,
 }
 
 impl AppState {
@@ -545,6 +547,7 @@ impl AppState {
             mtls_registry: Arc::new(mtls_registry),
             session_ttl: config.session_ttl,
             metrics: Arc::new(metrics),
+            wallet_store: crate::wallet_store::WalletStore::new(),
         }
     }
 

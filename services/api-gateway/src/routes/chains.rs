@@ -148,18 +148,25 @@ pub async fn derive_address(
         .parse()
         .map_err(|e: String| ApiError::bad_request(ErrorCode::InvalidInput, e))?;
 
-    // Verify the chain is supported by the registry.
-    state
+    let provider = state
         .chain_registry
         .provider(chain)
         .map_err(ApiError::from)?;
 
-    // In production: load group_pubkey from key store by wallet_id, then call
-    // provider.derive_address(&group_pubkey). For now, return a stub.
+    // Load wallet's group public key from wallet store.
+    let wallet = state
+        .wallet_store
+        .get(&wallet_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("wallet {wallet_id} not found")))?;
+
+    let address = provider
+        .derive_address(&wallet.group_public_key)
+        .map_err(ApiError::from)?;
+
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "wallet_id": wallet_id,
         "chain": chain.to_string(),
-        "address": format!("derive-from-keystore-for-{wallet_id}"),
-        "note": "requires key store integration to return real addresses"
+        "address": address,
     }))))
 }
