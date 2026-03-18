@@ -44,10 +44,11 @@ Vaultex is a **Rust workspace** for building enterprise-grade **threshold multi-
 
 **Why Vaultex?**
 
-- **Zero single point of failure** — compromise 1 server, attacker gets nothing
+- **Zero single point of failure** — gateway holds 0 shares, each node holds exactly 1. Compromise any single server = attacker gets nothing usable
 - **Multi-chain** — 50 blockchains across 8 ecosystems: EVM, Bitcoin, Substrate, Move, Cosmos, UTXO, TON/TRON, Starknet
-- **Enterprise controls** — RBAC, policy engine, approval workflows, audit trail
+- **Enterprise controls** — RBAC, ABAC, MFA, policy engine, approval workflows, audit trail
 - **Proactive security** — key refresh rotates shares without changing addresses
+- **Production-ready infra** — HashiCorp Vault secrets, Redis sessions, NATS transport, Docker + K8s deployment
 
 ---
 
@@ -75,8 +76,17 @@ Vaultex is a **Rust workspace** for building enterprise-grade **threshold multi-
 git clone https://github.com/itoonx/vaultex-mpc-rust.git
 cd vaultex-mpc-rust
 
-cargo test --workspace     # 507 tests, ~4 seconds
-./scripts/demo.sh          # interactive end-to-end demo
+# Run unit + integration tests (no infra needed)
+cargo test --workspace              # 507 tests, ~4 seconds
+
+# Start full production stack locally (Vault + Redis + NATS + 3 MPC nodes + gateway)
+./scripts/local-infra.sh up         # 1-shot: builds, provisions, starts everything
+
+# Run E2E tests against live infra
+./scripts/local-infra.sh test       # distributed keygen + sign via NATS
+
+# Interactive CLI demo (single-process, no infra needed)
+./scripts/demo.sh
 ```
 
 ---
@@ -510,14 +520,23 @@ Run benchmarks: `cargo bench -p mpc-wallet-core --bench mpc_benchmarks`
 
 ```
 crates/
-  mpc-wallet-core/     ← MPC protocols, transport, key store, policy, identity
-  mpc-wallet-chains/   ← Chain adapters: 50 chains across 8 ecosystems
-  mpc-wallet-cli/      ← CLI binary
+  mpc-wallet-core/     ← MPC protocols, transport, key store, policy, identity, RPC messages
+  mpc-wallet-chains/   ← Chain providers: 50 chains across 8 ecosystems
+  mpc-wallet-cli/      ← CLI binary (keygen, sign, simulate, audit-verify)
 services/
-  api-gateway/         ← REST API server, auth (key exchange + JWT + mTLS), RBAC
+  api-gateway/         ← REST API server, auth, MpcOrchestrator (ZERO shares)
+  mpc-node/            ← Standalone MPC node (1 party, 1 share, NATS + EncryptedFileStore)
+infra/
+  docker/              ← Dockerfile (multi-target: gateway + node), docker-compose.yml
+  local/               ← Local dev .env + docker-compose (Vault + Redis + NATS)
+  k8s/                 ← Kubernetes manifests (StatefulSet, Ingress, Secrets)
+  terraform/           ← Multi-cloud provisioning (AWS, GCP, Azure)
+scripts/
+  local-infra.sh       ← 1-shot: Vault + Redis + NATS + 3 nodes + gateway
+  demo.sh              ← Interactive CLI demo (single-process, no infra)
 specs/                 ← AUTH_SPEC.md, SIGN_AUTHORIZATION_SPEC.md
-retro/                 ← Decision records, lessons learned, security audits
-docs/                  ← Architecture, security, CLI guide, API reference
+retro/                 ← Decision records (DEC-001..015), lessons, security audits
+docs/                  ← Architecture, API reference, CLI guide, deployment
 ```
 
 ---
@@ -525,9 +544,10 @@ docs/                  ← Architecture, security, CLI guide, API reference
 ## Metrics
 
 ```
-  Chains:    50          Tests:     507 pass
-  Protocols: 6           CI:        fmt + clippy + test + audit
-  Sprints:   20          Findings:  0 CRITICAL | 0 HIGH open
+  Chains:    50          Tests:     507 + 15 E2E
+  Protocols: 6           CI:        fmt + clippy + test + audit + E2E
+  Sprints:   15          Findings:  0 CRITICAL | 0 HIGH open
+  Decisions: 15          Benchmarks: ~35
 ```
 
 ---
