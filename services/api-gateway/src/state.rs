@@ -394,7 +394,8 @@ pub struct AppState {
 
 impl AppState {
     /// Build `AppState` from configuration.
-    pub fn from_config(config: &AppConfig) -> Self {
+    /// Async because Redis backend requires connection establishment.
+    pub async fn from_config(config: &AppConfig) -> Self {
         let chain_registry = match config.network.as_str() {
             "mainnet" => ChainRegistry::default_mainnet(),
             "devnet" => ChainRegistry::default_testnet(),
@@ -436,17 +437,6 @@ impl AppState {
             ClientKeyRegistry::new()
         };
 
-        // Load revoked keys into RevocationStore.
-        let revoked_keys = if let Some(ref path) = config.revoked_keys_file {
-            let content = std::fs::read_to_string(path)
-                .unwrap_or_else(|e| panic!("failed to read REVOKED_KEYS_FILE at {path}: {e}"));
-            let keys: Vec<String> = serde_json::from_str(&content)
-                .unwrap_or_else(|e| panic!("failed to parse REVOKED_KEYS_FILE: {e}"));
-            RevocationStore::in_memory_with(keys.into_iter().collect())
-        } else {
-            RevocationStore::in_memory()
-        };
-
         // Load mTLS service registry.
         let mtls_registry = if let Some(ref path) = config.mtls_services_file {
             let content = std::fs::read_to_string(path)
@@ -469,15 +459,87 @@ impl AppState {
             );
         }
 
+        // Build backends based on SESSION_BACKEND config.
+        let (session_store, replay_cache, revoked_keys) = if config.session_backend == "redis" {
+            let redis_url = config.redis_url.as_ref().expect("REDIS_URL required");
+            let redis_client = crate::auth::redis_backend::RealRedisClient::connect(redis_url)
+                .await
+                .expect("failed to connect to Redis");
+
+            // Parse session encryption key.
+            let kek_hex = config
+                .session_encryption_key
+                .as_ref()
+                .expect("SESSION_ENCRYPTION_KEY required");
+            let kek_bytes = hex::decode(kek_hex).expect("SESSION_ENCRYPTION_KEY must be valid hex");
+            assert_eq!(
+                kek_bytes.len(),
+                32,
+                "SESSION_ENCRYPTION_KEY must be 32 bytes"
+            );
+            let mut kek = [0u8; 32];
+            kek.copy_from_slice(&kek_bytes);
+
+            // Redis session backend with encrypted keys.
+            let redis_arc = Arc::new(redis_client.clone());
+            let session_backend = Arc::new(crate::auth::session_redis::RedisSessionBackend::new(
+                redis_arc, kek,
+            ));
+            let session_store = SessionStore::with_backend(session_backend);
+
+            // Redis replay cache.
+            let replay_backend = Arc::new(crate::auth::redis_backend::RedisReplayBackend::new(
+                redis_client.conn.clone(),
+            ));
+            let replay_cache = ReplayCache::with_backend(replay_backend);
+
+            // Redis revocation store.
+            let revocation_backend = Arc::new(
+                crate::auth::redis_backend::RedisRevocationBackend::new(redis_client.conn.clone()),
+            );
+
+            // Load initial revoked keys from file into Redis.
+            if let Some(ref path) = config.revoked_keys_file {
+                let content = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("failed to read REVOKED_KEYS_FILE at {path}: {e}"));
+                let keys: Vec<String> = serde_json::from_str(&content)
+                    .unwrap_or_else(|e| panic!("failed to parse REVOKED_KEYS_FILE: {e}"));
+                revocation_backend
+                    .load_initial(&keys)
+                    .await
+                    .expect("failed to load revoked keys into Redis");
+            }
+            let revoked_keys_store = RevocationStore::with_backend(revocation_backend);
+
+            tracing::info!("using Redis backend for sessions, replay cache, and revocation");
+            (session_store, replay_cache, revoked_keys_store)
+        } else {
+            // In-memory backends (dev/test).
+            let revoked_keys_store = if let Some(ref path) = config.revoked_keys_file {
+                let content = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("failed to read REVOKED_KEYS_FILE at {path}: {e}"));
+                let keys: Vec<String> = serde_json::from_str(&content)
+                    .unwrap_or_else(|e| panic!("failed to parse REVOKED_KEYS_FILE: {e}"));
+                RevocationStore::in_memory_with(keys.into_iter().collect())
+            } else {
+                RevocationStore::in_memory()
+            };
+            (
+                SessionStore::in_memory(),
+                ReplayCache::in_memory(),
+                revoked_keys_store,
+            )
+        };
+
         Self {
             chain_registry: Arc::new(chain_registry),
             jwt_validator: Arc::new(jwt_validator),
             server_signing_key: Arc::new(server_signing_key),
-            session_store: SessionStore::in_memory(),
+            session_store,
             client_registry: Arc::new(client_registry),
             revoked_keys,
-            replay_cache: ReplayCache::in_memory(),
-            handshake_limiter: RateLimiter::new(10), // 10 req/sec per key
+            replay_cache,
+            handshake_limiter: RateLimiter::new(10),
             mtls_registry: Arc::new(mtls_registry),
             session_ttl: config.session_ttl,
             metrics: Arc::new(metrics),
@@ -590,7 +652,7 @@ mod tests {
     #[tokio::test]
     async fn test_app_state_is_key_revoked() {
         let config = AppConfig::for_test();
-        let state = AppState::from_config(&config);
+        let state = AppState::from_config(&config).await;
         assert!(!state.is_key_revoked("nonexistent").await);
         state.revoke_key("k1".to_string()).await;
         assert!(state.is_key_revoked("k1").await);

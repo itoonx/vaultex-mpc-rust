@@ -35,6 +35,9 @@ tokio = { workspace = true }
 # Auth
 jsonwebtoken = { workspace = true }
 
+# Distributed storage
+redis = { workspace = true }
+
 # Crypto — key exchange, signatures, AEAD
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }

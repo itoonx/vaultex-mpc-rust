@@ -42,7 +42,7 @@ mod helpers {
     /// Create AppState + Router for integration testing.
     pub async fn test_app() -> (axum::Router, mpc_wallet_api::state::AppState) {
         let config = mpc_wallet_api::config::AppConfig::for_test();
-        let state = mpc_wallet_api::state::AppState::from_config(&config);
+        let state = mpc_wallet_api::state::AppState::from_config(&config).await;
         let router = build_router(state.clone(), &[]);
         (router, state)
     }
@@ -953,7 +953,8 @@ async fn test_refresh_expired_session_fails() {
 async fn test_refresh_valid_session_extends_ttl() {
     let state = mpc_wallet_api::state::AppState::from_config(
         &mpc_wallet_api::config::AppConfig::for_test(),
-    );
+    )
+    .await;
 
     let (session_token, _) = handshake_via_http(&state).await;
 
@@ -1262,7 +1263,7 @@ async fn test_revoked_keys_endpoint_public() {
 async fn test_revoked_key_cannot_handshake() {
     // Create state with a revoked key.
     let config = mpc_wallet_api::config::AppConfig::for_test();
-    let state = mpc_wallet_api::state::AppState::from_config(&config);
+    let state = mpc_wallet_api::state::AppState::from_config(&config).await;
 
     let client_key = gen_ed25519_key();
     let client_key_id = hex::encode(&client_key.verifying_key().to_bytes()[..8]);
@@ -1295,7 +1296,7 @@ async fn test_session_refresh_revokes_on_key_revocation() {
     // Create a valid session, then simulate key revocation,
     // and verify refresh fails + session is revoked.
     let config = mpc_wallet_api::config::AppConfig::for_test();
-    let state = mpc_wallet_api::state::AppState::from_config(&config);
+    let state = mpc_wallet_api::state::AppState::from_config(&config).await;
 
     let client_key = gen_ed25519_key();
     let client_key_id = hex::encode(&client_key.verifying_key().to_bytes()[..8]);

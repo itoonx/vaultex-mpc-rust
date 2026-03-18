@@ -24,7 +24,7 @@ async fn main() {
         .init();
 
     let config = AppConfig::from_env();
-    let state = AppState::from_config(&config);
+    let state = AppState::from_config(&config).await;
 
     // Start background session pruning (every 60s).
     state.session_store.spawn_prune_task();
@@ -68,7 +68,7 @@ mod tests {
 
     async fn test_state() -> AppState {
         let config = AppConfig::for_test();
-        AppState::from_config(&config)
+        AppState::from_config(&config).await
     }
 
     async fn test_router() -> Router {
