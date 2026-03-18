@@ -130,9 +130,10 @@ vault_api() {
 cmd_down() {
   step "Tearing down"
   stop_gateway
+  stop_nodes
   $DC down -v 2>/dev/null || true
   rm -f "$PID_FILE"
-  log "All containers and volumes removed."
+  log "All containers, nodes, and volumes removed."
 }
 
 cmd_status() {
@@ -151,6 +152,20 @@ cmd_status() {
   echo "  NATS:    $nats_ok"
   echo "  Gateway: $gw_ok"
 
+  # Node status
+  for i in 1 2 3; do
+    if [ -f "$NODE_PID_DIR/node-${i}.pid" ]; then
+      local npid; npid=$(cat "$NODE_PID_DIR/node-${i}.pid")
+      if kill -0 "$npid" 2>/dev/null; then
+        echo "  Node $i:  running (PID: $npid)"
+      else
+        echo "  Node $i:  stopped"
+      fi
+    else
+      echo "  Node $i:  not started"
+    fi
+  done
+
   if [ -f "$PID_FILE" ]; then
     local pid; pid=$(cat "$PID_FILE")
     if kill -0 "$pid" 2>/dev/null; then
@@ -164,9 +179,11 @@ cmd_logs() {
 }
 
 cmd_restart_gw() {
-  step "Rebuilding gateway"
+  step "Rebuilding gateway + nodes"
   stop_gateway
-  build_gateway
+  stop_nodes
+  build_binaries
+  start_nodes
   start_gateway
   smoke_test
 }
@@ -239,16 +256,67 @@ provision_vault() {
   log "AppRole ready (role_id=${APPROLE_ROLE_ID:0:8}...)"
 }
 
-build_gateway() {
-  step "Building API gateway (${CARGO_PROFILE:-release})"
+build_binaries() {
+  step "Building Gateway + MPC Node (${CARGO_PROFILE:-release})"
 
   local profile="${CARGO_PROFILE:-release}"
   if [ "$profile" = "debug" ]; then
-    cargo build -p mpc-wallet-api 2>&1 | tail -3
+    cargo build -p mpc-wallet-api -p mpc-wallet-node 2>&1 | tail -3
   else
-    cargo build --release -p mpc-wallet-api 2>&1 | tail -3
+    cargo build --release -p mpc-wallet-api -p mpc-wallet-node 2>&1 | tail -3
   fi
   log "Build complete"
+}
+
+NODE_PID_DIR="/tmp/mpc-wallet-nodes"
+
+stop_nodes() {
+  if [ -d "$NODE_PID_DIR" ]; then
+    for f in "$NODE_PID_DIR"/*.pid; do
+      [ -f "$f" ] || continue
+      local pid
+      pid=$(cat "$f")
+      kill "$pid" 2>/dev/null || true
+    done
+    rm -rf "$NODE_PID_DIR"
+  fi
+  pkill -f "target/.*/mpc-node" 2>/dev/null || true
+}
+
+start_nodes() {
+  step "Starting 3 MPC nodes"
+  stop_nodes
+  mkdir -p "$NODE_PID_DIR"
+
+  local profile="${CARGO_PROFILE:-release}"
+  local binary="./target/${profile}/mpc-node"
+  [ -f "$binary" ] || err "Binary not found: $binary"
+
+  for i in 1 2 3; do
+    local key_dir="/tmp/mpc-node-${i}-keys"
+    mkdir -p "$key_dir"
+
+    # Generate deterministic signing key per node (for dev — production uses Vault)
+    local signing_key
+    signing_key=$(printf "%02x" "$i" | head -c2)
+    signing_key=$(printf "${signing_key}%.0s" {1..32})
+
+    PARTY_ID="$i" \
+    NATS_URL="nats://127.0.0.1:${NATS_CLIENT_PORT:-4222}" \
+    KEY_STORE_DIR="$key_dir" \
+    KEY_STORE_PASSWORD="dev-password-local-test" \
+    NODE_SIGNING_KEY="$signing_key" \
+    RUST_LOG="mpc_wallet_node=info" \
+      "$binary" &
+
+    local pid=$!
+    echo "$pid" > "$NODE_PID_DIR/node-${i}.pid"
+    log "MPC Node $i started (PID: $pid, key_dir: $key_dir)"
+  done
+
+  # Give nodes time to connect to NATS
+  sleep 2
+  log "All 3 MPC nodes started"
 }
 
 start_gateway() {
@@ -269,6 +337,7 @@ start_gateway() {
   SESSION_BACKEND="${SESSION_BACKEND:-redis}" \
   SESSION_TTL="${SESSION_TTL:-3600}" \
   REDIS_URL="redis://127.0.0.1:${REDIS_PORT:-6379}" \
+  NATS_URL="nats://127.0.0.1:${NATS_CLIENT_PORT:-4222}" \
   PORT="${GATEWAY_PORT:-3000}" \
   RATE_LIMIT_RPS="${RATE_LIMIT_RPS:-100}" \
   RUST_LOG="${RUST_LOG:-mpc_wallet_api=info}" \
@@ -306,7 +375,10 @@ print_summary() {
   printf "  %-10s %s\n" "Vault"    "${VAULT_ADDR}  (UI: ${VAULT_ADDR}/ui, token: ${VAULT_DEV_TOKEN:-dev-root-token})"
   printf "  %-10s %s\n" "Redis"    "redis://127.0.0.1:${REDIS_PORT:-6379}"
   printf "  %-10s %s\n" "NATS"     "${NATS_URL}  (monitor: http://127.0.0.1:${NATS_MONITOR_PORT:-8222})"
-  printf "  %-10s %s\n" "Gateway"  "${GATEWAY_URL}  (PID: ${pid})"
+  printf "  %-10s %s\n" "Node 1"   "PID: $(cat $NODE_PID_DIR/node-1.pid 2>/dev/null || echo '?')  (party_id=1, coordinator)"
+  printf "  %-10s %s\n" "Node 2"   "PID: $(cat $NODE_PID_DIR/node-2.pid 2>/dev/null || echo '?')  (party_id=2)"
+  printf "  %-10s %s\n" "Node 3"   "PID: $(cat $NODE_PID_DIR/node-3.pid 2>/dev/null || echo '?')  (party_id=3)"
+  printf "  %-10s %s\n" "Gateway"  "${GATEWAY_URL}  (PID: ${pid}, orchestrator mode)"
   echo ""
   echo "  Vault secrets: ${VAULT_MOUNT:-secret}/${VAULT_SECRETS_PATH:-mpc-wallet/gateway}"
   echo ""
@@ -335,7 +407,8 @@ cmd_up() {
 
   start_containers
   provision_vault
-  build_gateway
+  build_binaries
+  start_nodes
   start_gateway
   smoke_test
   print_summary

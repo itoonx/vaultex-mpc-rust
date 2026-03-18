@@ -24,7 +24,22 @@ async fn main() {
         .init();
 
     let config = AppConfig::from_env_with_vault().await;
-    let state = AppState::from_config(&config).await;
+    let mut state = AppState::from_config(&config).await;
+
+    // Connect MPC orchestrator to NATS if NATS_URL is configured.
+    if let Ok(nats_url) = std::env::var("NATS_URL") {
+        match mpc_wallet_api::orchestrator::MpcOrchestrator::connect(&nats_url).await {
+            Ok(orch) => {
+                state.orchestrator = orch;
+                tracing::info!("MPC orchestrator connected to NATS — distributed mode active");
+            }
+            Err(e) => {
+                tracing::warn!("MPC orchestrator NATS connect failed: {e} — keygen/sign will fail");
+            }
+        }
+    } else {
+        tracing::warn!("NATS_URL not set — MPC keygen/sign operations will fail");
+    }
 
     // Start background session pruning (every 60s).
     state.session_store.spawn_prune_task();
