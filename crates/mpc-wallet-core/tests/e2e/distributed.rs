@@ -224,8 +224,9 @@ async fn test_distributed_keygen_3_nodes() {
         }));
     }
 
-    // Give nodes time to subscribe
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Give nodes time to connect to NATS + subscribe to control channel.
+    // CI runners are slower — 200ms is not enough, use 2s.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Orchestrator publishes keygen request
     let nats = async_nats::connect(&url).await.unwrap();
@@ -248,7 +249,7 @@ async fn test_distributed_keygen_3_nodes() {
 
     // Collect 3 responses (with timeout)
     let mut responses = Vec::new();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     while responses.len() < 3 {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         match tokio::time::timeout(remaining, reply_sub.next()).await {
@@ -375,7 +376,7 @@ async fn test_distributed_keygen_then_sign() {
         .unwrap();
 
     let mut keygen_responses = Vec::new();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     while keygen_responses.len() < 3 {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         match tokio::time::timeout(remaining, reply_sub.next()).await {
@@ -448,7 +449,7 @@ async fn test_distributed_keygen_then_sign() {
 
     // Collect sign responses
     let mut coordinator_sig: Option<MpcSignature> = None;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut received = 0;
     while received < 2 {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
