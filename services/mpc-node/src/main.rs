@@ -141,7 +141,7 @@ async fn main() {
     tokio::select! {
         _ = handle_keygen_requests(keygen_sub, config.clone(), key_store.clone(), nats.clone()) => {}
         _ = handle_sign_requests(sign_sub, config.clone(), key_store.clone(), nats.clone()) => {}
-        _ = handle_freeze_requests(freeze_sub, key_store.clone()) => {}
+        _ = handle_freeze_requests(freeze_sub, config.clone(), key_store.clone(), nats.clone()) => {}
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("shutting down");
         }
@@ -176,13 +176,16 @@ async fn handle_keygen_requests(
         let config = config.clone();
         let key_store = key_store.clone();
         let nats = nats.clone();
+        let reply_to = msg.reply.clone();
 
         tokio::spawn(async move {
             let response = execute_keygen(&req, &config, &key_store).await;
-
-            // Publish response on reply channel
-            let reply_subject = format!("mpc.control.keygen.{}.reply", req.group_id);
             let payload = serde_json::to_vec(&response).unwrap();
+
+            // Use NATS request-reply: respond to the inbox from the request message.
+            // Falls back to legacy reply subject for backward compatibility.
+            let reply_subject = reply_to
+                .unwrap_or_else(|| format!("mpc.control.keygen.{}.reply", req.group_id).into());
             if let Err(e) = nats.publish(reply_subject, payload.into()).await {
                 tracing::error!("failed to publish keygen response: {e}");
             }
@@ -235,8 +238,10 @@ async fn execute_keygen(
     };
 
     // Connect to NATS with signed envelope for this session
+    // Use nats_url from control message if provided, otherwise fall back to config
+    let transport_url = req.nats_url.as_deref().unwrap_or(&config.nats_url);
     let mut transport = match NatsTransport::connect_signed(
-        "nats://127.0.0.1:4222", // TODO: use config.nats_url from control message
+        transport_url,
         config.party_id,
         req.session_id.clone(),
         config.signing_key.clone(),
@@ -358,12 +363,16 @@ async fn handle_sign_requests(
         let config = config.clone();
         let key_store = key_store.clone();
         let nats = nats.clone();
+        let reply_to = msg.reply.clone();
 
         tokio::spawn(async move {
             let response = execute_sign(&req, &config, &key_store).await;
-
-            let reply_subject = format!("mpc.control.sign.{}.reply", req.group_id);
             let payload = serde_json::to_vec(&response).unwrap();
+
+            // Use NATS request-reply: respond to the inbox from the request message.
+            // Falls back to legacy reply subject for backward compatibility.
+            let reply_subject = reply_to
+                .unwrap_or_else(|| format!("mpc.control.sign.{}.reply", req.group_id).into());
             if let Err(e) = nats.publish(reply_subject, payload.into()).await {
                 tracing::error!("failed to publish sign response: {e}");
             }
@@ -451,8 +460,10 @@ async fn execute_sign(
     };
 
     // Connect to NATS for this signing session
+    // Use nats_url from control message if provided, otherwise fall back to config
+    let transport_url = req.nats_url.as_deref().unwrap_or(&config.nats_url);
     let mut transport = match NatsTransport::connect_signed(
-        "nats://127.0.0.1:4222", // TODO: use config.nats_url from control message
+        transport_url,
         config.party_id,
         req.session_id.clone(),
         config.signing_key.clone(),
@@ -527,7 +538,9 @@ async fn execute_sign(
 
 async fn handle_freeze_requests(
     mut sub: async_nats::Subscriber,
+    config: Arc<NodeConfig>,
     key_store: Arc<EncryptedFileStore>,
+    nats: Arc<async_nats::Client>,
 ) {
     use futures::StreamExt;
 
@@ -547,16 +560,36 @@ async fn handle_freeze_requests(
             key_store.unfreeze(&group_id).await
         };
 
-        match result {
-            Ok(()) => tracing::info!(
-                group_id = %req.group_id,
-                frozen = req.freeze,
-                "freeze/unfreeze complete"
-            ),
-            Err(e) => tracing::error!(
-                group_id = %req.group_id,
-                "freeze/unfreeze failed: {e}"
-            ),
+        let (success, error) = match &result {
+            Ok(()) => {
+                tracing::info!(
+                    group_id = %req.group_id,
+                    frozen = req.freeze,
+                    "freeze/unfreeze complete"
+                );
+                (true, None)
+            }
+            Err(e) => {
+                tracing::error!(
+                    group_id = %req.group_id,
+                    "freeze/unfreeze failed: {e}"
+                );
+                (false, Some(e.to_string()))
+            }
+        };
+
+        // Send acknowledgment via NATS request-reply if reply inbox is present
+        if let Some(reply) = msg.reply {
+            let response = FreezeResponse {
+                party_id: config.party_id.0,
+                group_id: req.group_id.clone(),
+                success,
+                error,
+            };
+            let payload = serde_json::to_vec(&response).unwrap();
+            if let Err(e) = nats.publish(reply, payload.into()).await {
+                tracing::error!("failed to publish freeze response: {e}");
+            }
         }
     }
 }

@@ -244,6 +244,7 @@ async fn test_distributed_keygen_3_nodes() {
         total_parties: 3,
         session_id,
         peer_keys,
+        nats_url: Some(url.clone()),
     };
 
     let subject = rpc::keygen_subject(&group_id);
@@ -372,6 +373,7 @@ async fn test_distributed_keygen_then_sign() {
         total_parties: 3,
         session_id: keygen_session,
         peer_keys: peer_keys.clone(),
+        nats_url: Some(url.clone()),
     };
     let payload = serde_json::to_vec(&keygen_req).unwrap();
     nats.publish(rpc::keygen_subject(&group_id), payload.into())
@@ -444,6 +446,7 @@ async fn test_distributed_keygen_then_sign() {
         session_id: sign_session,
         peer_keys: sign_peer_keys,
         sign_authorization: "{}".into(),
+        nats_url: Some(url.clone()),
     };
     let payload = serde_json::to_vec(&sign_req).unwrap();
     nats.publish(rpc::sign_subject(&group_id), payload.into())

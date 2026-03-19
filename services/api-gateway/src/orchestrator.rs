@@ -117,6 +117,12 @@ impl MpcOrchestrator {
             })
             .collect();
 
+        // Include the NATS URL so nodes know where to connect for protocol transport
+        let nats_url = self
+            .nats
+            .as_ref()
+            .map(|_| "nats://127.0.0.1:4222".to_string()); // TODO: pass actual URL from config
+
         let request = rpc::KeygenRequest {
             group_id: group_id.clone(),
             label: label.clone(),
@@ -125,21 +131,22 @@ impl MpcOrchestrator {
             total_parties,
             session_id,
             peer_keys,
+            nats_url,
         };
 
-        // Subscribe to reply channel BEFORE publishing request
-        let reply_subject = rpc::keygen_reply_subject(&group_id);
-        let mut reply_sub =
-            self.nats()?.subscribe(reply_subject).await.map_err(|e| {
-                mpc_wallet_core::error::CoreError::Transport(format!("subscribe: {e}"))
-            })?;
+        // Use NATS request-reply: create an inbox, subscribe to it, then publish
+        // with reply set to the inbox. Nodes respond to the inbox directly.
+        // This eliminates the subscribe-before-publish timing issue.
+        let nats = self.nats()?;
+        let inbox = nats.new_inbox();
+        let mut reply_sub = nats.subscribe(inbox.clone()).await.map_err(|e| {
+            mpc_wallet_core::error::CoreError::Transport(format!("subscribe inbox: {e}"))
+        })?;
 
-        // Publish keygen request to control channel
         let subject = rpc::keygen_subject(&group_id);
         let payload = serde_json::to_vec(&request)
             .map_err(|e| mpc_wallet_core::error::CoreError::Serialization(e.to_string()))?;
-        self.nats()?
-            .publish(subject, payload.into())
+        nats.publish_with_reply(subject, inbox, payload.into())
             .await
             .map_err(|e| mpc_wallet_core::error::CoreError::Transport(format!("publish: {e}")))?;
 
@@ -288,6 +295,12 @@ impl MpcOrchestrator {
             })
             .collect();
 
+        // Include the NATS URL so nodes know where to connect for protocol transport
+        let nats_url = self
+            .nats
+            .as_ref()
+            .map(|_| "nats://127.0.0.1:4222".to_string()); // TODO: pass actual URL from config
+
         let request = rpc::SignRequest {
             group_id: group_id.to_string(),
             message_hex: hex::encode(message),
@@ -295,21 +308,21 @@ impl MpcOrchestrator {
             session_id,
             peer_keys,
             sign_authorization: sign_authorization_json.to_string(),
+            nats_url,
         };
 
-        // Subscribe to reply BEFORE publishing
-        let reply_subject = rpc::sign_reply_subject(group_id);
-        let mut reply_sub =
-            self.nats()?.subscribe(reply_subject).await.map_err(|e| {
-                mpc_wallet_core::error::CoreError::Transport(format!("subscribe: {e}"))
-            })?;
+        // Use NATS request-reply: create an inbox, subscribe to it, then publish
+        // with reply set to the inbox. Eliminates timing issues.
+        let nats = self.nats()?;
+        let inbox = nats.new_inbox();
+        let mut reply_sub = nats.subscribe(inbox.clone()).await.map_err(|e| {
+            mpc_wallet_core::error::CoreError::Transport(format!("subscribe inbox: {e}"))
+        })?;
 
-        // Publish sign request
         let subject = rpc::sign_subject(group_id);
         let payload = serde_json::to_vec(&request)
             .map_err(|e| mpc_wallet_core::error::CoreError::Serialization(e.to_string()))?;
-        self.nats()?
-            .publish(subject, payload.into())
+        nats.publish_with_reply(subject, inbox, payload.into())
             .await
             .map_err(|e| mpc_wallet_core::error::CoreError::Transport(format!("publish: {e}")))?;
 
@@ -380,7 +393,7 @@ impl MpcOrchestrator {
             wallet.frozen = freeze;
         }
 
-        // Publish freeze request to nodes
+        // Publish freeze request to nodes using request-reply for acknowledgment
         let request = rpc::FreezeRequest {
             group_id: group_id.to_string(),
             freeze,
@@ -389,7 +402,33 @@ impl MpcOrchestrator {
         let payload = serde_json::to_vec(&request)
             .map_err(|e| mpc_wallet_core::error::CoreError::Serialization(e.to_string()))?;
         if let Ok(nats) = self.nats() {
-            let _ = nats.publish(subject, payload.into()).await;
+            // Use request() for single-response freeze acknowledgment.
+            // Timeout after 10s — freeze is a fast operation.
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                nats.request(subject, payload.into()),
+            )
+            .await
+            {
+                Ok(Ok(msg)) => {
+                    if let Ok(resp) = serde_json::from_slice::<rpc::FreezeResponse>(&msg.payload) {
+                        if !resp.success {
+                            tracing::warn!(
+                                group_id = %group_id,
+                                "node {} freeze failed: {}",
+                                resp.party_id,
+                                resp.error.unwrap_or_default()
+                            );
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(group_id = %group_id, "freeze request error: {e}");
+                }
+                Err(_) => {
+                    tracing::warn!(group_id = %group_id, "freeze request timed out");
+                }
+            }
         }
 
         Ok(())
