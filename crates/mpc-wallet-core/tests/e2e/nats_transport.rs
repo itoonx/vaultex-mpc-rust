@@ -66,7 +66,11 @@ async fn test_nats_signed_message_round_trip() {
     };
     sender.send(msg).await.unwrap();
 
-    let received = recv_handle.await.unwrap().expect("recv timed out after 30s").unwrap();
+    let received = recv_handle
+        .await
+        .unwrap()
+        .expect("recv timed out after 30s")
+        .unwrap();
     assert_eq!(received.from, PartyId(1));
     assert_eq!(received.round, 1);
     assert_eq!(received.payload, b"hello from party 1");
