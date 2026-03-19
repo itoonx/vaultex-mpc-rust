@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
 
 jobs:
   fmt:
@@ -22,8 +25,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  clippy:
-    name: Clippy lint
+  # Single build job that compiles once, shares artifacts with downstream jobs
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,40 +37,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-workspace"
-      - name: Run clippy
+          # Cache the gateway binary for E2E job
+          cache-targets: true
+
+      # Clippy (compiles everything as a side effect)
+      - name: Clippy lint
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  test:
-    name: Test suite
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "rust-workspace"
+      # Tests (reuses clippy compilation — near-zero compile time)
       - name: Run tests
-        run: cargo test --workspace
-        # NOTE: gg20-simulation feature is intentionally NOT enabled (LESSON-011)
+        run: cargo test --workspace --features local-transport
+
+      # Build gateway binary (reuses test compilation)
+      - name: Build gateway
+        run: cargo build -p mpc-wallet-api
+
+      # Upload gateway binary for E2E job
+      - name: Upload gateway binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-binary
+          path: target/debug/mpc-wallet-api
+          retention-days: 1
+
+      # Upload test binary for E2E job
+      - name: Upload E2E test binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-binary
+          path: target/debug/deps/e2e_tests-*
+          retention-days: 1
 
   audit:
     name: Security audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Use pre-built cargo-audit from GitHub Action (no compile from source)
+      - uses: rustsec/audit-check@v2.0.0
         with:
-          shared-key: "rust-workspace"
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run audit
-        run: cargo audit
+          token: ${{ github.token }}
 
   e2e:
     name: E2E tests (Vault + Redis + NATS)
     runs-on: ubuntu-latest
-    needs: [test] # only run E2E if unit tests pass
+    needs: [build]
     services:
       vault:
         image: hashicorp/vault:1.15
@@ -124,9 +139,12 @@ jobs:
           curl -sf "$VAULT_ADDR/v1/secret/data/mpc-wallet/gateway" \
             -H "X-Vault-Token: $VAULT_TOKEN" | jq '.data.data | keys'
 
-      # Debug build (3-5x faster than release — E2E doesn't need optimization)
-      - name: Build gateway
-        run: cargo build -p mpc-wallet-api
+      # Download pre-built gateway binary (no recompilation!)
+      - name: Download gateway binary
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-binary
+          path: ./bin
 
       - name: Start gateway
         env:
@@ -140,7 +158,8 @@ jobs:
           PORT: "3000"
           RUST_LOG: mpc_wallet_api=info
         run: |
-          ./target/debug/mpc-wallet-api &
+          chmod +x ./bin/mpc-wallet-api
+          ./bin/mpc-wallet-api &
           echo $! > /tmp/gateway.pid
           for i in $(seq 1 15); do
             if curl -sf http://127.0.0.1:3000/v1/health > /dev/null 2>&1; then
@@ -153,7 +172,6 @@ jobs:
             sleep 1
           done
 
-      # Run ALL E2E tests including distributed (request-reply eliminates timing issues)
       - name: Run E2E tests
         timeout-minutes: 10
         env:
@@ -161,9 +179,6 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379
           GATEWAY_URL: http://127.0.0.1:3000
         run: |
-          # All E2E tests: full_flow + chain_signing + distributed (NATS request-reply)
-          # --features local-transport needed because integration tests are external crates
-          # (cfg(test) only applies to unit tests inside the crate)
+          # Compile E2E tests (cache should make this fast)
           cargo test -p mpc-wallet-core --test e2e_tests --features local-transport -- --ignored --test-threads=1 --skip test_nats_keygen_gg20_2of3 --skip test_nats_sign_gg20_direct
-          # Kill gateway so the job can exit
           kill $(cat /tmp/gateway.pid) 2>/dev/null || true
