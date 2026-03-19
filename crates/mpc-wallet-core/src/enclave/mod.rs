@@ -12,11 +12,6 @@
 
 pub mod attestation;
 pub mod mock;
-//! - **Phase 2 (future):** `GramineEnclaveProvider` — real SGX via Gramine framework.
-//!
-//! ## Design
-//!
-//! See `docs/SGX_DESIGN.md` for the full enclave design document (DEC-017).
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -56,6 +51,10 @@ pub struct AttestationReport {
     /// Security version number. Must be monotonically increasing to
     /// prevent rollback to older (potentially vulnerable) enclave versions.
     pub isv_svn: u16,
+
+    /// Unix timestamp (seconds since epoch) when the report was generated.
+    /// Used by [`attestation::AttestationVerifier`] for freshness checking.
+    pub timestamp: u64,
 
     /// User-defined data bound to this attestation (64 bytes in SGX).
     /// Typically: `SHA-256(session_id || node_pubkey || timestamp)`.

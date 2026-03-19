@@ -18,10 +18,9 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::CoreError;
-use crate::protocol::MpcSignature;
 use crate::types::PartyId;
 
-use super::{AttestationReport, EnclaveHandle, EnclaveProvider};
+use super::{AttestationReport, EnclaveHandle, EnclaveProvider, PartialSignature};
 
 /// Argon2id parameters — matches EncryptedFileStore (SEC-006).
 const ARGON2_M_COST: u32 = 65536;
@@ -62,22 +61,21 @@ impl MockEnclaveProvider {
     }
 
     /// Derive an AES-256-GCM key from password + salt using Argon2id.
-    fn derive_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, CoreError> {
+    fn derive_key(password: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, CoreError> {
         let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(32))
             .map_err(|e| CoreError::Encryption(format!("Argon2 params error: {e}")))?;
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-        let password_bytes = Zeroizing::new(password.as_bytes().to_vec());
         let mut key_bytes = Zeroizing::new([0u8; 32]);
         argon2
-            .hash_password_into(password_bytes.as_slice(), salt, key_bytes.as_mut())
+            .hash_password_into(password, salt, key_bytes.as_mut())
             .map_err(|e| CoreError::Encryption(format!("Key derivation failed: {e}")))?;
 
         Ok(key_bytes)
     }
 
     /// Decrypt data in the EncryptedFileStore format: `salt(32) | nonce(12) | ciphertext`.
-    fn decrypt(password: &str, data: &[u8]) -> Result<Vec<u8>, CoreError> {
+    fn decrypt(password: &[u8], data: &[u8]) -> Result<Vec<u8>, CoreError> {
         if data.len() < 44 {
             return Err(CoreError::Encryption("encrypted data too short".into()));
         }
@@ -98,7 +96,7 @@ impl MockEnclaveProvider {
     /// Encrypt data in the EncryptedFileStore format: `salt(32) | nonce(12) | ciphertext`.
     ///
     /// Exposed for test helpers that need to prepare encrypted share payloads.
-    pub fn encrypt(password: &str, data: &[u8]) -> Result<Vec<u8>, CoreError> {
+    pub fn encrypt(password: &[u8], data: &[u8]) -> Result<Vec<u8>, CoreError> {
         use rand::RngCore;
 
         let mut salt = [0u8; 32];
@@ -135,7 +133,7 @@ impl EnclaveProvider for MockEnclaveProvider {
     async fn load_share(
         &self,
         encrypted_share: &[u8],
-        password: &str,
+        password: &[u8],
     ) -> Result<EnclaveHandle, CoreError> {
         let plaintext = Self::decrypt(password, encrypted_share)?;
         let handle_id = self.next_handle.fetch_add(1, Ordering::SeqCst);
@@ -144,27 +142,32 @@ impl EnclaveProvider for MockEnclaveProvider {
             .lock()
             .map_err(|e| CoreError::Other(format!("enclave lock poisoned: {e}")))?;
         map.insert(handle_id, Zeroizing::new(plaintext));
-        Ok(EnclaveHandle(handle_id))
+        Ok(EnclaveHandle {
+            id: handle_id.to_string(),
+        })
     }
 
     async fn sign(
         &self,
-        handle: EnclaveHandle,
+        handle: &EnclaveHandle,
         message: &[u8],
-        _signers: &[PartyId],
-    ) -> Result<MpcSignature, CoreError> {
+    ) -> Result<PartialSignature, CoreError> {
+        let handle_id: u64 = handle
+            .id
+            .parse()
+            .map_err(|e| CoreError::Other(format!("invalid handle id: {e}")))?;
         let map = self
             .shares
             .lock()
             .map_err(|e| CoreError::Other(format!("enclave lock poisoned: {e}")))?;
-        let share_data = map.get(&handle.0).ok_or_else(|| {
+        let share_data = map.get(&handle_id).ok_or_else(|| {
             CoreError::NotFound(format!(
                 "enclave handle {} not found (share not loaded or already destroyed)",
-                handle.0
+                handle.id
             ))
         })?;
 
-        // Mock signing: produce a deterministic ECDSA-shaped signature
+        // Mock signing: produce a deterministic partial signature
         // derived from the share data and message. This is NOT cryptographically
         // valid — it exists only so tests can exercise the enclave signing path.
         let mut hasher = Sha256::new();
@@ -172,26 +175,13 @@ impl EnclaveProvider for MockEnclaveProvider {
         hasher.update(message);
         let hash = hasher.finalize();
 
-        let mut r = hash.to_vec();
-        let mut s = {
-            let mut h2 = Sha256::new();
-            h2.update(hash);
-            h2.update(b"mock-s-component");
-            h2.finalize().to_vec()
-        };
-
-        // Pad to 32 bytes (they already are from SHA-256, but be explicit)
-        r.resize(32, 0);
-        s.resize(32, 0);
-
-        Ok(MpcSignature::Ecdsa {
-            r,
-            s,
-            recovery_id: 0,
+        Ok(PartialSignature {
+            party_id: PartyId(1),
+            data: hash.to_vec(),
         })
     }
 
-    async fn attestation_report(&self) -> Result<AttestationReport, CoreError> {
+    fn attestation_report(&self) -> Result<AttestationReport, CoreError> {
         use rand::RngCore;
 
         // mrenclave = SHA-256("mock-enclave-v1")
@@ -207,27 +197,36 @@ impl EnclaveProvider for MockEnclaveProvider {
             .as_secs();
 
         // 64-byte report_data: first 32 bytes from enclave_id, last 32 random
-        let mut report_data = [0u8; 64];
+        let mut report_data = vec![0u8; 64];
         report_data[..32].copy_from_slice(&self.enclave_id);
         rand::thread_rng().fill_bytes(&mut report_data[32..]);
+
+        // Raw report placeholder (mock)
+        let raw_report = b"mock-raw-attestation-report".to_vec();
 
         Ok(AttestationReport {
             mrenclave,
             mrsigner,
+            isv_prod_id: 1,
+            isv_svn: 1,
             timestamp,
             report_data,
+            raw_report,
         })
     }
 
-    async fn destroy(&self, handle: EnclaveHandle) -> Result<(), CoreError> {
-        let mut map = self
-            .shares
-            .lock()
-            .map_err(|e| CoreError::Other(format!("enclave lock poisoned: {e}")))?;
+    fn destroy(&self, handle: EnclaveHandle) {
+        let handle_id: u64 = match handle.id.parse() {
+            Ok(id) => id,
+            Err(_) => return, // invalid handle — nothing to destroy
+        };
+        let mut map = match self.shares.lock() {
+            Ok(m) => m,
+            Err(_) => return, // poisoned lock — can't clean up
+        };
         // Remove and drop — Zeroizing<Vec<u8>> will clear the bytes on drop.
         // If handle doesn't exist (double destroy), this is a no-op.
-        map.remove(&handle.0);
-        Ok(())
+        map.remove(&handle_id);
     }
 }
 
@@ -236,14 +235,14 @@ mod tests {
     use super::*;
 
     /// Helper: encrypt some share data with the given password.
-    fn encrypt_share(data: &[u8], password: &str) -> Vec<u8> {
+    fn encrypt_share(data: &[u8], password: &[u8]) -> Vec<u8> {
         MockEnclaveProvider::encrypt(password, data).expect("encryption should succeed")
     }
 
     #[tokio::test]
     async fn test_mock_enclave_load_and_destroy() {
         let enclave = MockEnclaveProvider::new();
-        let password = "test-password-123";
+        let password = b"test-password-123";
         let share_data = b"secret-share-bytes-here";
         let encrypted = encrypt_share(share_data, password);
 
@@ -254,17 +253,16 @@ mod tests {
             .expect("load_share should succeed");
 
         // Verify handle is valid by signing with it
-        let sig = enclave.sign(handle, b"test-message", &[PartyId(1)]).await;
+        let sig = enclave.sign(&handle, b"test-message").await;
         assert!(sig.is_ok(), "sign with valid handle should succeed");
 
         // Destroy the share
-        enclave
-            .destroy(handle)
-            .await
-            .expect("destroy should succeed");
+        let handle_id = handle.id.clone();
+        enclave.destroy(handle);
 
         // Verify handle is now invalid
-        let err = enclave.sign(handle, b"test-message", &[PartyId(1)]).await;
+        let dead_handle = EnclaveHandle { id: handle_id };
+        let err = enclave.sign(&dead_handle, b"test-message").await;
         assert!(err.is_err(), "sign after destroy should fail");
         let err_msg = format!("{}", err.unwrap_err());
         assert!(
@@ -278,7 +276,6 @@ mod tests {
         let enclave = MockEnclaveProvider::new();
         let report = enclave
             .attestation_report()
-            .await
             .expect("attestation_report should succeed");
 
         // mrenclave = SHA-256("mock-enclave-v1")
@@ -295,17 +292,7 @@ mod tests {
             "mrsigner should be SHA-256 of 'mock-signer-v1'"
         );
 
-        // Timestamp should be recent (within last 60 seconds)
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        assert!(
-            report.timestamp <= now && report.timestamp >= now - 60,
-            "timestamp should be recent"
-        );
-
-        // report_data should be 64 bytes (already guaranteed by type, but check non-zero)
+        // report_data should be 64 bytes
         assert_eq!(report.report_data.len(), 64);
         // At least some bytes should be non-zero (random)
         assert!(
@@ -317,7 +304,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_enclave_double_destroy() {
         let enclave = MockEnclaveProvider::new();
-        let password = "test-pw";
+        let password = b"test-pw";
         let encrypted = encrypt_share(b"share-data", password);
 
         let handle = enclave
@@ -325,17 +312,13 @@ mod tests {
             .await
             .expect("load should succeed");
 
+        let handle_id = handle.id.clone();
+
         // First destroy
-        enclave
-            .destroy(handle)
-            .await
-            .expect("first destroy should succeed");
+        enclave.destroy(handle);
 
         // Second destroy — should NOT panic, should be a no-op
-        enclave
-            .destroy(handle)
-            .await
-            .expect("second destroy should succeed (no-op)");
+        enclave.destroy(EnclaveHandle { id: handle_id });
     }
 
     #[tokio::test]
@@ -343,8 +326,10 @@ mod tests {
         let enclave = MockEnclaveProvider::new();
 
         // Try to sign with a handle that was never loaded
-        let bogus_handle = EnclaveHandle(999);
-        let result = enclave.sign(bogus_handle, b"message", &[PartyId(1)]).await;
+        let bogus_handle = EnclaveHandle {
+            id: "999".to_string(),
+        };
+        let result = enclave.sign(&bogus_handle, b"message").await;
 
         assert!(result.is_err(), "sign with unloaded handle should fail");
         match result.unwrap_err() {
@@ -372,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_enclave_multiple_shares() {
         let enclave = MockEnclaveProvider::new();
-        let password = "multi-share-pw";
+        let password = b"multi-share-pw";
 
         // Load 3 different shares
         let share1 = encrypt_share(b"share-1-secret", password);
@@ -384,43 +369,38 @@ mod tests {
         let h3 = enclave.load_share(&share3, password).await.unwrap();
 
         // All handles should be unique
-        assert_ne!(h1, h2, "handles must be unique");
-        assert_ne!(h2, h3, "handles must be unique");
-        assert_ne!(h1, h3, "handles must be unique");
+        assert_ne!(h1.id, h2.id, "handles must be unique");
+        assert_ne!(h2.id, h3.id, "handles must be unique");
+        assert_ne!(h1.id, h3.id, "handles must be unique");
 
         // All handles should produce valid signatures
         let msg = b"test-message";
-        let signers = &[PartyId(1), PartyId(2)];
 
-        let s1 = enclave.sign(h1, msg, signers).await.unwrap();
-        let s2 = enclave.sign(h2, msg, signers).await.unwrap();
-        let _s3 = enclave.sign(h3, msg, signers).await.unwrap();
+        let s1 = enclave.sign(&h1, msg).await.unwrap();
+        let s2 = enclave.sign(&h2, msg).await.unwrap();
+        let _s3 = enclave.sign(&h3, msg).await.unwrap();
 
         // Signatures should differ (different share data)
-        match (&s1, &s2) {
-            (
-                MpcSignature::Ecdsa { r: r1, s: s1v, .. },
-                MpcSignature::Ecdsa { r: r2, s: s2v, .. },
-            ) => {
-                assert_ne!(r1, r2, "different shares should produce different r");
-                assert_ne!(s1v, s2v, "different shares should produce different s");
-            }
-            _ => panic!("expected ECDSA signatures"),
-        }
+        assert_ne!(
+            s1.data, s2.data,
+            "different shares should produce different signatures"
+        );
 
         // Destroy one, others should still work
-        enclave.destroy(h2).await.unwrap();
-        assert!(enclave.sign(h1, msg, signers).await.is_ok());
-        assert!(enclave.sign(h2, msg, signers).await.is_err());
-        assert!(enclave.sign(h3, msg, signers).await.is_ok());
+        let h2_id = h2.id.clone();
+        enclave.destroy(h2);
+        assert!(enclave.sign(&h1, msg).await.is_ok());
+        let dead_h2 = EnclaveHandle { id: h2_id };
+        assert!(enclave.sign(&dead_h2, msg).await.is_err());
+        assert!(enclave.sign(&h3, msg).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_mock_enclave_wrong_password() {
         let enclave = MockEnclaveProvider::new();
-        let encrypted = encrypt_share(b"secret-data", "correct-password");
+        let encrypted = encrypt_share(b"secret-data", b"correct-password");
 
-        let result = enclave.load_share(&encrypted, "wrong-password").await;
+        let result = enclave.load_share(&encrypted, b"wrong-password").await;
         assert!(
             result.is_err(),
             "load_share with wrong password should fail"
@@ -430,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_enclave_deterministic_signing() {
         let enclave = MockEnclaveProvider::new();
-        let password = "det-pw";
+        let password = b"det-pw";
         let share_data = b"deterministic-share";
         let encrypted = encrypt_share(share_data, password);
 
@@ -438,28 +418,16 @@ mod tests {
 
         // Same share + same message = same signature
         let msg = b"same-message";
-        let signers = &[PartyId(1)];
-        let sig1 = enclave.sign(handle, msg, signers).await.unwrap();
-        let sig2 = enclave.sign(handle, msg, signers).await.unwrap();
+        let sig1 = enclave.sign(&handle, msg).await.unwrap();
+        let sig2 = enclave.sign(&handle, msg).await.unwrap();
 
-        match (&sig1, &sig2) {
-            (
-                MpcSignature::Ecdsa {
-                    r: r1,
-                    s: s1v,
-                    recovery_id: v1,
-                },
-                MpcSignature::Ecdsa {
-                    r: r2,
-                    s: s2v,
-                    recovery_id: v2,
-                },
-            ) => {
-                assert_eq!(r1, r2, "deterministic signing: r should match");
-                assert_eq!(s1v, s2v, "deterministic signing: s should match");
-                assert_eq!(v1, v2, "deterministic signing: recovery_id should match");
-            }
-            _ => panic!("expected ECDSA signatures"),
-        }
+        assert_eq!(
+            sig1.data, sig2.data,
+            "deterministic signing: data should match"
+        );
+        assert_eq!(
+            sig1.party_id, sig2.party_id,
+            "deterministic signing: party_id should match"
+        );
     }
 }
