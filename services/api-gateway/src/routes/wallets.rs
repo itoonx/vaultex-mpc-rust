@@ -10,7 +10,9 @@ use axum::{
 };
 
 use mpc_wallet_core::protocol::MpcSignature;
+use mpc_wallet_core::protocol::sign_authorization::{AuthorizationPayload, SignAuthorization};
 use mpc_wallet_core::rbac::{ApiRole, AuthContext, Permissions};
+use sha2::{Digest, Sha256};
 
 use crate::errors::{ApiError, ErrorCode};
 use crate::models::request::{CreateWalletRequest, SignRequest};
@@ -198,12 +200,36 @@ pub async fn sign_message(
 
     state.metrics.sign_total.inc();
 
-    // TODO: Generate proper SignAuthorization with policy check + approval quorum
-    let sign_auth_json = "{}";
+    // Build SignAuthorization proof for MPC nodes to independently verify (DEC-012).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let message_hash = hex::encode(Sha256::digest(&message_bytes));
+    let policy_hash = hex::encode(Sha256::digest(b""));
+
+    let payload = AuthorizationPayload {
+        requester_id: ctx.user_id.clone(),
+        wallet_id: wallet_id.clone(),
+        message_hash,
+        policy_hash,
+        policy_passed: true, // TODO: wire real policy engine check
+        approval_count: 0,   // TODO: wire approval workflow
+        approval_required: 0,
+        approvers: vec![],
+        timestamp: now,
+        session_id: uuid::Uuid::new_v4().to_string(),
+        encrypted_context: None,
+    };
+
+    let sign_auth = SignAuthorization::create(payload, &state.server_signing_key);
+    let sign_auth_json = serde_json::to_string(&sign_auth)
+        .map_err(|e| ApiError::internal(format!("failed to serialize sign authorization: {e}")))?;
 
     let sig = state
         .orchestrator
-        .sign(&wallet_id, &message_bytes, sign_auth_json)
+        .sign(&wallet_id, &message_bytes, &sign_auth_json)
         .await
         .map_err(ApiError::from)?;
 
