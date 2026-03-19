@@ -7,7 +7,11 @@
 //!
 //! ## Implementations
 //!
-//! - **Phase 1 (Sprint 23):** Trait definition only. R1/R2 will provide implementations.
+//! - **Mock (Sprint 23):** [`mock::MockEnclaveProvider`] for testing without SGX hardware.
+//! - **Attestation:** [`attestation::AttestationVerifier`] for verifying enclave reports.
+
+pub mod attestation;
+pub mod mock;
 //! - **Phase 2 (future):** `GramineEnclaveProvider` — real SGX via Gramine framework.
 //!
 //! ## Design
