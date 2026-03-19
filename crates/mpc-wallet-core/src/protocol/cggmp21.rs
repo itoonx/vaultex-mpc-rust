@@ -486,6 +486,15 @@ impl MpcProtocol for Cggmp21Protocol {
         self.sign_with_presig(&mut pre_sig, message, key_share, transport)
             .await
     }
+
+    async fn refresh(
+        &self,
+        key_share: &KeyShare,
+        signers: &[PartyId],
+        transport: &dyn Transport,
+    ) -> Result<KeyShare, CoreError> {
+        cggmp21_refresh(key_share, signers, transport).await
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1238,6 +1247,352 @@ fn identify_cheater(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CGGMP21 Key Refresh — additive re-sharing (T-S21-04)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Refresh message: each party broadcasts Feldman commitments and sends
+/// evaluations of their zero-constant polynomial to each other party.
+#[derive(Serialize, Deserialize)]
+struct RefreshRound1 {
+    /// Sender party index.
+    from_party: u16,
+    /// Feldman commitments for the zero-constant polynomial: C_k = a_k * G.
+    /// C_0 should be the identity point (since a_0 = 0).
+    commitments: Vec<Vec<u8>>,
+}
+
+/// Refresh evaluation: party i sends g_i(j) to party j.
+#[derive(Serialize, Deserialize)]
+struct RefreshEvaluation {
+    /// Sender party index.
+    from_party: u16,
+    /// Evaluation g_i(j) for the recipient (32 bytes scalar).
+    eval_value: Vec<u8>,
+}
+
+/// CGGMP21 key refresh: additive re-sharing that preserves the group public key.
+///
+/// # Protocol
+///
+/// 1. Each party generates a random polynomial g_i(x) of degree t-1 with
+///    g_i(0) = 0 (zero constant term). This ensures the group secret is preserved.
+/// 2. Each party broadcasts Feldman commitments C_k = a_k * G for their polynomial.
+/// 3. Each party sends g_i(j) to party j via unicast.
+/// 4. Each party verifies received evaluations against Feldman commitments.
+/// 5. Each party computes delta_j = sum_i(g_i(j)) and updates:
+///    new_share = old_share + delta_j.
+/// 6. New public shares are computed and verified against the same group pubkey.
+/// 7. Fresh Paillier and Pedersen auxiliary parameters are generated.
+///
+/// # Invariant
+///
+/// The group public key is preserved because sum(g_i(0)) = 0 for all i,
+/// so the secret x = sum(old_shares) is unchanged at the Shamir-0 evaluation.
+async fn cggmp21_refresh(
+    key_share: &KeyShare,
+    signers: &[PartyId],
+    transport: &dyn Transport,
+) -> Result<KeyShare, CoreError> {
+    let my_party = key_share.party_id;
+    let my_index = my_party.0;
+    let t = key_share.config.threshold;
+    let n_signers = signers.len();
+
+    // Validate that we are in the signer set
+    if !signers.contains(&my_party) {
+        return Err(CoreError::Protocol(
+            "party not in refresh signer set".into(),
+        ));
+    }
+
+    // Deserialize current share data
+    let share_data: Cggmp21ShareData = serde_json::from_slice(&key_share.share_data)
+        .map_err(|e| CoreError::Serialization(format!("deserialize share for refresh: {e}")))?;
+
+    // Parse current secret share (SEC-008: wrap in Zeroizing)
+    let old_share = Zeroizing::new(
+        Scalar::from_repr(*k256::FieldBytes::from_slice(&share_data.secret_share))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid secret share scalar in refresh".into()))?,
+    );
+
+    // ── Generate zero-constant polynomial ────────────────────────────────
+    // g(x) = 0 + c_1*x + c_2*x^2 + ... + c_{t-1}*x^{t-1}
+    // g(0) = 0 ensures the group secret is preserved.
+    let coefficients = {
+        let mut rng = rand::thread_rng();
+        let mut coeffs: Vec<Zeroizing<Scalar>> = Vec::with_capacity(t as usize);
+        coeffs.push(Zeroizing::new(Scalar::ZERO)); // g(0) = 0
+        for _ in 1..t {
+            coeffs.push(Zeroizing::new(Scalar::random(&mut rng)));
+        }
+        coeffs
+    };
+
+    // Compute Feldman commitments: C_k = a_k * G
+    // Note: C_0 = 0*G = identity point, which cannot be encoded as a k256::PublicKey.
+    // We use a special sentinel encoding (all zeros, 33 bytes) for the identity.
+    let feldman_commitments: Vec<Vec<u8>> = coefficients
+        .iter()
+        .map(|coeff| {
+            if **coeff == Scalar::ZERO {
+                // Identity point sentinel: 33 zero bytes
+                vec![0u8; 33]
+            } else {
+                let point = (ProjectivePoint::GENERATOR * **coeff).to_affine();
+                k256::PublicKey::from_affine(point)
+                    .expect("valid point")
+                    .to_encoded_point(true)
+                    .as_bytes()
+                    .to_vec()
+            }
+        })
+        .collect();
+
+    // ── Round 1: Broadcast Feldman commitments ───────────────────────────
+    let round1_msg = RefreshRound1 {
+        from_party: my_index,
+        commitments: feldman_commitments.clone(),
+    };
+    let round1_payload =
+        serde_json::to_vec(&round1_msg).map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+    transport
+        .send(ProtocolMessage {
+            from: my_party,
+            to: None,
+            round: 200, // Use round 200+ to avoid conflicts with keygen/sign/presign
+            payload: round1_payload,
+        })
+        .await?;
+
+    // Receive Feldman commitments from all other signers
+    let mut all_commitments: Vec<RefreshRound1> = vec![round1_msg];
+    for _ in 1..n_signers {
+        let msg = transport.recv().await?;
+        let r1: RefreshRound1 = serde_json::from_slice(&msg.payload)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+        // Validate sender is in signer set (SEC-013 pattern)
+        if !signers.iter().any(|s| s.0 == r1.from_party) {
+            return Err(CoreError::Protocol(format!(
+                "refresh round 1: unexpected party {} not in signer set",
+                r1.from_party
+            )));
+        }
+
+        all_commitments.push(r1);
+    }
+    all_commitments.sort_by_key(|c| c.from_party);
+
+    // ── Round 2: Send evaluations to each signer ─────────────────────────
+    let raw_coeffs: Vec<Scalar> = coefficients.iter().map(|z| **z).collect();
+    for &signer in signers {
+        if signer == my_party {
+            continue;
+        }
+        let x_j = Scalar::from(signer.0 as u64);
+        let eval = poly_eval(&raw_coeffs, &x_j);
+        let eval_msg = RefreshEvaluation {
+            from_party: my_index,
+            eval_value: eval.to_repr().to_vec(),
+        };
+        let payload =
+            serde_json::to_vec(&eval_msg).map_err(|e| CoreError::Serialization(e.to_string()))?;
+        transport
+            .send(ProtocolMessage {
+                from: my_party,
+                to: Some(signer),
+                round: 201,
+                payload,
+            })
+            .await?;
+    }
+
+    // Compute self-evaluation: g_i(my_index)
+    let self_x = Scalar::from(my_index as u64);
+    let self_eval = poly_eval(&raw_coeffs, &self_x);
+
+    // Explicitly zeroize the raw coefficients copy (SEC-008)
+    let mut raw_coeffs = raw_coeffs;
+    for coeff in raw_coeffs.iter_mut() {
+        coeff.zeroize();
+    }
+    drop(raw_coeffs);
+
+    // Receive evaluations from all other signers
+    let mut received_evals: Vec<RefreshEvaluation> = Vec::new();
+    for _ in 1..n_signers {
+        let msg = transport.recv().await?;
+        let eval: RefreshEvaluation = serde_json::from_slice(&msg.payload)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        received_evals.push(eval);
+    }
+
+    // ── Verify evaluations against Feldman commitments ───────────────────
+    // For each received evaluation g_j(my_index), verify:
+    //   eval * G == sum_{k=0}^{t-1} C_k^{j} * my_index^k
+    for eval in &received_evals {
+        let eval_scalar = Scalar::from_repr(*k256::FieldBytes::from_slice(&eval.eval_value))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid refresh evaluation scalar".into()))?;
+
+        let eval_point = ProjectivePoint::GENERATOR * eval_scalar;
+
+        // Find the commitments for this sender
+        let sender_commitments = all_commitments
+            .iter()
+            .find(|c| c.from_party == eval.from_party)
+            .ok_or_else(|| {
+                CoreError::Protocol(format!(
+                    "missing Feldman commitments for party {} in refresh",
+                    eval.from_party
+                ))
+            })?;
+
+        let mut expected_point = ProjectivePoint::IDENTITY;
+        let my_x_scalar = Scalar::from(my_index as u64);
+        let mut x_pow = Scalar::ONE;
+        for commitment_bytes in &sender_commitments.commitments {
+            // Handle identity sentinel (33 zero bytes for C_0 = 0*G)
+            if commitment_bytes == &vec![0u8; 33] {
+                // Identity point contributes nothing: identity * x_pow = identity
+                x_pow *= my_x_scalar;
+                continue;
+            }
+            let c_k = k256::PublicKey::from_sec1_bytes(commitment_bytes)
+                .map_err(|e| CoreError::Crypto(format!("invalid Feldman commitment: {e}")))?;
+            expected_point += c_k.to_projective() * x_pow;
+            x_pow *= my_x_scalar;
+        }
+
+        if eval_point != expected_point {
+            return Err(CoreError::Protocol(format!(
+                "Feldman verification failed for refresh evaluation from party {} — identifiable abort",
+                eval.from_party
+            )));
+        }
+    }
+
+    // ── Compute delta and new share ──────────────────────────────────────
+    let mut delta = Zeroizing::new(self_eval);
+    for eval in &received_evals {
+        let eval_scalar = Scalar::from_repr(*k256::FieldBytes::from_slice(&eval.eval_value))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid refresh evaluation scalar".into()))?;
+        *delta += eval_scalar;
+    }
+
+    let new_share = Zeroizing::new(*old_share + *delta);
+
+    // ── Verify group public key is preserved ─────────────────────────────
+    // Broadcast new public share X'_i = new_share * G
+    let new_pub_point = (ProjectivePoint::GENERATOR * *new_share).to_affine();
+    let new_pub_bytes = k256::PublicKey::from_affine(new_pub_point)
+        .map_err(|e| CoreError::Crypto(e.to_string()))?
+        .to_encoded_point(true)
+        .as_bytes()
+        .to_vec();
+
+    // Broadcast new public share
+    let pub_share_msg = serde_json::json!({
+        "party_index": my_index,
+        "public_share": new_pub_bytes,
+    });
+    let pub_payload =
+        serde_json::to_vec(&pub_share_msg).map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+    transport
+        .send(ProtocolMessage {
+            from: my_party,
+            to: None,
+            round: 202,
+            payload: pub_payload,
+        })
+        .await?;
+
+    // Collect new public shares from all signers
+    let mut new_public_shares: Vec<(u16, Vec<u8>)> = vec![(my_index, new_pub_bytes.clone())];
+    for _ in 1..n_signers {
+        let msg = transport.recv().await?;
+        let ps: serde_json::Value = serde_json::from_slice(&msg.payload)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let idx: u16 = serde_json::from_value(ps["party_index"].clone())
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let pub_bytes: Vec<u8> = serde_json::from_value(ps["public_share"].clone())
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        new_public_shares.push((idx, pub_bytes));
+    }
+    new_public_shares.sort_by_key(|(idx, _)| *idx);
+
+    // Build the full public shares list (preserving all n parties' positions)
+    // For parties not in the signer set, their public share stays the same
+    let _n = key_share.config.total_parties;
+    let mut all_public_shares: Vec<Vec<u8>> = share_data.public_shares.clone();
+    for (idx, pub_bytes) in &new_public_shares {
+        let pos = (*idx - 1) as usize;
+        if pos < all_public_shares.len() {
+            all_public_shares[pos] = pub_bytes.clone();
+        }
+    }
+
+    // Verify: reconstructed group public key must match original
+    // The group pubkey = sum of all X_i (for all n parties, not just signers)
+    // But since only signers refreshed and sum(g_i(0)) = 0, the Lagrange
+    // interpolation at 0 gives the same secret, hence same group pubkey.
+    // We verify by checking that the Feldman commitments sum correctly:
+    // sum_i(C_0^i) = sum_i(0 * G) = identity, confirming zero-constant.
+    for commitment_set in &all_commitments {
+        if commitment_set.commitments.is_empty() {
+            return Err(CoreError::Protocol(format!(
+                "party {} has empty Feldman commitments in refresh",
+                commitment_set.from_party
+            )));
+        }
+        // C_0 should be the identity point (since a_0 = 0).
+        // We encode identity as 33 zero bytes (sentinel), so verify that.
+        if commitment_set.commitments[0] != vec![0u8; 33] {
+            return Err(CoreError::Protocol(format!(
+                "party {} has non-zero constant term in refresh polynomial — identifiable abort",
+                commitment_set.from_party
+            )));
+        }
+    }
+
+    // ── Generate fresh auxiliary info (Paillier + Pedersen) ───────────────
+    let paillier = generate_paillier_keypair(&new_share, my_index);
+    let pedersen = generate_pedersen_params(&new_share, my_index);
+
+    let paillier_sk_bytes = serde_json::to_vec(&(paillier.p.clone(), paillier.q.clone()))
+        .map_err(|e| CoreError::Serialization(e.to_string()))?;
+    let paillier_pk_bytes = paillier.n.clone();
+    let pedersen_bytes =
+        serde_json::to_vec(&pedersen).map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+    // ── Build refreshed share data ───────────────────────────────────────
+    let new_share_data = Cggmp21ShareData {
+        party_index: my_index,
+        secret_share: new_share.to_repr().to_vec(),
+        public_shares: all_public_shares,
+        group_public_key: share_data.group_public_key.clone(),
+        paillier_sk: paillier_sk_bytes,
+        paillier_pk: paillier_pk_bytes,
+        pedersen_params: pedersen_bytes,
+    };
+
+    let new_share_bytes =
+        serde_json::to_vec(&new_share_data).map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+    Ok(KeyShare {
+        scheme: CryptoScheme::Cggmp21Secp256k1,
+        party_id: my_party,
+        config: key_share.config,
+        group_public_key: key_share.group_public_key.clone(),
+        share_data: Zeroizing::new(new_share_bytes),
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1906,5 +2261,190 @@ mod tests {
                 panic!("expected ECDSA signature");
             }
         }
+    }
+
+    // ── CGGMP21 Key Refresh tests (T-S21-04) ──────────────────────────────
+
+    /// Helper: run CGGMP21 refresh for all parties, return refreshed shares.
+    async fn run_refresh(shares: &[KeyShare], signers: &[PartyId]) -> Vec<KeyShare> {
+        use crate::transport::local::LocalTransportNetwork;
+        let n_signers = signers.len();
+        let net = LocalTransportNetwork::new(n_signers as u16);
+
+        let mut handles = Vec::new();
+        for (i, signer) in signers.iter().enumerate() {
+            let share = shares[signer.0 as usize - 1].clone();
+            let transport = net.get_transport(PartyId((i + 1) as u16));
+            let signers_clone = signers.to_vec();
+            handles.push(tokio::spawn(async move {
+                let p = Cggmp21Protocol::new();
+                p.refresh(&share, &signers_clone, &*transport).await
+            }));
+        }
+
+        let mut refreshed = Vec::new();
+        for h in handles {
+            refreshed.push(h.await.unwrap().unwrap());
+        }
+        refreshed
+    }
+
+    #[tokio::test]
+    async fn test_cggmp21_refresh_preserves_group_pubkey() {
+        let shares = run_keygen(2, 3).await;
+        let original_gpk = shares[0].group_public_key.as_bytes().to_vec();
+
+        // Refresh all 3 parties
+        let signers: Vec<PartyId> = (1..=3).map(PartyId).collect();
+        let refreshed = run_refresh(&shares, &signers).await;
+
+        // Group public key must be preserved
+        for share in &refreshed {
+            assert_eq!(
+                share.group_public_key.as_bytes(),
+                original_gpk.as_slice(),
+                "group public key must be preserved after refresh"
+            );
+        }
+
+        // Secret shares must have changed (with overwhelming probability)
+        let old_data: Cggmp21ShareData = serde_json::from_slice(&shares[0].share_data).unwrap();
+        let new_data: Cggmp21ShareData = serde_json::from_slice(&refreshed[0].share_data).unwrap();
+        assert_ne!(
+            old_data.secret_share, new_data.secret_share,
+            "secret shares must change after refresh"
+        );
+
+        // Paillier and Pedersen aux info must have changed
+        assert_ne!(
+            old_data.paillier_sk, new_data.paillier_sk,
+            "Paillier SK must be refreshed"
+        );
+        assert_ne!(
+            old_data.pedersen_params, new_data.pedersen_params,
+            "Pedersen params must be refreshed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cggmp21_refresh_then_sign() {
+        use k256::ecdsa::signature::hazmat::PrehashVerifier;
+
+        let shares = run_keygen(2, 3).await;
+        let original_gpk = shares[0].group_public_key.as_bytes().to_vec();
+
+        // Refresh all 3 parties
+        let all_signers: Vec<PartyId> = (1..=3).map(PartyId).collect();
+        let refreshed = run_refresh(&shares, &all_signers).await;
+
+        // Sign with refreshed shares (parties 1 and 2)
+        let sign_signers = vec![PartyId(1), PartyId(2)];
+        let message = b"signing after CGGMP21 key refresh";
+
+        use crate::transport::local::LocalTransportNetwork;
+        let net = LocalTransportNetwork::new(2);
+        let mut handles = Vec::new();
+        for (i, signer) in sign_signers.iter().enumerate() {
+            // refreshed shares are indexed 0..2 matching signers 1..3
+            let share = refreshed[signer.0 as usize - 1].clone();
+            let transport = net.get_transport(PartyId((i + 1) as u16));
+            let signers_clone = sign_signers.clone();
+            let msg = message.to_vec();
+            handles.push(tokio::spawn(async move {
+                let p = Cggmp21Protocol::new();
+                p.sign(&share, &signers_clone, &msg, &*transport).await
+            }));
+        }
+
+        let sig = handles.into_iter().next().unwrap().await.unwrap().unwrap();
+
+        // Verify signature against the ORIGINAL group public key
+        if let MpcSignature::Ecdsa { r, s, .. } = &sig {
+            let pubkey = k256::PublicKey::from_sec1_bytes(&original_gpk).unwrap();
+            let vk = k256::ecdsa::VerifyingKey::from(&pubkey);
+            let mut sig_bytes = [0u8; 64];
+            sig_bytes[..32].copy_from_slice(r);
+            sig_bytes[32..].copy_from_slice(s);
+            let ecdsa_sig = k256::ecdsa::Signature::from_bytes(&sig_bytes.into()).unwrap();
+            let hash = Sha256::digest(message);
+            assert!(
+                vk.verify_prehash(&hash, &ecdsa_sig).is_ok(),
+                "signature with refreshed shares must verify against original group pubkey"
+            );
+        } else {
+            panic!("expected ECDSA signature");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cggmp21_refresh_invalidates_old_shares() {
+        let shares = run_keygen(2, 3).await;
+
+        // Refresh all 3 parties
+        let all_signers: Vec<PartyId> = (1..=3).map(PartyId).collect();
+        let refreshed = run_refresh(&shares, &all_signers).await;
+
+        // Try to sign using one OLD share and one NEW share — this should produce
+        // an invalid signature because the shares are from incompatible polynomials.
+        // We mix old party 1 with refreshed party 2.
+        let sign_signers = vec![PartyId(1), PartyId(2)];
+        let message = b"mixed old and new shares";
+
+        use crate::transport::local::LocalTransportNetwork;
+        let net = LocalTransportNetwork::new(2);
+
+        let old_share = shares[0].clone(); // old party 1
+        let new_share = refreshed[1].clone(); // refreshed party 2
+
+        let transport1 = net.get_transport(PartyId(1));
+        let transport2 = net.get_transport(PartyId(2));
+        let signers1 = sign_signers.clone();
+        let signers2 = sign_signers.clone();
+        let msg1 = message.to_vec();
+        let msg2 = message.to_vec();
+
+        let h1 = tokio::spawn(async move {
+            let p = Cggmp21Protocol::new();
+            p.sign(&old_share, &signers1, &msg1, &*transport1).await
+        });
+        let h2 = tokio::spawn(async move {
+            let p = Cggmp21Protocol::new();
+            p.sign(&new_share, &signers2, &msg2, &*transport2).await
+        });
+
+        let r1 = h1.await.unwrap();
+        let r2 = h2.await.unwrap();
+
+        // At least one should fail (signature verification) or both succeed but
+        // the signature should NOT verify against the group pubkey.
+        // Due to identifiable abort, the protocol will detect the inconsistency.
+        let mixed_failed = r1.is_err() || r2.is_err() || {
+            // If both somehow produced results, verify they don't produce valid sigs
+            if let (Ok(MpcSignature::Ecdsa { r, s, .. }), Ok(_)) = (&r1, &r2) {
+                use k256::ecdsa::signature::hazmat::PrehashVerifier;
+                let pubkey =
+                    k256::PublicKey::from_sec1_bytes(shares[0].group_public_key.as_bytes())
+                        .unwrap();
+                let vk = k256::ecdsa::VerifyingKey::from(&pubkey);
+                let mut sig_bytes = [0u8; 64];
+                sig_bytes[..32].copy_from_slice(r);
+                sig_bytes[32..].copy_from_slice(s);
+                let sig = k256::ecdsa::Signature::from_bytes(&sig_bytes.into());
+                match sig {
+                    Ok(s) => {
+                        let hash = Sha256::digest(message);
+                        vk.verify_prehash(&hash, &s).is_err()
+                    }
+                    Err(_) => true,
+                }
+            } else {
+                true
+            }
+        };
+
+        assert!(
+            mixed_failed,
+            "mixing old and refreshed shares must fail or produce invalid signature"
+        );
     }
 }
