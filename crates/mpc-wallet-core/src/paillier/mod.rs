@@ -13,6 +13,7 @@
 //! The Pifac proof rejects any N with a factor smaller than 2^256.
 
 pub mod keygen;
+pub mod mta;
 pub mod zk_proofs;
 
 use num_bigint::BigUint;
