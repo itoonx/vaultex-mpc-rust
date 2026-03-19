@@ -30,7 +30,8 @@ use std::sync::RwLock;
 use crate::error::CoreError;
 use crate::policy::evaluator::{evaluate, EvalResult};
 pub use crate::policy::schema::{
-    ChainPolicy, Policy, PolicyTemplate, SignedPolicy, POLICY_SCHEMA_VERSION,
+    ChainPolicy, Policy, PolicyRule, PolicyRuleSet, PolicyTemplate, SignedPolicy,
+    MAX_POLICY_RULE_DEPTH, POLICY_SCHEMA_VERSION,
 };
 
 /// In-memory store for the active signing policy.
