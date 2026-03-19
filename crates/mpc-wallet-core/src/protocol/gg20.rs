@@ -293,10 +293,12 @@ async fn distributed_keygen(
 
     if party_id == PartyId(1) {
         // ── Dealer: all scalar work before first .await ───────────────────
-        let secret = Scalar::random(&mut rand::thread_rng());
+        // SEC-008 FIX: wrap dealer secret in Zeroizing so it is wiped after
+        // Shamir splitting completes.
+        let secret = Zeroizing::new(Scalar::random(&mut rand::thread_rng()));
 
         // Compute group public key = x · G (compressed 33-byte SEC1).
-        let public_point = (ProjectivePoint::GENERATOR * secret).to_affine();
+        let public_point = (ProjectivePoint::GENERATOR * *secret).to_affine();
         let public_key = k256::PublicKey::from_affine(public_point)
             .map_err(|e| CoreError::Crypto(e.to_string()))?;
         let group_pubkey_bytes = public_key.to_encoded_point(true).as_bytes().to_vec();
@@ -417,9 +419,13 @@ async fn distributed_sign(
     let my_share: Gg20ShareData = serde_json::from_slice(&share_data_copy)
         .map_err(|e| CoreError::Serialization(e.to_string()))?;
 
-    let shamir_y = Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
-        .into_option()
-        .ok_or_else(|| CoreError::Crypto("invalid Shamir share scalar".into()))?;
+    // SEC-008 FIX: wrap secret-derived scalars in Zeroizing to ensure they are
+    // wiped from memory after signing completes.
+    let shamir_y = Zeroizing::new(
+        Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid Shamir share scalar".into()))?,
+    );
 
     // Compute the Lagrange coefficient λ_i for our party in the actual signer set.
     // This turns our Shamir share into an additive share: x_i_add = λ_i · f(i).
@@ -428,7 +434,8 @@ async fn distributed_sign(
 
     // Additive share: x_i_add = λ_i · f(i).
     // The full key x = Σ x_i_add is NEVER computed.
-    let x_i_add = lambda_i * shamir_y;
+    // SEC-008 FIX: x_i_add is zeroized on drop (wrapping in Zeroizing).
+    let x_i_add = Zeroizing::new(lambda_i * *shamir_y);
 
     let is_coordinator = key_share.party_id == PartyId(1);
     let coordinator = PartyId(1);
@@ -508,7 +515,7 @@ async fn distributed_sign(
     //
     // Key security property: this is one scalar multiply on our LOCAL additive
     // share.  The full key x = Σ x_i_add is NEVER computed.
-    let s_partial = x_i_add * r_scalar * k_inv_scalar;
+    let s_partial = *x_i_add * r_scalar * k_inv_scalar;
 
     let round2_payload = serde_json::to_vec(&serde_json::json!({
         "type": "gg20_dist_round2",
@@ -659,9 +666,12 @@ async fn distributed_refresh(
     let my_share: Gg20ShareData = serde_json::from_slice(&share_data_copy)
         .map_err(|e| CoreError::Serialization(format!("deserialize share for refresh: {e}")))?;
 
-    let old_y = Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
-        .into_option()
-        .ok_or_else(|| CoreError::Crypto("invalid Shamir share scalar in refresh".into()))?;
+    // SEC-008 FIX: wrap share scalar in Zeroizing.
+    let old_y = Zeroizing::new(
+        Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid Shamir share scalar in refresh".into()))?,
+    );
 
     // Generate random polynomial g(x) with g(0) = 0, degree t-1.
     // Coefficients: [0, c_1, c_2, ..., c_{t-1}]
@@ -715,7 +725,7 @@ async fn distributed_refresh(
     }
 
     // Compute new share: s'_j = s_j + delta_j
-    let new_y = old_y + delta;
+    let new_y = *old_y + delta;
 
     // Build new Gg20ShareData with updated share value, same x-coordinate.
     let new_share_data = Gg20ShareData {
@@ -810,23 +820,29 @@ async fn distributed_reshare(
         let my_share: Gg20ShareData = serde_json::from_slice(&share_data_copy)
             .map_err(|e| CoreError::Serialization(format!("deserialize share for reshare: {e}")))?;
 
-        let shamir_y = Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
-            .into_option()
-            .ok_or_else(|| CoreError::Crypto("invalid Shamir share scalar in reshare".into()))?;
+        // SEC-008 FIX: wrap secret-derived scalars in Zeroizing.
+        let shamir_y = Zeroizing::new(
+            Scalar::from_repr(*k256::FieldBytes::from_slice(&my_share.y))
+                .into_option()
+                .ok_or_else(|| {
+                    CoreError::Crypto("invalid Shamir share scalar in reshare".into())
+                })?,
+        );
 
         // Compute Lagrange coefficient for our party in the old signer set.
         let old_indices: Vec<u16> = old_signers.iter().map(|p| p.0).collect();
         let lambda_i = lagrange_coefficient(my_share.x, &old_indices)?;
 
         // Additive share: x_i = lambda_i * f(i), where sum(x_i) = x.
-        let x_i = lambda_i * shamir_y;
+        // SEC-008 FIX: x_i is zeroized on drop.
+        let x_i = Zeroizing::new(lambda_i * *shamir_y);
 
         // Generate new polynomial g_i of degree (t_new - 1) with g_i(0) = x_i.
         let t_new = new_config.threshold;
         let coefficients = {
             let mut rng = rand::thread_rng();
             let mut coeffs = Vec::with_capacity(t_new as usize);
-            coeffs.push(x_i); // g_i(0) = x_i (our additive share)
+            coeffs.push(*x_i); // g_i(0) = x_i (our additive share)
             for _ in 1..t_new {
                 coeffs.push(Scalar::random(&mut rng));
             }
@@ -907,8 +923,9 @@ async fn simulation_keygen(
     use k256::elliptic_curve::sec1::ToEncodedPoint;
 
     if party_id == PartyId(1) {
-        let secret = Scalar::random(&mut rand::thread_rng());
-        let public_point = (ProjectivePoint::GENERATOR * secret).to_affine();
+        // SEC-008 FIX: wrap dealer secret in Zeroizing.
+        let secret = Zeroizing::new(Scalar::random(&mut rand::thread_rng()));
+        let public_point = (ProjectivePoint::GENERATOR * *secret).to_affine();
         let public_key = k256::PublicKey::from_affine(public_point)
             .map_err(|e| CoreError::Crypto(e.to_string()))?;
         let uncompressed = public_key.to_encoded_point(false);
@@ -1035,10 +1052,12 @@ async fn simulation_sign(
     }
 
     // ⚠️ SECURITY: SIMULATION ONLY — reconstructs full private key.
-    let secret = lagrange_interpolate(&collected_shares);
+    // SEC-008 FIX: wrap the reconstructed secret scalar in Zeroizing so it is
+    // wiped from memory as soon as signing completes.
+    let secret = Zeroizing::new(lagrange_interpolate(&collected_shares));
 
-    let secret_key =
-        SecretKey::from_bytes(&secret.to_repr()).map_err(|e| CoreError::Crypto(e.to_string()))?;
+    let secret_key = SecretKey::from_bytes(&secret.to_repr())
+        .map_err(|e| CoreError::Crypto(e.to_string()))?;
     let signing_key = k256::ecdsa::SigningKey::from(secret_key);
 
     use k256::ecdsa::signature::Signer;
