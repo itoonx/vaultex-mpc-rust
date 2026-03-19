@@ -95,7 +95,7 @@ git commit -m "[R{N}] complete: {task summary}"
 
 ---
 
-## Current State (as of Sprint 20 — CGGMP21 signing complete, CI green)
+## Current State (as of Sprint 21 — CGGMP21 integration complete, Milestone 2 DONE)
 
 ### Auth System (3 methods, Redis-ready)
 
@@ -197,7 +197,7 @@ Gateway (creates proof)    →    MPC Node (verifies before sign)
 
 ### Tests on `main`
 ```
-572 tests pass (cargo test --workspace) + 16 E2E (--ignored, need live infra)
+623 tests pass (cargo test --workspace) + 16 E2E (--ignored, need live infra)
 cargo fmt        clean
 cargo clippy     clean (0 warnings, -D warnings)
 cargo audit      clean (.cargo/audit.toml ignores unmaintained transitive deps)
@@ -218,8 +218,17 @@ CI pipeline      ALL GREEN (fmt + clippy + test + audit + E2E)
 - **Sprint 18:** COMPLETE — Control plane hardening (SEC-026 signed control messages, AuthorizationCache replay dedup, 5 hardening integration tests, R6 audit APPROVED)
 - **Sprint 19:** COMPLETE — CGGMP21 Foundation (CryptoScheme::Cggmp21Secp256k1, Feldman VSS keygen, Paillier+Pedersen aux info, 12 new protocol tests)
 - **Sprint 20:** COMPLETE — CGGMP21 Signing (pre-signing phase, online 1-round signing, identifiable abort, low-s normalization, 7 new signing tests)
+- **Sprint 21:** COMPLETE — CGGMP21 Integration (key refresh, 50 chains wired, 32 protocol tests, R6 audit APPROVED)
 
-**All 10 epics: 100% COMPLETE | Milestone 1: COMPLETE | Milestone 2 (CGGMP21): IN PROGRESS (Sprint 21 remaining)**
+**All 10 epics: 100% COMPLETE | Milestone 1: COMPLETE | Milestone 2 (CGGMP21): COMPLETE**
+
+### New in Sprint 21
+- CGGMP21 key refresh: additive re-sharing preserves group pubkey + fresh Paillier/Pedersen aux info (R1)
+- All 50 secp256k1 chains wired: `ChainRegistry::compatible_schemes()` maps chains to [Gg20, Cggmp21] (R3)
+- 17 chain integration tests verifying CGGMP21 Ecdsa sigs work with EVM, UTXO, TRON, Cosmos (R3)
+- 32 CGGMP21 protocol integration tests: keygen, signing, pre-signing, abort, cross-protocol (R5)
+- R6 audit: APPROVED — 2 MEDIUM (MtA simulation expected), 3 LOW, 5 INFO (SEC-034..SEC-043)
+- CI fix: E2E tests now pass `--features local-transport` (SEC-014 integration test compatibility)
 
 ### New in Sprint 20
 - CGGMP21 pre-signing: offline batchable phase producing `PreSignature` (k_i, chi_i, big_r)
