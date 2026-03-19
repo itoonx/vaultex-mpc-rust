@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use async_trait::async_trait;
 use frost_ed25519 as frost;
@@ -41,6 +41,24 @@ fn party_to_identifier(party: PartyId) -> Result<frost::Identifier, CoreError> {
         .map_err(|e| CoreError::Protocol(format!("invalid party id for FROST: {e}")))
 }
 
+/// SEC-013 FIX: Validate that `msg.from` is in the expected set of parties.
+///
+/// **Trust boundary:** The transport layer (SignedEnvelope in NatsTransport)
+/// cryptographically verifies sender identity via Ed25519 signatures and
+/// monotonic sequence numbers (SEC-007). This check is a defense-in-depth
+/// measure ensuring the self-reported `from` field matches a party we
+/// expect in the protocol, preventing a compromised-but-authenticated peer
+/// from injecting messages for a party ID it does not own.
+fn validate_sender(msg: &crate::transport::ProtocolMessage, expected: &HashSet<PartyId>) -> Result<(), CoreError> {
+    if !expected.contains(&msg.from) {
+        return Err(CoreError::Protocol(format!(
+            "FROST: unexpected sender party {} — not in expected set",
+            msg.from.0
+        )));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl MpcProtocol for FrostEd25519Protocol {
     fn scheme(&self) -> CryptoScheme {
@@ -54,6 +72,12 @@ impl MpcProtocol for FrostEd25519Protocol {
         transport: &dyn Transport,
     ) -> Result<KeyShare, CoreError> {
         let my_id = party_to_identifier(party_id)?;
+
+        // SEC-013 FIX: build expected peer set for `from` field validation in keygen.
+        let expected_keygen_peers: HashSet<PartyId> = (1..=config.total_parties)
+            .filter(|&p| PartyId(p) != party_id)
+            .map(PartyId)
+            .collect();
 
         // === Round 1: Generate and broadcast round1 packages ===
         let (round1_secret, round1_bytes) = {
@@ -82,6 +106,8 @@ impl MpcProtocol for FrostEd25519Protocol {
             BTreeMap::new();
         for _ in 0..(config.total_parties - 1) {
             let msg = transport.recv().await?;
+            // SEC-013 FIX: validate sender is an expected keygen participant.
+            validate_sender(&msg, &expected_keygen_peers)?;
             let pkg: frost::keys::dkg::round1::Package = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
             let from_id = party_to_identifier(msg.from)?;
@@ -128,6 +154,8 @@ impl MpcProtocol for FrostEd25519Protocol {
             BTreeMap::new();
         for _ in 0..(config.total_parties - 1) {
             let msg = transport.recv().await?;
+            // SEC-013 FIX: validate sender is an expected keygen participant.
+            validate_sender(&msg, &expected_keygen_peers)?;
             let pkg: frost::keys::dkg::round2::Package = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
             let from_id = party_to_identifier(msg.from)?;
@@ -180,6 +208,12 @@ impl MpcProtocol for FrostEd25519Protocol {
         let my_id = party_to_identifier(party_id)?;
         let config = key_share.config;
 
+        // SEC-013 FIX: build expected peer set for `from` field validation in refresh.
+        let expected_refresh_peers: HashSet<PartyId> = (1..=config.total_parties)
+            .filter(|&p| PartyId(p) != party_id)
+            .map(PartyId)
+            .collect();
+
         // Deserialize current key package and pubkey package
         let share_data: FrostEd25519ShareData = serde_json::from_slice(&key_share.share_data)
             .map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -220,6 +254,8 @@ impl MpcProtocol for FrostEd25519Protocol {
             BTreeMap::new();
         for _ in 0..(config.total_parties - 1) {
             let msg = transport.recv().await?;
+            // SEC-013 FIX: validate sender is an expected refresh participant.
+            validate_sender(&msg, &expected_refresh_peers)?;
             let pkg: frost::keys::dkg::round1::Package = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
             let from_id = party_to_identifier(msg.from)?;
@@ -266,6 +302,8 @@ impl MpcProtocol for FrostEd25519Protocol {
             BTreeMap::new();
         for _ in 0..(config.total_parties - 1) {
             let msg = transport.recv().await?;
+            // SEC-013 FIX: validate sender is an expected refresh participant.
+            validate_sender(&msg, &expected_refresh_peers)?;
             let pkg: frost::keys::dkg::round2::Package = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
             let from_id = party_to_identifier(msg.from)?;
@@ -353,6 +391,13 @@ impl MpcProtocol for FrostEd25519Protocol {
 
         let my_id = party_to_identifier(key_share.party_id)?;
 
+        // SEC-013 FIX: build expected signer set for `from` field validation.
+        let expected_peers: HashSet<PartyId> = signers
+            .iter()
+            .copied()
+            .filter(|&p| p != key_share.party_id)
+            .collect();
+
         // === Round 1: Generate nonces and commitments ===
         let (nonces, commitments, commit_bytes) = {
             let mut rng = rand::thread_rng();
@@ -380,6 +425,8 @@ impl MpcProtocol for FrostEd25519Protocol {
 
         for _ in 0..(signers.len() - 1) {
             let msg = transport.recv().await?;
+            // SEC-013 FIX: validate sender is an expected signer.
+            validate_sender(&msg, &expected_peers)?;
             let their_commitments: frost::round1::SigningCommitments =
                 serde_json::from_slice(&msg.payload)
                     .map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -411,6 +458,8 @@ impl MpcProtocol for FrostEd25519Protocol {
 
         for _ in 0..(signers.len() - 1) {
             let msg = transport.recv().await?;
+            // SEC-013 FIX: validate sender is an expected signer.
+            validate_sender(&msg, &expected_peers)?;
             let their_share: frost::round2::SignatureShare =
                 serde_json::from_slice(&msg.payload)
                     .map_err(|e| CoreError::Serialization(e.to_string()))?;
