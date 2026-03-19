@@ -2,12 +2,13 @@
 //!
 //! Shared by both `services/api-gateway` and `services/mpc-node`.
 //!
-//! # Control channels
+//! # Control channels (NATS Request-Reply)
 //! - `mpc.control.keygen.{group_id}` — keygen ceremony coordination
 //! - `mpc.control.sign.{group_id}` — sign request with SignAuthorization
 //! - `mpc.control.freeze.{group_id}` — freeze/unfreeze key group
-//! - `mpc.control.keygen.{group_id}.reply` — keygen responses from nodes
-//! - `mpc.control.sign.{group_id}.reply` — sign responses from nodes
+//!
+//! Responses use NATS request-reply pattern (msg.reply inbox) instead of
+//! separate `.reply` subjects, eliminating subscribe-before-publish timing issues.
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,10 @@ pub struct KeygenRequest {
     pub session_id: String,
     /// Ed25519 verifying keys of ALL parties.
     pub peer_keys: Vec<PeerKeyEntry>,
+    /// NATS URL for MPC protocol transport (separate from control plane).
+    /// Nodes use this to connect for the actual MPC protocol rounds.
+    #[serde(default)]
+    pub nats_url: Option<String>,
 }
 
 /// Response from a node after keygen completes.
@@ -57,6 +62,10 @@ pub struct SignRequest {
     pub peer_keys: Vec<PeerKeyEntry>,
     /// JSON-serialized SignAuthorization proof from gateway.
     pub sign_authorization: String,
+    /// NATS URL for MPC protocol transport (separate from control plane).
+    /// Nodes use this to connect for the actual MPC protocol rounds.
+    #[serde(default)]
+    pub nats_url: Option<String>,
 }
 
 /// Response from a signing node.
@@ -95,6 +104,8 @@ pub fn keygen_subject(group_id: &str) -> String {
     format!("mpc.control.keygen.{group_id}")
 }
 
+/// Deprecated: use NATS request-reply pattern (msg.reply inbox) instead.
+/// Kept for backward compatibility with existing E2E tests.
 pub fn keygen_reply_subject(group_id: &str) -> String {
     format!("mpc.control.keygen.{group_id}.reply")
 }
@@ -103,6 +114,8 @@ pub fn sign_subject(group_id: &str) -> String {
     format!("mpc.control.sign.{group_id}")
 }
 
+/// Deprecated: use NATS request-reply pattern (msg.reply inbox) instead.
+/// Kept for backward compatibility with existing E2E tests.
 pub fn sign_reply_subject(group_id: &str) -> String {
     format!("mpc.control.sign.{group_id}.reply")
 }
