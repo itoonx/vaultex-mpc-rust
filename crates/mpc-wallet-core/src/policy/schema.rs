@@ -171,6 +171,86 @@ impl PolicyTemplate {
     }
 }
 
+/// Maximum allowed nesting depth for recursive policy rules.
+pub const MAX_RULE_DEPTH: usize = 10;
+
+/// Current policy rule schema version for [`PolicyRuleSet`].
+pub const POLICY_RULE_SCHEMA_VERSION: u32 = 2;
+
+/// A recursive policy rule for the v2 Policy DSL.
+///
+/// Rules can be composed using `And`, `Or`, and `Not` combinators to build
+/// arbitrarily complex (up to [`MAX_RULE_DEPTH`]) policy expressions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum PolicyRule {
+    /// All sub-rules must evaluate to `true`.
+    And { rules: Vec<PolicyRule> },
+    /// At least one sub-rule must evaluate to `true`.
+    Or { rules: Vec<PolicyRule> },
+    /// The inner rule must evaluate to `false`.
+    Not { rule: Box<PolicyRule> },
+    /// Destination address must be in the allowlist (case-insensitive).
+    AllowlistCheck { addresses: Vec<String> },
+    /// Transaction amount must be at most `max_amount`.
+    AmountLimit { max_amount: u64 },
+    /// Cumulative spend (existing + proposed) must not exceed `max_amount`.
+    VelocityLimit { max_amount: u64 },
+    /// Current UTC hour must fall within `[start_hour, end_hour)`.
+    TimeWindow { start_hour: u8, end_hour: u8 },
+    /// Approval count must be at least `min_approvals`.
+    RequireApprovals { min_approvals: u32 },
+    /// Chain identifier must match exactly.
+    ChainMatch { chain: String },
+}
+
+impl PolicyRule {
+    /// Compute the nesting depth of this rule tree.
+    ///
+    /// Leaf rules have depth 1. `And`/`Or`/`Not` add 1 to the max child depth.
+    pub fn depth(&self) -> usize {
+        match self {
+            PolicyRule::And { rules } | PolicyRule::Or { rules } => {
+                1 + rules.iter().map(|r| r.depth()).max().unwrap_or(0)
+            }
+            PolicyRule::Not { rule } => 1 + rule.depth(),
+            _ => 1,
+        }
+    }
+}
+
+/// A versioned set of policy rules with depth validation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PolicyRuleSet {
+    /// Schema version — must equal [`POLICY_RULE_SCHEMA_VERSION`].
+    pub version: u32,
+    /// The list of rules (evaluated as implicit AND).
+    pub rules: Vec<PolicyRule>,
+}
+
+impl PolicyRuleSet {
+    /// Validate that the schema version is correct and depth does not exceed
+    /// [`MAX_RULE_DEPTH`].
+    pub fn validate(&self) -> Result<(), CoreError> {
+        if self.version != POLICY_RULE_SCHEMA_VERSION {
+            return Err(CoreError::InvalidConfig(format!(
+                "policy rule schema version {} is not supported (expected {})",
+                self.version, POLICY_RULE_SCHEMA_VERSION
+            )));
+        }
+        for rule in &self.rules {
+            let d = rule.depth();
+            if d > MAX_RULE_DEPTH {
+                return Err(CoreError::InvalidConfig(format!(
+                    "policy rule depth {} exceeds maximum allowed depth of {}",
+                    d, MAX_RULE_DEPTH
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A policy document signed by an authorized policy administrator.
 ///
 /// The signature covers the canonical JSON bytes of the inner `Policy`.
