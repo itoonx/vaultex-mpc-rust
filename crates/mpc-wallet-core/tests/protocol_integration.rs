@@ -1209,6 +1209,7 @@ fn test_sign_authorization_has_unique_identity() {
             timestamp: now,
             session_id: session_id.into(),
             encrypted_context: None,
+            authorization_id: uuid::Uuid::new_v4().to_string(),
         }
     };
 
@@ -1281,6 +1282,7 @@ fn test_sign_authorization_replay_rejected() {
         timestamp: now,
         session_id: "session-replay".into(),
         encrypted_context: None,
+        authorization_id: uuid::Uuid::new_v4().to_string(),
     };
 
     let auth = SignAuthorization::create(payload, &gateway_key);
