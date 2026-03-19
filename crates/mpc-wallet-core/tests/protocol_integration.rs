@@ -1006,7 +1006,9 @@ fn test_sign_authorization_mandatory_verification() {
     // ── 1. Valid authorization MUST be accepted ──────────────────────────────
     let valid_auth = SignAuthorization::create(make_valid_payload(message), &gateway_key);
     assert!(
-        valid_auth.verify(&gateway_key.verifying_key(), message).is_ok(),
+        valid_auth
+            .verify(&gateway_key.verifying_key(), message)
+            .is_ok(),
         "valid SignAuthorization must be accepted"
     );
 
@@ -1145,14 +1147,10 @@ async fn test_nats_keygen_frost_ed25519() {
     let mut transports = Vec::new();
     for (i, key) in keys.iter().enumerate() {
         let party_id = PartyId((i + 1) as u16);
-        let mut t = NatsTransport::connect_signed(
-            &nats_url,
-            party_id,
-            session_id.clone(),
-            key.clone(),
-        )
-        .await
-        .expect("NATS connect failed");
+        let mut t =
+            NatsTransport::connect_signed(&nats_url, party_id, session_id.clone(), key.clone())
+                .await
+                .expect("NATS connect failed");
 
         // Register all other peers
         for (j, vk) in vks.iter().enumerate() {
@@ -1213,14 +1211,10 @@ async fn test_nats_keygen_frost_ed25519() {
     // Create fresh transports for signing (new session)
     let mut sign_transports = Vec::new();
     for (i, (signer, key)) in signers.iter().zip(keys.iter()).enumerate() {
-        let mut t = NatsTransport::connect_signed(
-            &nats_url,
-            *signer,
-            sign_session_id.clone(),
-            key.clone(),
-        )
-        .await
-        .expect("NATS connect for sign failed");
+        let mut t =
+            NatsTransport::connect_signed(&nats_url, *signer, sign_session_id.clone(), key.clone())
+                .await
+                .expect("NATS connect for sign failed");
 
         // Register peer (only the other signer)
         let other = 1 - i;
@@ -1230,8 +1224,10 @@ async fn test_nats_keygen_frost_ed25519() {
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    let sign_transports: Vec<std::sync::Arc<NatsTransport>> =
-        sign_transports.into_iter().map(std::sync::Arc::new).collect();
+    let sign_transports: Vec<std::sync::Arc<NatsTransport>> = sign_transports
+        .into_iter()
+        .map(std::sync::Arc::new)
+        .collect();
 
     let mut sign_handles = Vec::new();
     for (share, transport) in shares.iter().take(2).zip(sign_transports.iter()) {

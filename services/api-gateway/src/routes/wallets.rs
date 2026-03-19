@@ -9,8 +9,8 @@ use axum::{
     Extension, Json,
 };
 
-use mpc_wallet_core::protocol::MpcSignature;
 use mpc_wallet_core::protocol::sign_authorization::{AuthorizationPayload, SignAuthorization};
+use mpc_wallet_core::protocol::MpcSignature;
 use mpc_wallet_core::rbac::{ApiRole, AuthContext, Permissions};
 use sha2::{Digest, Sha256};
 
