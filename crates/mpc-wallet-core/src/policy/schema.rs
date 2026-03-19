@@ -275,6 +275,35 @@ impl PolicyTemplate {
     }
 }
 
+/// Alias for [`MAX_POLICY_RULE_DEPTH`] used by the parser/evaluator modules.
+pub const MAX_RULE_DEPTH: usize = MAX_POLICY_RULE_DEPTH;
+
+/// Alias for [`POLICY_SCHEMA_VERSION`] used by the parser module.
+pub const POLICY_RULE_SCHEMA_VERSION: u32 = POLICY_SCHEMA_VERSION;
+
+impl PolicyRuleSet {
+    /// Validate that the schema version is correct and depth does not exceed
+    /// [`MAX_RULE_DEPTH`].
+    pub fn validate(&self) -> Result<(), CoreError> {
+        if self.version != POLICY_RULE_SCHEMA_VERSION {
+            return Err(CoreError::InvalidConfig(format!(
+                "policy rule schema version {} is not supported (expected {})",
+                self.version, POLICY_RULE_SCHEMA_VERSION
+            )));
+        }
+        for rule in &self.rules {
+            let d = rule.depth();
+            if d > MAX_RULE_DEPTH {
+                return Err(CoreError::InvalidConfig(format!(
+                    "policy rule depth {} exceeds maximum allowed depth of {}",
+                    d, MAX_RULE_DEPTH
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A policy document signed by an authorized policy administrator.
 ///
 /// The signature covers the canonical JSON bytes of the inner `Policy`.
