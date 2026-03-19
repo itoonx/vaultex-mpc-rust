@@ -95,7 +95,7 @@ git commit -m "[R{N}] complete: {task summary}"
 
 ---
 
-## Current State (as of Sprint 21 — CGGMP21 integration complete, Milestone 2 DONE)
+## Current State (as of Sprint 22 — KMS/HSM integration, Milestone 3 in progress)
 
 ### Auth System (3 methods, Redis-ready)
 
@@ -197,7 +197,7 @@ Gateway (creates proof)    →    MPC Node (verifies before sign)
 
 ### Tests on `main`
 ```
-623 tests pass (cargo test --workspace) + 16 E2E (--ignored, need live infra)
+639 tests pass (cargo test --workspace) + 16 E2E (--ignored, need live infra)
 cargo fmt        clean
 cargo clippy     clean (0 warnings, -D warnings)
 cargo audit      clean (.cargo/audit.toml ignores unmaintained transitive deps)
@@ -219,8 +219,17 @@ CI pipeline      ALL GREEN (fmt + clippy + test + audit + E2E)
 - **Sprint 19:** COMPLETE — CGGMP21 Foundation (CryptoScheme::Cggmp21Secp256k1, Feldman VSS keygen, Paillier+Pedersen aux info, 12 new protocol tests)
 - **Sprint 20:** COMPLETE — CGGMP21 Signing (pre-signing phase, online 1-round signing, identifiable abort, low-s normalization, 7 new signing tests)
 - **Sprint 21:** COMPLETE — CGGMP21 Integration (key refresh, 50 chains wired, 32 protocol tests, R6 audit APPROVED)
+- **Sprint 22:** COMPLETE — KMS/HSM Integration (AES-256-GCM key wrapping, KMS envelope encryption interface, Vault credential rotation, secret refresher)
 
-**All 10 epics: 100% COMPLETE | Milestone 1: COMPLETE | Milestone 2 (CGGMP21): COMPLETE**
+**All 10 epics: 100% COMPLETE | M1: DONE | M2: DONE | Milestone 3 (HSM/KMS): IN PROGRESS**
+
+### New in Sprint 22
+- AES-256-GCM key wrapping replaces XOR placeholder in `KeyEncryptionProvider` (R2)
+- `KmsKeyEncryption` struct: envelope encryption interface with DEK cache + TTL (R2)
+- `KmsClient` struct: key wrapping operations (wrap/unwrap/generate_data_key) with KMS config (R4)
+- Vault credential rotation: `renew_lease()`, `read_secret_version()`, `SecretRefresher` background task (R4)
+- `VAULT_REFRESH_INTERVAL` config for auto-refresh (default 300s)
+- DEC-016: KMS for DEK wrapping only, Ed25519 signing stays local (AWS KMS doesn't support Ed25519)
 
 ### New in Sprint 21
 - CGGMP21 key refresh: additive re-sharing preserves group pubkey + fresh Paillier/Pedersen aux info (R1)
