@@ -166,7 +166,7 @@ fn l_function(x: &BigUint, n: &BigUint) -> BigUint {
 }
 
 /// Sample a random number in Z*_N (coprime to N).
-fn sample_coprime(n: &BigUint) -> BigUint {
+pub(crate) fn sample_coprime(n: &BigUint) -> BigUint {
     let byte_len = (n.bits() as usize).div_ceil(8);
     let mut buf = vec![0u8; byte_len];
     loop {

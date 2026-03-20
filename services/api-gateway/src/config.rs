@@ -73,6 +73,8 @@ pub struct AppConfig {
     pub redis_url: Option<String>,
     /// Session encryption key (hex-encoded 32 bytes). Required for Redis backend.
     pub session_encryption_key: Option<String>,
+    /// Secrets backend type (env vars or Vault).
+    pub secrets_backend: SecretsBackend,
 }
 
 impl AppConfig {
@@ -173,6 +175,9 @@ impl AppConfig {
             ),
             redis_url,
             session_encryption_key,
+            secrets_backend: SecretsBackend::parse(
+                &std::env::var("SECRETS_BACKEND").unwrap_or_else(|_| "env".into()),
+            ),
         };
         config.validate();
         config
@@ -211,16 +216,13 @@ impl AppConfig {
                 "SESSION_ENCRYPTION_KEY is required when SESSION_BACKEND=redis (hex-encoded 32 bytes)"
             );
         }
-        // CORS wildcard disallowed outside debug/dev (non-testnet, non-devnet).
+        // Mainnet safety: CORS wildcard disallowed + require explicit keys.
         if self.network == "mainnet" {
             let has_wildcard = self.cors_origins.iter().any(|o| o == "*");
             assert!(
                 !has_wildcard,
                 "CORS_ALLOWED_ORIGINS must not contain wildcard '*' on mainnet"
             );
-        }
-        // Mainnet safety: require explicit keys, no auto-generation.
-        if self.network == "mainnet" {
             assert!(
                 self.server_signing_key.is_some(),
                 "SERVER_SIGNING_KEY is required on mainnet (auto-generation disabled)"
@@ -251,6 +253,7 @@ impl AppConfig {
             session_backend: BackendType::Memory,
             redis_url: None,
             session_encryption_key: None,
+            secrets_backend: SecretsBackend::Env,
         }
     }
 }

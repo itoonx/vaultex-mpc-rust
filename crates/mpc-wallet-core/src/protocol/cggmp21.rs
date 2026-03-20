@@ -253,6 +253,10 @@ pub trait PreSignatureStore: Send + Sync {
 ///
 /// **Not crash-safe** — this is equivalent to the old `used` flag but demonstrates
 /// the interface. Production deployments should use a durable-storage implementation.
+///
+/// **No eviction** — the `used_ids` set grows without bound. This is acceptable for
+/// tests and short-lived processes, but a production implementation should evict old
+/// entries (e.g., with a TTL or LRU policy) to avoid unbounded memory growth.
 pub struct InMemoryPreSignatureStore {
     used_ids: Mutex<HashSet<String>>,
 }
@@ -1287,40 +1291,26 @@ async fn cggmp21_pre_sign(
         let n_half = &n_big >> 1;
         let secp_order = BigUint::from_bytes_be(&hex_decode_secp_order());
 
-        // Helper: convert BigUint from [0, N) to secp256k1 Scalar using signed reduction.
-        // Values in [0, N/2] are positive → reduce mod q directly.
-        // Values in (N/2, N) represent negative → compute -(N - value) mod q.
-        let to_scalar_signed = |big: &BigUint| -> Scalar {
-            if big <= &n_half {
-                // Positive: reduce directly mod q
-                let reduced = big % &secp_order;
-                let be = reduced.to_bytes_be();
-                let mut padded = [0u8; 32];
-                padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
-                <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded))
-            } else {
-                // Negative: true value is big - N, so Scalar = -(N - big) mod q
-                let abs_val = &n_big - big;
-                let reduced = &abs_val % &secp_order;
-                let be = reduced.to_bytes_be();
-                let mut padded = [0u8; 32];
-                padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
-                let pos =
-                    <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded));
-                Scalar::ZERO - pos
-            }
-        };
-
         // Start with local products
         let mut delta_scalar = *k_i * *gamma_i;
         let mut chi_scalar = *k_i * x_i_lambda_i;
 
         // Add beta shares (from acting as Party B on peers' broadcasts)
         for beta_bytes in &delta_beta_shares {
-            delta_scalar += to_scalar_signed(&BigUint::from_bytes_be(beta_bytes));
+            delta_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(beta_bytes),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
         }
         for beta_bytes in &chi_beta_shares {
-            chi_scalar += to_scalar_signed(&BigUint::from_bytes_be(beta_bytes));
+            chi_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(beta_bytes),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
         }
 
         // Receive alpha shares from peers (responses to our Enc(k_i) broadcast)
@@ -1338,10 +1328,20 @@ async fn cggmp21_pre_sign(
 
             // Decrypt as Party A, reduce to Scalar
             let alpha_d = mta_party_a_k.round2_finish(&delta_ct);
-            delta_scalar += to_scalar_signed(&BigUint::from_bytes_be(&alpha_d));
+            delta_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(&alpha_d),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
 
             let alpha_c = mta_party_a_k.round2_finish(&chi_ct);
-            chi_scalar += to_scalar_signed(&BigUint::from_bytes_be(&alpha_c));
+            chi_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(&alpha_c),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
         }
 
         // Broadcast delta_i for aggregation (as Scalar bytes, 32 bytes)
@@ -2122,6 +2122,35 @@ async fn cggmp21_refresh(
         group_public_key: key_share.group_public_key.clone(),
         share_data: Zeroizing::new(new_share_bytes),
     })
+}
+
+/// Convert a `BigUint` in `[0, N)` to a secp256k1 `Scalar` using signed reduction.
+///
+/// MtA produces values uniformly in `[0, N)`. Values in `[0, N/2]` are interpreted
+/// as positive and reduced mod `q` directly. Values in `(N/2, N)` represent negative
+/// numbers (`value - N`), so we compute `-(N - value) mod q`.
+///
+/// This ensures `to_scalar_signed(alpha) + to_scalar_signed(beta) == a * b` as a
+/// `Scalar`, even when the unsigned sum `alpha + beta` wraps modulo `N`.
+fn to_scalar_signed(big: &BigUint, n: &BigUint, n_half: &BigUint, secp_order: &BigUint) -> Scalar {
+    use k256::elliptic_curve::ops::Reduce;
+    if big <= n_half {
+        // Positive: reduce directly mod q
+        let reduced = big % secp_order;
+        let be = reduced.to_bytes_be();
+        let mut padded = [0u8; 32];
+        padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
+        <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded))
+    } else {
+        // Negative: true value is big - N, so Scalar = -(N - big) mod q
+        let abs_val = n - big;
+        let reduced = &abs_val % secp_order;
+        let be = reduced.to_bytes_be();
+        let mut padded = [0u8; 32];
+        padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
+        let pos = <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded));
+        Scalar::ZERO - pos
+    }
 }
 
 /// Return the secp256k1 curve order as 32 big-endian bytes.
@@ -3105,33 +3134,12 @@ mod tests {
     fn test_mta_scalar_reduction_correctness() {
         use crate::paillier::keygen::keypair_for_protocol;
         use crate::paillier::mta::{MtaPartyA, MtaPartyB};
-        use k256::elliptic_curve::ops::Reduce;
         use num_bigint::BigUint;
 
         let (pk, sk) = keypair_for_protocol(2048).unwrap();
         let n = pk.n_biguint();
         let n_half = &n >> 1;
         let secp_order = BigUint::from_bytes_be(&hex_decode_secp_order());
-
-        // Signed reduction: values > N/2 represent negative numbers.
-        let to_scalar_signed = |big: &BigUint| -> Scalar {
-            if big <= &n_half {
-                let reduced = big % &secp_order;
-                let be = reduced.to_bytes_be();
-                let mut padded = [0u8; 32];
-                padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
-                <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded))
-            } else {
-                let abs_val = &n - big;
-                let reduced = &abs_val % &secp_order;
-                let be = reduced.to_bytes_be();
-                let mut padded = [0u8; 32];
-                padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
-                let pos =
-                    <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded));
-                Scalar::ZERO - pos
-            }
-        };
 
         // Run multiple trials to cover both wrap and no-wrap cases
         for trial in 0..10 {
@@ -3165,8 +3173,8 @@ mod tests {
             );
 
             // Verify signed Scalar reduction
-            let alpha_scalar = to_scalar_signed(&alpha);
-            let beta_scalar = to_scalar_signed(&beta);
+            let alpha_scalar = to_scalar_signed(&alpha, &n, &n_half, &secp_order);
+            let beta_scalar = to_scalar_signed(&beta, &n, &n_half, &secp_order);
             let sum_scalar = alpha_scalar + beta_scalar;
             let expected_scalar = k_1 * gamma_2;
             assert_eq!(

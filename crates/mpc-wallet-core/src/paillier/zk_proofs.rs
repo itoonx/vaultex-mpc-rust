@@ -15,13 +15,26 @@
 //! The implementation uses a hash-based commitment scheme with Fiat-Shamir
 //! transform for non-interactivity.
 
-use super::gcd;
+use super::{gcd, sample_coprime};
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
+
+/// Cached small primes up to 2^20, computed once via sieve of Eratosthenes.
+static SMALL_PRIMES: LazyLock<Vec<u32>> = LazyLock::new(|| generate_small_primes(1 << 20));
+
+/// Cached secp256k1 group order.
+static SECP256K1_ORDER: LazyLock<BigUint> = LazyLock::new(|| {
+    BigUint::from_bytes_be(&[
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFE, 0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36,
+        0x41, 0x41,
+    ])
+});
 
 /// Security parameter: number of rounds for Pimod proof.
 const PIMOD_SECURITY_PARAM: usize = 80;
@@ -67,16 +80,32 @@ pub fn prove_pimod(n: &BigUint, p: &BigUint, q: &BigUint) -> PimodProof {
 
     let mut rounds = Vec::with_capacity(PIMOD_SECURITY_PARAM);
 
+    // Precompute loop-invariant values
+    let sqrt_exp_p = (p + BigUint::one()) >> 2; // (p+1)/4
+    let sqrt_exp_q = (q + BigUint::one()) >> 2; // (q+1)/4
+    let q_inv_p = super::keygen::mod_inverse(q, p).expect("gcd(p,q) must be 1");
+    let p_inv_q = super::keygen::mod_inverse(p, q).expect("gcd(p,q) must be 1");
+
     for _i in 0..PIMOD_SECURITY_PARAM {
         // Generate deterministic randomness via Fiat-Shamir on round index
-        let y = sample_zn_star(n);
+        let y = sample_coprime(n);
 
         // x = y^2 mod N (guaranteed quadratic residue mod N)
-        let x = y.modpow(&BigUint::from(2u32), n);
+        let x = (&y * &y) % n;
 
         // Compute 4th root of x mod N using CRT
         // Since p, q = 3 mod 4, square root of a QR mod p is a^((p+1)/4) mod p
-        let (a, b) = compute_4th_root_mod_n(&x, p, q, n, &w);
+        let (a, b) = compute_4th_root_mod_n(
+            &x,
+            p,
+            q,
+            n,
+            &w,
+            &sqrt_exp_p,
+            &sqrt_exp_q,
+            &q_inv_p,
+            &p_inv_q,
+        );
 
         rounds.push(PimodRound {
             x: x.to_bytes_be(),
@@ -117,8 +146,9 @@ pub fn verify_pimod(n: &BigUint, proof: &PimodProof) -> bool {
         let x = BigUint::from_bytes_be(&round.x);
         let a = BigUint::from_bytes_be(&round.a);
 
-        // a^4 mod N
-        let a4 = a.modpow(&BigUint::from(4u32), n);
+        // a^4 mod N = ((a^2 mod N)^2) mod N
+        let a2 = (&a * &a) % n;
+        let a4 = (&a2 * &a2) % n;
 
         if round.b == 0 {
             // a^4 = x mod N
@@ -140,18 +170,25 @@ pub fn verify_pimod(n: &BigUint, proof: &PimodProof) -> bool {
 /// Compute 4th root of x mod N using CRT (p, q both = 3 mod 4).
 ///
 /// Returns (root, b) where root^4 = w^b * x mod N, b in {0, 1}.
+#[allow(clippy::too_many_arguments)]
 fn compute_4th_root_mod_n(
     x: &BigUint,
     p: &BigUint,
     q: &BigUint,
     n: &BigUint,
     w: &BigUint,
+    sqrt_exp_p: &BigUint,
+    sqrt_exp_q: &BigUint,
+    q_inv_p: &BigUint,
+    p_inv_q: &BigUint,
 ) -> (BigUint, u8) {
     // Try x first (b=0), then w*x (b=1)
     for b in 0u8..=1 {
         let target = if b == 0 { x.clone() } else { (w * x) % n };
 
-        if let Some(root) = try_4th_root_crt(&target, p, q, n) {
+        if let Some(root) =
+            try_4th_root_crt(&target, p, q, n, sqrt_exp_p, sqrt_exp_q, q_inv_p, p_inv_q)
+        {
             return (root, b);
         }
     }
@@ -162,17 +199,24 @@ fn compute_4th_root_mod_n(
 
 /// Try to compute 4th root of x mod N = p*q using CRT.
 /// Returns None if x is not a 4th power residue.
-fn try_4th_root_crt(x: &BigUint, p: &BigUint, q: &BigUint, n: &BigUint) -> Option<BigUint> {
+/// Accepts precomputed sqrt exponents and CRT inverses.
+#[allow(clippy::too_many_arguments)]
+fn try_4th_root_crt(
+    x: &BigUint,
+    p: &BigUint,
+    q: &BigUint,
+    n: &BigUint,
+    sqrt_exp_p: &BigUint,
+    sqrt_exp_q: &BigUint,
+    q_inv_p: &BigUint,
+    p_inv_q: &BigUint,
+) -> Option<BigUint> {
     let x_p = x % p;
     let x_q = x % q;
 
-    // For p = 3 mod 4: sqrt(a) mod p = a^((p+1)/4) mod p
-    let sqrt_exp_p = (p + BigUint::one()) >> 2; // (p+1)/4
-    let sqrt_exp_q = (q + BigUint::one()) >> 2;
-
     // First square root
-    let s_p = x_p.modpow(&sqrt_exp_p, p);
-    let s_q = x_q.modpow(&sqrt_exp_q, q);
+    let s_p = x_p.modpow(sqrt_exp_p, p);
+    let s_q = x_q.modpow(sqrt_exp_q, q);
 
     // Verify first sqrt
     if (&s_p * &s_p) % p != x_p {
@@ -183,8 +227,8 @@ fn try_4th_root_crt(x: &BigUint, p: &BigUint, q: &BigUint, n: &BigUint) -> Optio
     }
 
     // Second square root (4th root)
-    let r_p = s_p.modpow(&sqrt_exp_p, p);
-    let r_q = s_q.modpow(&sqrt_exp_q, q);
+    let r_p = s_p.modpow(sqrt_exp_p, p);
+    let r_q = s_q.modpow(sqrt_exp_q, q);
 
     // Verify second sqrt
     if (&r_p * &r_p) % p != s_p % p {
@@ -194,29 +238,20 @@ fn try_4th_root_crt(x: &BigUint, p: &BigUint, q: &BigUint, n: &BigUint) -> Optio
         return None;
     }
 
-    // CRT: combine r_p and r_q into r mod N
-    let root = crt(&r_p, p, &r_q, q);
+    // CRT: combine r_p and r_q into r mod N (using precomputed inverses)
+    let nn = p * q;
+    let term1 = (&r_p * q * q_inv_p) % &nn;
+    let term2 = (&r_q * p * p_inv_q) % &nn;
+    let root = (term1 + term2) % &nn;
 
-    // Verify: root^4 mod N = x
-    let root4 = root.modpow(&BigUint::from(4u32), n);
+    // Verify: root^4 mod N = x (two squarings)
+    let root2 = (&root * &root) % n;
+    let root4 = (&root2 * &root2) % n;
     if root4 == *x {
         Some(root)
     } else {
         None
     }
-}
-
-/// Chinese Remainder Theorem: find x such that x = a mod p, x = b mod q.
-fn crt(a: &BigUint, p: &BigUint, b: &BigUint, q: &BigUint) -> BigUint {
-    use super::keygen::mod_inverse;
-    let n = p * q;
-    let q_inv_p = mod_inverse(q, p).expect("gcd(p,q) must be 1");
-    let p_inv_q = mod_inverse(p, q).expect("gcd(p,q) must be 1");
-
-    // x = a * q * q_inv_p + b * p * p_inv_q mod N
-    let term1 = (a * q * &q_inv_p) % &n;
-    let term2 = (b * p * &p_inv_q) % &n;
-    (term1 + term2) % n
 }
 
 /// Find an element w in Z*_N with Jacobi symbol (w/N) = -1.
@@ -238,19 +273,6 @@ fn find_jacobi_neg1(n: &BigUint) -> BigUint {
     }
 }
 
-/// Sample random element of Z*_N.
-fn sample_zn_star(n: &BigUint) -> BigUint {
-    let byte_len = (n.bits() as usize).div_ceil(8);
-    let mut buf = vec![0u8; byte_len];
-    loop {
-        OsRng.fill_bytes(&mut buf);
-        let r = BigUint::from_bytes_be(&buf) % n;
-        if !r.is_zero() && gcd(&r, n) == BigUint::one() {
-            return r;
-        }
-    }
-}
-
 /// Compute the Jacobi symbol (a/n) for odd n > 0.
 ///
 /// Returns -1, 0, or 1.
@@ -262,6 +284,9 @@ pub fn jacobi_symbol(a: &BigUint, n: &BigUint) -> i32 {
     let mut a = a % n;
     let mut n = n.clone();
     let mut result = 1i32;
+
+    let eight = BigUint::from(8u32);
+    let four = BigUint::from(4u32);
 
     loop {
         if a.is_zero() {
@@ -288,7 +313,7 @@ pub fn jacobi_symbol(a: &BigUint, n: &BigUint) -> i32 {
         // If we removed an odd number of 2s, apply rule:
         // (2/n) = (-1)^((n^2-1)/8)
         if trailing % 2 == 1 {
-            let n_mod8 = &n % BigUint::from(8u32);
+            let n_mod8 = &n % &eight;
             let n_mod8_u32 = n_mod8.to_u32_digits().first().copied().unwrap_or(0);
             if n_mod8_u32 == 3 || n_mod8_u32 == 5 {
                 result = -result;
@@ -296,8 +321,8 @@ pub fn jacobi_symbol(a: &BigUint, n: &BigUint) -> i32 {
         }
 
         // Quadratic reciprocity
-        let a_mod4 = &a % BigUint::from(4u32);
-        let n_mod4 = &n % BigUint::from(4u32);
+        let a_mod4 = &a % &four;
+        let n_mod4 = &n % &four;
         let a_mod4_u32 = a_mod4.to_u32_digits().first().copied().unwrap_or(0);
         let n_mod4_u32 = n_mod4.to_u32_digits().first().copied().unwrap_or(0);
         if a_mod4_u32 == 3 && n_mod4_u32 == 3 {
@@ -488,11 +513,9 @@ pub fn verify_pifac(n: &BigUint, proof: &PifacProof) -> bool {
 
 /// Check if N has any small prime factor (up to 2^20).
 /// This is the core defense against CVE-2023-33241.
+/// Uses a process-wide cached sieve via `SMALL_PRIMES`.
 fn has_small_factor(n: &BigUint) -> bool {
-    // Check against first several thousand primes via trial division
-    let small_primes = generate_small_primes(1 << 20);
-
-    for p in &small_primes {
+    for p in &*SMALL_PRIMES {
         let p_big = BigUint::from(*p);
         if &p_big >= n {
             break;
@@ -603,7 +626,7 @@ pub fn prove_pienc(m: &BigUint, r: &BigUint, public: &PiEncPublicInput) -> PiEnc
     // Sample masking values
     let alpha_bound = BigUint::one() << (PIENC_ELL + PIENC_EPSILON) as usize;
     let alpha = sample_below(&alpha_bound);
-    let mu = sample_coprime_for_proof(&n);
+    let mu = sample_coprime(&n);
     let gamma_bound = &n_hat * &alpha_bound;
     let gamma = sample_below(&gamma_bound);
     let rho_bound = &n_hat * (BigUint::one() << PIENC_ELL as usize);
@@ -807,7 +830,7 @@ pub fn prove_piaffg(
     // Sample masking values (all sampled BEFORE challenge computation)
     let alpha = sample_below(&ell_bound);
     let beta = sample_below(&ell_prime_bound);
-    let mu = sample_coprime_for_proof(&n0);
+    let mu = sample_coprime(&n0);
     let gamma = sample_below(&(&n_hat * &ell_bound));
     let delta = sample_below(&(&n_hat * &ell_prime_bound));
     // tau and sigma are Pedersen blinding factors for the witness values x and y
@@ -1053,13 +1076,7 @@ pub fn pilogstar_point_commitment(x: &BigUint) -> Vec<u8> {
 /// Convert a BigUint to a k256::Scalar (reduced mod group order).
 fn biguint_to_k256_scalar(x: &BigUint) -> k256::Scalar {
     use k256::elliptic_curve::ops::Reduce;
-    // secp256k1 group order: FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-    let order = BigUint::from_bytes_be(&[
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFE, 0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36,
-        0x41, 0x41,
-    ]);
-    let reduced = x % &order;
+    let reduced = x % &*SECP256K1_ORDER;
     let mut bytes = [0u8; 32];
     let be_bytes = reduced.to_bytes_be();
     // Right-align into 32-byte array
@@ -1080,7 +1097,7 @@ pub fn prove_pilogstar(x: &BigUint, r: &BigUint, public: &PiLogStarPublicInput) 
 
     // Sample masking values
     let alpha = sample_below(&ell_bound);
-    let mu = sample_coprime_for_proof(&n);
+    let mu = sample_coprime(&n);
     let gamma = sample_below(&(&n_hat * &ell_bound));
     let rho = sample_below(&(&n_hat * (BigUint::one() << PIENC_ELL as usize)));
 
@@ -1247,19 +1264,6 @@ fn sample_below(bound: &BigUint) -> BigUint {
     }
 }
 
-/// Sample a random value coprime to n, in [1, n).
-fn sample_coprime_for_proof(n: &BigUint) -> BigUint {
-    let byte_len = (n.bits() as usize).div_ceil(8);
-    let mut buf = vec![0u8; byte_len];
-    loop {
-        OsRng.fill_bytes(&mut buf);
-        let r = BigUint::from_bytes_be(&buf) % n;
-        if !r.is_zero() && gcd(&r, n) == BigUint::one() {
-            return r;
-        }
-    }
-}
-
 /// Generate Pedersen parameters (N_hat, s, t) for use in ZK proofs.
 ///
 /// N_hat is an auxiliary RSA modulus, s and t are elements of Z*_{N_hat}
@@ -1273,7 +1277,7 @@ pub fn generate_pedersen_params(bits: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let n_hat = &p * &q;
 
     // s is a random element of Z*_{N_hat}
-    let s = sample_coprime_for_proof(&n_hat);
+    let s = sample_coprime(&n_hat);
 
     // lambda is a random exponent; t = s^lambda mod N_hat
     let lambda = sample_below(&n_hat);
@@ -1674,7 +1678,7 @@ mod tests {
         m: &BigUint,
     ) -> (super::super::PaillierCiphertext, BigUint) {
         let n = pk.n_biguint();
-        let r = sample_coprime_for_proof(&n);
+        let r = sample_coprime(&n);
         let ct = pk.encrypt_with_r(m, &r);
         (ct, r)
     }
@@ -1755,7 +1759,7 @@ mod tests {
         // D = C^x * Enc(y, rho_y)
         let c_ax = pk.scalar_mult(&c_a, &x);
         let n = pk.n_biguint();
-        let rho_y = sample_coprime_for_proof(&n);
+        let rho_y = sample_coprime(&n);
         let c_y = pk.encrypt_with_r(&y, &rho_y);
         let d = pk.add(&c_ax, &c_y);
 
@@ -1788,7 +1792,7 @@ mod tests {
         let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
         let c_ax = pk.scalar_mult(&c_a, &x);
         let n = pk.n_biguint();
-        let rho_y = sample_coprime_for_proof(&n);
+        let rho_y = sample_coprime(&n);
         let c_y = pk.encrypt_with_r(&y, &rho_y);
         let d = pk.add(&c_ax, &c_y);
 
@@ -1903,7 +1907,7 @@ mod tests {
         let b = BigUint::from(17u64);
 
         // ─── Round 1: Party A encrypts a ───
-        let r_a = sample_coprime_for_proof(&n);
+        let r_a = sample_coprime(&n);
         let c_a = pk.encrypt_with_r(&a, &r_a);
 
         // Party A generates Πenc proof
@@ -1932,7 +1936,7 @@ mod tests {
         };
 
         let c_ab = pk.scalar_mult(&c_a, &b);
-        let rho_y = sample_coprime_for_proof(&n);
+        let rho_y = sample_coprime(&n);
         let c_neg_beta = pk.encrypt_with_r(&neg_beta, &rho_y);
         let c_b = pk.add(&c_ab, &c_neg_beta);
 
@@ -2056,7 +2060,7 @@ mod tests {
         let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
         let c_ax = pk.scalar_mult(&c_a, &x);
         let n = pk.n_biguint();
-        let rho_y = sample_coprime_for_proof(&n);
+        let rho_y = sample_coprime(&n);
         let c_y = pk.encrypt_with_r(&y, &rho_y);
         let d = pk.add(&c_ax, &c_y);
 
@@ -2095,7 +2099,7 @@ mod tests {
         let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
         let c_ax = pk.scalar_mult(&c_a, &x);
         let n = pk.n_biguint();
-        let rho_y = sample_coprime_for_proof(&n);
+        let rho_y = sample_coprime(&n);
         let c_y = pk.encrypt_with_r(&y, &rho_y);
         let d = pk.add(&c_ax, &c_y);
 
@@ -2135,7 +2139,7 @@ mod tests {
         let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
         let c_ax = pk.scalar_mult(&c_a, &x);
         let n = pk.n_biguint();
-        let rho_y = sample_coprime_for_proof(&n);
+        let rho_y = sample_coprime(&n);
         let c_y = pk.encrypt_with_r(&y, &rho_y);
         let d = pk.add(&c_ax, &c_y);
 

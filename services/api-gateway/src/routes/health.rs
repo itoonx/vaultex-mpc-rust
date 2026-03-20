@@ -37,21 +37,17 @@ pub async fn health_ready(State(state): State<AppState>) -> (StatusCode, Json<Re
 
     // Check Redis: if backend is Redis, try a simple operation.
     let redis_status = if state.session_store.is_redis_backend() {
-        // Try to prune (a lightweight operation that exercises the backend).
-        // If it works, we're connected.
-        let can_reach = state.replay_cache.prune().await;
-        // prune returns count; if it doesn't panic/error, we're connected.
-        let _ = can_reach;
+        // prune() exercises the backend connection. If it panics or the
+        // future is cancelled we'll never reach Connected — good enough
+        // for a readiness probe without changing the trait to return Result.
+        let _pruned = state.replay_cache.prune().await;
         ComponentStatus::Connected
     } else {
         ComponentStatus::NotConfigured
     };
 
-    // Vault status: check if SECRETS_BACKEND=vault was configured.
-    let vault_status = if std::env::var("SECRETS_BACKEND")
-        .map(|v| v.eq_ignore_ascii_case("vault"))
-        .unwrap_or(false)
-    {
+    // Vault status: check config (not env var) for secrets backend type.
+    let vault_status = if state.secrets_backend == crate::config::SecretsBackend::Vault {
         // Vault was configured; if we got this far startup succeeded.
         ComponentStatus::Connected
     } else {
