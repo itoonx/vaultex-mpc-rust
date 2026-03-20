@@ -707,3 +707,33 @@ and proof verification. No more dummy keys anywhere.
 > Never skip security-critical code paths in tests. If a crypto operation is too slow,
 > use smaller parameters or cache test keys — but always execute the full protocol.
 > Dummy keys that bypass ZK proofs are worse than no tests at all (false confidence).
+
+### LESSON-020: Threshold ECDSA Nonce Inversion Cannot Be Distributed Naively
+- **Date:** 2026-03-20
+- **Category:** Architecture
+- **Severity:** Critical
+- **Found by:** During Sprint 30 DEC-017 implementation review
+
+**What happened:**
+DEC-017 implemented "distributed nonce" for GG20 signing where each party generates
+k_i, commits/reveals K_i = k_i·G, computes R = Σ K_i, then each party independently
+computes `s_i = k_i⁻¹ · (hash + x_i_add · r)`. All 6 ECDSA signature verification
+tests failed because the assembled signatures were mathematically invalid.
+
+**Root cause:**
+`Σ k_i⁻¹ ≠ (Σ k_i)⁻¹` — the inverse of a sum is NOT the sum of inverses in modular
+arithmetic. Each party inverting their own nonce share and computing a partial signature
+does NOT produce valid ECDSA when aggregated. This is a fundamental algebraic property.
+
+The correct formula requires `k⁻¹ = (Σ k_i)⁻¹`, but no single party knows k = Σ k_i
+(by design). Computing k⁻¹ from additive shares of k requires an interactive protocol
+like Paillier MtA (multiplicative-to-additive conversion).
+
+**Fix / Resolution:**
+Reverted to coordinator-based signing (Party 1 generates k, broadcasts k_inv). Documented
+MtA-based distributed nonce as future work using existing Paillier MtA infrastructure.
+
+**Takeaway:**
+> Before implementing a new cryptographic protocol variant, verify the mathematical
+> correctness on paper first. In threshold ECDSA, any operation involving both k⁻¹
+> and x (like s = k⁻¹(m + rx)) requires MtA — there is no shortcut.
