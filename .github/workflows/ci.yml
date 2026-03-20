@@ -12,6 +12,8 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   fmt:
@@ -28,16 +30,16 @@ jobs:
   # Single build job that compiles once, shares artifacts with downstream jobs
   build:
     name: Build & Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.7
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-workspace"
-          # Cache the gateway binary for E2E job
           cache-targets: true
 
       # Clippy (compiles everything as a side effect)
@@ -51,8 +53,8 @@ jobs:
           cargo test --workspace --features local-transport -- --test-threads=4 2>&1 | tee /tmp/test-output.txt
           TEST_COUNT=$(grep "test result:" /tmp/test-output.txt | awk -F'[; ]' '{sum+=$4} END {print sum}')
           echo "Total tests: $TEST_COUNT"
-          if [ "$TEST_COUNT" -lt 810 ]; then
-            echo "::error::Test count dropped below 790 (got $TEST_COUNT) — check for accidentally deleted tests"
+          if [ "$TEST_COUNT" -lt 840 ]; then
+            echo "::error::Test count dropped below 840 (got $TEST_COUNT) — check for accidentally deleted tests"
             exit 1
           fi
 
@@ -88,7 +90,7 @@ jobs:
 
   e2e:
     name: E2E tests (Vault + Redis + NATS)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     needs: [build]
     services:
       vault:
@@ -126,6 +128,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.7
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-workspace"
