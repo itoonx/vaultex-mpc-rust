@@ -165,6 +165,14 @@ impl SessionStore {
     pub async fn count(&self) -> usize {
         self.backend.count().await
     }
+
+    /// Returns true if the session store is backed by Redis (not in-memory).
+    pub fn is_redis_backend(&self) -> bool {
+        // InMemoryBackend is the default; any other backend is assumed to be Redis.
+        // We use type_name as a lightweight check without adding a trait method.
+        let type_name = std::any::type_name_of_val(&*self.backend);
+        type_name.contains("Redis")
+    }
 }
 
 #[cfg(test)]

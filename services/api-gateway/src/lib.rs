@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod config;
 pub mod errors;
+pub mod logging;
 pub mod middleware;
 pub mod models;
 pub mod orchestrator;
@@ -45,6 +46,11 @@ pub fn build_router(state: AppState, cors_origins: &[String]) -> Router {
     // Public routes (no auth required) — health, chains, and auth handshake.
     let public_routes = Router::new()
         .route("/v1/health", get(routes::health::health))
+        .route("/v1/health/live", get(routes::health::health_live))
+        .route(
+            "/v1/health/ready",
+            get(routes::health::health_ready),
+        )
         .route("/v1/chains", get(routes::chains::list_chains));
 
     // Protected routes (auth + RBAC).

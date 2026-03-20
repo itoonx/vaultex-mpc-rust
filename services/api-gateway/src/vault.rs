@@ -36,6 +36,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Vault client configuration.
 #[derive(Debug, Clone)]
@@ -60,12 +61,38 @@ pub enum VaultAuth {
 }
 
 /// Secrets fetched from Vault.
-#[derive(Debug, Clone, Default)]
+///
+/// All secret fields are wrapped in [`Zeroizing`] so they are cleared from
+/// memory on drop. Implements [`Drop`] via [`Zeroize`] to ensure cleanup
+/// even if individual fields are replaced.
+#[derive(Clone, Default)]
 pub struct VaultSecrets {
-    pub jwt_secret: Option<String>,
-    pub server_signing_key: Option<String>,
-    pub session_encryption_key: Option<String>,
-    pub redis_url: Option<String>,
+    pub jwt_secret: Option<Zeroizing<String>>,
+    pub server_signing_key: Option<Zeroizing<String>>,
+    pub session_encryption_key: Option<Zeroizing<String>>,
+    pub redis_url: Option<Zeroizing<String>>,
+}
+
+impl Drop for VaultSecrets {
+    fn drop(&mut self) {
+        // Each Zeroizing<String> field already zeroizes on drop,
+        // but we explicitly clear the Options to be thorough.
+        self.jwt_secret.zeroize();
+        self.server_signing_key.zeroize();
+        self.session_encryption_key.zeroize();
+        self.redis_url.zeroize();
+    }
+}
+
+impl std::fmt::Debug for VaultSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VaultSecrets")
+            .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
+            .field("server_signing_key", &self.server_signing_key.as_ref().map(|_| "[REDACTED]"))
+            .field("session_encryption_key", &self.session_encryption_key.as_ref().map(|_| "[REDACTED]"))
+            .field("redis_url", &self.redis_url.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 /// Vault KV v2 read response.
@@ -313,19 +340,19 @@ impl VaultClient {
             jwt_secret: data
                 .get("jwt_secret")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|s| Zeroizing::new(String::from(s))),
             server_signing_key: data
                 .get("server_signing_key")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|s| Zeroizing::new(String::from(s))),
             session_encryption_key: data
                 .get("session_encryption_key")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|s| Zeroizing::new(String::from(s))),
             redis_url: data
                 .get("redis_url")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|s| Zeroizing::new(String::from(s))),
         }
     }
 }
@@ -415,17 +442,18 @@ impl SecretRefresher {
                             Ok(mut app_config) => {
                                 // Update mutable secret fields. Non-secret config
                                 // (port, network, etc.) is NOT overwritten.
+                                // Deref Zeroizing<String> to get &String for clone.
                                 if let Some(ref jwt) = secrets.jwt_secret {
-                                    app_config.jwt_secret = jwt.clone();
+                                    app_config.jwt_secret = (**jwt).clone();
                                 }
                                 if let Some(ref key) = secrets.server_signing_key {
-                                    app_config.server_signing_key = Some(key.clone());
+                                    app_config.server_signing_key = Some((**key).clone());
                                 }
                                 if let Some(ref key) = secrets.session_encryption_key {
-                                    app_config.session_encryption_key = Some(key.clone());
+                                    app_config.session_encryption_key = Some((**key).clone());
                                 }
                                 if let Some(ref url) = secrets.redis_url {
-                                    app_config.redis_url = Some(url.clone());
+                                    app_config.redis_url = Some((**url).clone());
                                 }
                                 tracing::info!("vault secrets refreshed successfully");
                             }
@@ -490,6 +518,21 @@ mod tests {
         assert!(secrets.server_signing_key.is_none());
         assert!(secrets.session_encryption_key.is_none());
         assert!(secrets.redis_url.is_none());
+    }
+
+    #[test]
+    fn test_vault_secrets_debug_redacts() {
+        let secrets = VaultSecrets {
+            jwt_secret: Some(Zeroizing::new("super-secret".into())),
+            server_signing_key: Some(Zeroizing::new("signing-key".into())),
+            session_encryption_key: None,
+            redis_url: Some(Zeroizing::new("redis://secret@host".into())),
+        };
+        let debug_output = format!("{:?}", secrets);
+        assert!(!debug_output.contains("super-secret"), "jwt_secret leaked in Debug output");
+        assert!(!debug_output.contains("signing-key"), "server_signing_key leaked in Debug output");
+        assert!(!debug_output.contains("redis://secret"), "redis_url leaked in Debug output");
+        assert!(debug_output.contains("REDACTED"), "Debug should show [REDACTED]");
     }
 
     // -- T-S22-03: Vault lease renewal tests --
@@ -674,9 +717,9 @@ mod tests {
         // session_encryption_key not present
 
         let secrets = VaultClient::extract_secrets(&data);
-        assert_eq!(secrets.jwt_secret.as_deref(), Some("secret-123"));
-        assert_eq!(secrets.server_signing_key.as_deref(), Some("key-456"));
+        assert_eq!(secrets.jwt_secret.as_deref().map(|s| s.as_str()), Some("secret-123"));
+        assert_eq!(secrets.server_signing_key.as_deref().map(|s| s.as_str()), Some("key-456"));
         assert!(secrets.session_encryption_key.is_none());
-        assert_eq!(secrets.redis_url.as_deref(), Some("redis://localhost"));
+        assert_eq!(secrets.redis_url.as_deref().map(|s| s.as_str()), Some("redis://localhost"));
     }
 }

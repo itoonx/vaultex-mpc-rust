@@ -37,6 +37,31 @@ use rpc::*;
 /// Default max entries for authorization replay cache.
 const DEFAULT_AUTH_CACHE_MAX_ENTRIES: usize = 10_000;
 
+/// Initialize structured logging with optional JSON format.
+///
+/// - `RUST_LOG` env controls log levels (default: `mpc_wallet_node=info`)
+/// - `LOG_FORMAT=json` enables JSON output (default: human-readable)
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "mpc_wallet_node=info".into());
+
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|v| v.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
+    if use_json {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().json().with_target(true))
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
+}
+
 /// Node configuration loaded from environment.
 struct NodeConfig {
     party_id: PartyId,
@@ -89,7 +114,7 @@ impl NodeConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_AUTH_CACHE_MAX_ENTRIES);
 
-        Self {
+        let config = Self {
             party_id: PartyId(party_id),
             nats_url,
             key_store_dir: PathBuf::from(key_store_dir),
@@ -97,19 +122,41 @@ impl NodeConfig {
             signing_key,
             gateway_pubkey,
             auth_cache_max_entries,
-        }
+        };
+        config.validate();
+        config
+    }
+
+    /// Validate configuration invariants. Panics with clear messages on invalid config.
+    fn validate(&self) {
+        assert!(
+            self.party_id.0 > 0,
+            "PARTY_ID must be >= 1 (got {})",
+            self.party_id.0
+        );
+        assert!(
+            !self.nats_url.is_empty(),
+            "NATS_URL must not be empty"
+        );
+        assert!(
+            self.key_store_dir.exists(),
+            "KEY_STORE_DIR does not exist: {} — create it before starting the node",
+            self.key_store_dir.display()
+        );
+        assert!(
+            !self.key_store_password.is_empty(),
+            "KEY_STORE_PASSWORD must not be empty"
+        );
+        assert!(
+            self.auth_cache_max_entries > 0,
+            "AUTH_CACHE_MAX_ENTRIES must be > 0"
+        );
     }
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "mpc_wallet_node=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    init_tracing();
 
     let config = NodeConfig::from_env();
 

@@ -260,7 +260,7 @@ mod tests {
     fn test_paillier_different_keys_cant_decrypt() {
         let (pk1, _sk1) = &*TEST_KEYS;
         // Generate a second keypair
-        let (_pk2, sk2) = generate_paillier_keypair(512);
+        let (_pk2, sk2) = generate_paillier_keypair(512).unwrap();
 
         let m = BigUint::from(42u64);
         let ct = pk1.encrypt(&m);

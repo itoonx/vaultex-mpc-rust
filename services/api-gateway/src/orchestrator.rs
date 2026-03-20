@@ -70,6 +70,11 @@ impl MpcOrchestrator {
         }
     }
 
+    /// Returns true if the orchestrator is connected to NATS.
+    pub fn is_connected(&self) -> bool {
+        self.nats.is_some()
+    }
+
     /// Create an orchestrator connected to NATS (production).
     pub async fn connect(nats_url: &str) -> Result<Self, mpc_wallet_core::error::CoreError> {
         let nats = async_nats::connect(nats_url).await.map_err(|e| {

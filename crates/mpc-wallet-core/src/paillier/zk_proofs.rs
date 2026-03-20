@@ -555,13 +555,15 @@ const PIENC_EPSILON: u64 = 512;
 /// The prover demonstrates knowledge of plaintext m and randomness r,
 /// and that m lies in the allowed range, without revealing either.
 ///
-/// Uses Fiat-Shamir transform: challenge = H(N, C, S, commitment_A, commitment_B).
+/// Uses Fiat-Shamir transform: challenge = H(N, C, S, commitment_A, commitment_B, pedersen_s).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiEncProof {
     /// Commitment A = Enc(alpha, mu) — encryption of masking value.
     pub commitment_a: Vec<u8>,
-    /// Commitment B = s^alpha * t^gamma mod N_hat — Pedersen commitment.
+    /// Commitment B = s^alpha * t^gamma mod N_hat — Pedersen commitment to masking value.
     pub commitment_b: Vec<u8>,
+    /// Pedersen commitment S = s^m * t^rho mod N_hat — commitment to the witness plaintext.
+    pub pedersen_s: Vec<u8>,
     /// Response z1 = alpha + e * m (masked plaintext).
     pub z1: Vec<u8>,
     /// Response z2 = mu * r^e mod N (masked randomness).
@@ -615,12 +617,16 @@ pub fn prove_pienc(m: &BigUint, r: &BigUint, public: &PiEncPublicInput) -> PiEnc
     // Commitment B = s^alpha * t^gamma mod N_hat
     let commitment_b = (s.modpow(&alpha, &n_hat) * t.modpow(&gamma, &n_hat)) % &n_hat;
 
-    // Fiat-Shamir challenge
+    // Pedersen commitment to the witness: S = s^m * t^rho mod N_hat
+    let pedersen_s = (s.modpow(m, &n_hat) * t.modpow(&rho, &n_hat)) % &n_hat;
+
+    // Fiat-Shamir challenge (includes pedersen_s for binding)
     let e = pienc_challenge(
         &public.pk_n,
         &public.ciphertext,
         &commitment_a,
         &commitment_b,
+        &pedersen_s,
         &n_hat,
     );
 
@@ -632,6 +638,7 @@ pub fn prove_pienc(m: &BigUint, r: &BigUint, public: &PiEncPublicInput) -> PiEnc
     PiEncProof {
         commitment_a: commitment_a.to_bytes_be(),
         commitment_b: commitment_b.to_bytes_be(),
+        pedersen_s: pedersen_s.to_bytes_be(),
         z1: z1.to_bytes_be(),
         z2: z2.to_bytes_be(),
         z3: z3.to_bytes_be(),
@@ -654,16 +661,18 @@ pub fn verify_pienc(proof: &PiEncProof, public: &PiEncPublicInput) -> bool {
 
     let commitment_a = BigUint::from_bytes_be(&proof.commitment_a);
     let commitment_b = BigUint::from_bytes_be(&proof.commitment_b);
+    let pedersen_s = BigUint::from_bytes_be(&proof.pedersen_s);
     let z1 = BigUint::from_bytes_be(&proof.z1);
     let z2 = BigUint::from_bytes_be(&proof.z2);
     let z3 = BigUint::from_bytes_be(&proof.z3);
 
-    // Recompute challenge
+    // Recompute challenge (includes pedersen_s for binding)
     let e = pienc_challenge(
         &public.pk_n,
         &public.ciphertext,
         &commitment_a,
         &commitment_b,
+        &pedersen_s,
         &n_hat,
     );
 
@@ -685,16 +694,20 @@ pub fn verify_pienc(proof: &PiEncProof, public: &PiEncPublicInput) -> bool {
         return false;
     }
 
-    // Check 2: s^z1 * t^z3 mod N_hat
-    // We verify the Pedersen commitment consistency
-    // This binds the proof to the specific plaintext range
+    // Check 2: s^z1 * t^z3 == commitment_B * S^e mod N_hat
+    // This verifies the Pedersen commitment consistency: the prover committed to
+    // the plaintext m via S = s^m * t^rho, and the masking via B = s^alpha * t^gamma.
+    // Since z1 = alpha + e*m and z3 = gamma + e*rho:
+    //   s^z1 * t^z3 = s^(alpha + e*m) * t^(gamma + e*rho)
+    //               = (s^alpha * t^gamma) * (s^m * t^rho)^e
+    //               = B * S^e mod N_hat
     let ped_lhs = (s.modpow(&z1, &n_hat) * t.modpow(&z3, &n_hat)) % &n_hat;
-    // We don't have the prover's rho commitment directly, but the Fiat-Shamir binding
-    // ensures soundness — the challenge e was computed over commitment_b which includes it.
-    // In a full implementation, we'd verify s^z1 * t^z3 = B * S^e where S is the
-    // committed Pedersen value. For simplicity in this implementation, the challenge
-    // binding provides computational soundness.
-    let _ = ped_lhs; // Bound by Fiat-Shamir challenge
+    let s_e = pedersen_s.modpow(&e, &n_hat);
+    let ped_rhs = (&commitment_b * &s_e) % &n_hat;
+
+    if ped_lhs != ped_rhs {
+        return false;
+    }
 
     true
 }
@@ -705,6 +718,7 @@ fn pienc_challenge(
     ciphertext: &[u8],
     commitment_a: &BigUint,
     commitment_b: &BigUint,
+    pedersen_s: &BigUint,
     n_hat: &BigUint,
 ) -> BigUint {
     let mut hasher = Sha256::new();
@@ -713,6 +727,7 @@ fn pienc_challenge(
     hasher.update(ciphertext);
     hasher.update(commitment_a.to_bytes_be());
     hasher.update(commitment_b.to_bytes_be());
+    hasher.update(pedersen_s.to_bytes_be());
     hasher.update(n_hat.to_bytes_be());
     let hash = hasher.finalize();
     // Use 128-bit challenge for soundness
@@ -733,15 +748,19 @@ pub struct PiAffgProof {
     pub commitment_a: Vec<u8>,
     /// Commitment B_x = g^alpha (EC point, x-coordinate).
     pub commitment_bx: Vec<u8>,
-    /// Commitment E = s^alpha * t^gamma mod N_hat.
+    /// Commitment E = s^alpha * t^gamma mod N_hat (masking commitment for x).
     pub commitment_e: Vec<u8>,
-    /// Commitment F = s^beta * t^delta mod N_hat.
+    /// Commitment F = s^beta * t^delta mod N_hat (masking commitment for y).
     pub commitment_f: Vec<u8>,
+    /// Pedersen commitment S_x = s^x * t^tau mod N_hat (witness commitment for x).
+    pub pedersen_sx: Vec<u8>,
+    /// Pedersen commitment S_y = s^y * t^sigma mod N_hat (witness commitment for y).
+    pub pedersen_sy: Vec<u8>,
     /// Response z1 = alpha + e*x.
     pub z1: Vec<u8>,
     /// Response z2 = beta + e*y.
     pub z2: Vec<u8>,
-    /// Response w = mu * rho_y^e * rho^e mod N_0 (masked randomness).
+    /// Response w = mu * rho_y^e mod N_0^2 (masked randomness).
     pub w: Vec<u8>,
     /// Response z3 = gamma + e*tau.
     pub z3: Vec<u8>,
@@ -785,12 +804,15 @@ pub fn prove_piaffg(
     let ell_bound = BigUint::one() << (PIENC_ELL + PIENC_EPSILON) as usize;
     let ell_prime_bound = BigUint::one() << (PIENC_ELL + PIENC_EPSILON) as usize;
 
-    // Sample masking values
+    // Sample masking values (all sampled BEFORE challenge computation)
     let alpha = sample_below(&ell_bound);
     let beta = sample_below(&ell_prime_bound);
     let mu = sample_coprime_for_proof(&n0);
     let gamma = sample_below(&(&n_hat * &ell_bound));
     let delta = sample_below(&(&n_hat * &ell_prime_bound));
+    // tau and sigma are Pedersen blinding factors for the witness values x and y
+    let tau = sample_below(&(&n_hat * (BigUint::one() << PIENC_ELL as usize)));
+    let sigma = sample_below(&(&n_hat * (BigUint::one() << PIENC_ELL as usize)));
 
     // Commitment A = C^alpha * Enc_0(beta, mu)
     let c_alpha = c.modpow(&alpha, &n0_sq);
@@ -808,7 +830,13 @@ pub fn prove_piaffg(
     // Commitment F = s^beta * t^delta mod N_hat
     let commitment_f = (s_base.modpow(&beta, &n_hat) * t_base.modpow(&delta, &n_hat)) % &n_hat;
 
-    // Fiat-Shamir challenge
+    // Pedersen witness commitments (committed BEFORE challenge)
+    // S_x = s^x * t^tau mod N_hat
+    let pedersen_sx = (s_base.modpow(x, &n_hat) * t_base.modpow(&tau, &n_hat)) % &n_hat;
+    // S_y = s^y * t^sigma mod N_hat
+    let pedersen_sy = (s_base.modpow(y, &n_hat) * t_base.modpow(&sigma, &n_hat)) % &n_hat;
+
+    // Fiat-Shamir challenge (includes witness commitments for binding)
     let e = piaffg_challenge(
         &public.pk_n0,
         &public.c,
@@ -816,6 +844,8 @@ pub fn prove_piaffg(
         &commitment_a,
         &commitment_e,
         &commitment_f,
+        &pedersen_sx,
+        &pedersen_sy,
         &n_hat,
     );
 
@@ -827,8 +857,7 @@ pub fn prove_piaffg(
     let rho_y_e = rho_y.modpow(&e, &n0_sq);
     let w = (&mu * &rho_y_e) % &n0_sq;
 
-    let tau = sample_below(&(&n_hat * (BigUint::one() << PIENC_ELL as usize)));
-    let sigma = sample_below(&(&n_hat * (BigUint::one() << PIENC_ELL as usize)));
+    // z3 = gamma + e*tau, z4 = delta + e*sigma (tau, sigma committed before challenge)
     let z3 = &gamma + &e * &tau;
     let z4 = &delta + &e * &sigma;
 
@@ -837,6 +866,8 @@ pub fn prove_piaffg(
         commitment_bx,
         commitment_e: commitment_e.to_bytes_be(),
         commitment_f: commitment_f.to_bytes_be(),
+        pedersen_sx: pedersen_sx.to_bytes_be(),
+        pedersen_sy: pedersen_sy.to_bytes_be(),
         z1: z1.to_bytes_be(),
         z2: z2.to_bytes_be(),
         w: w.to_bytes_be(),
@@ -851,21 +882,29 @@ pub fn prove_piaffg(
 /// 1. z1 in range: |z1| < 2^(ell + epsilon)
 /// 2. z2 in range: |z2| < 2^(ell' + epsilon)
 /// 3. C^z1 * Enc(z2, w) = A * D^e mod N_0^2
+/// 4. s^z1 * t^z3 == E * S_x^e mod N_hat (Pedersen check for x)
+/// 5. s^z2 * t^z4 == F * S_y^e mod N_hat (Pedersen check for y)
 pub fn verify_piaffg(proof: &PiAffgProof, public: &PiAffgPublicInput) -> bool {
     let n0 = BigUint::from_bytes_be(&public.pk_n0);
     let n0_sq = BigUint::from_bytes_be(&public.pk_n0_squared);
     let c = BigUint::from_bytes_be(&public.c);
     let d = BigUint::from_bytes_be(&public.d);
     let n_hat = BigUint::from_bytes_be(&public.n_hat);
+    let s_base = BigUint::from_bytes_be(&public.s);
+    let t_base = BigUint::from_bytes_be(&public.t);
 
     let commitment_a = BigUint::from_bytes_be(&proof.commitment_a);
     let commitment_e = BigUint::from_bytes_be(&proof.commitment_e);
     let commitment_f = BigUint::from_bytes_be(&proof.commitment_f);
+    let pedersen_sx = BigUint::from_bytes_be(&proof.pedersen_sx);
+    let pedersen_sy = BigUint::from_bytes_be(&proof.pedersen_sy);
     let z1 = BigUint::from_bytes_be(&proof.z1);
     let z2 = BigUint::from_bytes_be(&proof.z2);
+    let z3 = BigUint::from_bytes_be(&proof.z3);
+    let z4 = BigUint::from_bytes_be(&proof.z4);
     let w = BigUint::from_bytes_be(&proof.w);
 
-    // Recompute challenge
+    // Recompute challenge (includes witness commitments for binding)
     let e = piaffg_challenge(
         &public.pk_n0,
         &public.c,
@@ -873,6 +912,8 @@ pub fn verify_piaffg(proof: &PiAffgProof, public: &PiAffgPublicInput) -> bool {
         &commitment_a,
         &commitment_e,
         &commitment_f,
+        &pedersen_sx,
+        &pedersen_sy,
         &n_hat,
     );
 
@@ -886,7 +927,7 @@ pub fn verify_piaffg(proof: &PiAffgProof, public: &PiAffgPublicInput) -> bool {
         return false;
     }
 
-    // Verification: C^z1 * Enc(z2, w) = A * D^e mod N_0^2
+    // Check 1: C^z1 * Enc(z2, w) = A * D^e mod N_0^2
     let c_z1 = c.modpow(&z1, &n0_sq);
     let enc_z2 = (BigUint::one() + &z2 * &n0) % &n0_sq;
     let w_n = w.modpow(&n0, &n0_sq);
@@ -896,10 +937,34 @@ pub fn verify_piaffg(proof: &PiAffgProof, public: &PiAffgPublicInput) -> bool {
     let d_e = d.modpow(&e, &n0_sq);
     let rhs = (&commitment_a * &d_e) % &n0_sq;
 
-    lhs == rhs
+    if lhs != rhs {
+        return false;
+    }
+
+    // Check 2: s^z1 * t^z3 == E * S_x^e mod N_hat (Pedersen check for x)
+    // z1 = alpha + e*x, z3 = gamma + e*tau
+    // s^z1 * t^z3 = s^(alpha + e*x) * t^(gamma + e*tau)
+    //             = (s^alpha * t^gamma) * (s^x * t^tau)^e = E * S_x^e
+    let ped_x_lhs = (s_base.modpow(&z1, &n_hat) * t_base.modpow(&z3, &n_hat)) % &n_hat;
+    let sx_e = pedersen_sx.modpow(&e, &n_hat);
+    let ped_x_rhs = (&commitment_e * &sx_e) % &n_hat;
+    if ped_x_lhs != ped_x_rhs {
+        return false;
+    }
+
+    // Check 3: s^z2 * t^z4 == F * S_y^e mod N_hat (Pedersen check for y)
+    let ped_y_lhs = (s_base.modpow(&z2, &n_hat) * t_base.modpow(&z4, &n_hat)) % &n_hat;
+    let sy_e = pedersen_sy.modpow(&e, &n_hat);
+    let ped_y_rhs = (&commitment_f * &sy_e) % &n_hat;
+    if ped_y_lhs != ped_y_rhs {
+        return false;
+    }
+
+    true
 }
 
 /// Fiat-Shamir challenge for Πaff-g.
+#[allow(clippy::too_many_arguments)]
 fn piaffg_challenge(
     pk_n0: &[u8],
     c: &[u8],
@@ -907,6 +972,8 @@ fn piaffg_challenge(
     commitment_a: &BigUint,
     commitment_e: &BigUint,
     commitment_f: &BigUint,
+    pedersen_sx: &BigUint,
+    pedersen_sy: &BigUint,
     n_hat: &BigUint,
 ) -> BigUint {
     let mut hasher = Sha256::new();
@@ -917,6 +984,8 @@ fn piaffg_challenge(
     hasher.update(commitment_a.to_bytes_be());
     hasher.update(commitment_e.to_bytes_be());
     hasher.update(commitment_f.to_bytes_be());
+    hasher.update(pedersen_sx.to_bytes_be());
+    hasher.update(pedersen_sy.to_bytes_be());
     hasher.update(n_hat.to_bytes_be());
     let hash = hasher.finalize();
     BigUint::from_bytes_be(&hash[..16])
@@ -926,20 +995,19 @@ fn piaffg_challenge(
 // Πlog* — Group Element vs Paillier Encryption Consistency Proof
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Πlog* proof: proves C = Enc(x) AND X_bytes encodes the same x
-/// (in a generic group representation).
+/// Πlog* proof: proves C = Enc(x) AND X = x*G on secp256k1.
 ///
 /// In CGGMP21, this proves that a Paillier ciphertext and an EC point
-/// both encode the same secret scalar. Here we use a simplified version
-/// that works over the Paillier plaintext space directly.
+/// both encode the same secret scalar. Uses real EC scalar multiplication
+/// on secp256k1 for the group element binding.
 ///
 /// Concretely: proves knowledge of (x, r) such that C = Enc(x, r) and
-/// x matches a public commitment X = H(x).
+/// X = x * G (where G is the secp256k1 generator).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PiLogStarProof {
     /// Commitment A = Enc(alpha, mu).
     pub commitment_a: Vec<u8>,
-    /// Commitment Y = H(alpha) — hash commitment to masking value.
+    /// Commitment Y = alpha * G (compressed SEC1, 33 bytes).
     pub commitment_y: Vec<u8>,
     /// Commitment D = s^alpha * t^gamma mod N_hat.
     pub commitment_d: Vec<u8>,
@@ -960,7 +1028,7 @@ pub struct PiLogStarPublicInput {
     pub pk_n_squared: Vec<u8>,
     /// Ciphertext C = Enc(x, r).
     pub ciphertext: Vec<u8>,
-    /// Public commitment X = H("pilogstar-point" || x_bytes) — binds the same x.
+    /// Public EC point X = x * G (compressed SEC1, 33 bytes).
     pub x_commitment: Vec<u8>,
     /// Pedersen modulus N_hat.
     pub n_hat: Vec<u8>,
@@ -970,18 +1038,37 @@ pub struct PiLogStarPublicInput {
     pub t: Vec<u8>,
 }
 
-/// Compute the "group element" commitment for Πlog* (hash-based stand-in for x*G).
+/// Compute the EC point commitment for Πlog*: x * G on secp256k1.
 ///
-/// In a full EC implementation, this would be scalar multiplication on the curve.
-/// Here we use H("pilogstar-point" || x_bytes) as a binding commitment.
+/// Returns the compressed SEC1 encoding (33 bytes) of the point x * G.
+/// The input x is reduced modulo the secp256k1 group order before scalar
+/// multiplication to ensure it is a valid scalar.
 pub fn pilogstar_point_commitment(x: &BigUint) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(b"pilogstar-point");
-    hasher.update(x.to_bytes_be());
-    hasher.finalize().to_vec()
+    use k256::elliptic_curve::group::GroupEncoding;
+    let scalar = biguint_to_k256_scalar(x);
+    let point = k256::ProjectivePoint::GENERATOR * scalar;
+    point.to_bytes().to_vec()
 }
 
-/// Prove C = Enc(x, r) AND X = point_commitment(x).
+/// Convert a BigUint to a k256::Scalar (reduced mod group order).
+fn biguint_to_k256_scalar(x: &BigUint) -> k256::Scalar {
+    use k256::elliptic_curve::ops::Reduce;
+    // secp256k1 group order: FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+    let order = BigUint::from_bytes_be(&[
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFE, 0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36,
+        0x41, 0x41,
+    ]);
+    let reduced = x % &order;
+    let mut bytes = [0u8; 32];
+    let be_bytes = reduced.to_bytes_be();
+    // Right-align into 32-byte array
+    let start = 32usize.saturating_sub(be_bytes.len());
+    bytes[start..].copy_from_slice(&be_bytes[..core::cmp::min(be_bytes.len(), 32)]);
+    <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(k256::FieldBytes::from_slice(&bytes))
+}
+
+/// Prove C = Enc(x, r) AND X = x * G on secp256k1.
 pub fn prove_pilogstar(x: &BigUint, r: &BigUint, public: &PiLogStarPublicInput) -> PiLogStarProof {
     let n = BigUint::from_bytes_be(&public.pk_n);
     let n_sq = BigUint::from_bytes_be(&public.pk_n_squared);
@@ -1039,9 +1126,10 @@ pub fn prove_pilogstar(x: &BigUint, r: &BigUint, public: &PiLogStarPublicInput) 
 /// Checks:
 /// 1. z1 in range
 /// 2. Enc(z1, z2) = A * C^e mod N^2
-/// 3. point_commitment(z1) = Y * X^e (additively in hash-commitment space — not exact,
-///    we verify via Fiat-Shamir binding)
+/// 3. z1 * G == Y + e * X (EC point check: proves Paillier plaintext matches EC point)
 pub fn verify_pilogstar(proof: &PiLogStarProof, public: &PiLogStarPublicInput) -> bool {
+    use k256::elliptic_curve::group::GroupEncoding;
+
     let n = BigUint::from_bytes_be(&public.pk_n);
     let n_sq = BigUint::from_bytes_be(&public.pk_n_squared);
     let n_hat = BigUint::from_bytes_be(&public.n_hat);
@@ -1069,7 +1157,7 @@ pub fn verify_pilogstar(proof: &PiLogStarProof, public: &PiLogStarPublicInput) -
         return false;
     }
 
-    // Enc(z1, z2) = A * C^e mod N^2
+    // Check 1: Enc(z1, z2) = A * C^e mod N^2
     let g_z1 = (BigUint::one() + &z1 * &n) % &n_sq;
     let z2_n = z2.modpow(&n, &n_sq);
     let lhs = (&g_z1 * &z2_n) % &n_sq;
@@ -1081,18 +1169,42 @@ pub fn verify_pilogstar(proof: &PiLogStarProof, public: &PiLogStarPublicInput) -
         return false;
     }
 
-    // Verify point commitment consistency:
-    // In a full EC implementation: z1*G = Y + e*X
-    // Here: we verify that the proof was computed with consistent x via Fiat-Shamir binding.
-    // The challenge e binds commitment_y and x_commitment, so a cheating prover
-    // who uses different x values will fail the Enc check above.
-    //
-    // Additional explicit check: the prover's z1 should produce a point commitment
-    // that is consistent. Since we can't do EC addition on hash commitments,
-    // the binding comes from the Fiat-Shamir transcript including both
-    // commitment_y (= H(alpha)) and x_commitment (= H(x)).
+    // Check 2: z1 * G == Y + e * X on secp256k1
+    // Since z1 = alpha + e*x, and Y = alpha*G, X = x*G:
+    //   z1 * G = (alpha + e*x) * G = alpha*G + e*(x*G) = Y + e*X
+    let z1_scalar = biguint_to_k256_scalar(&z1);
+    let e_scalar = biguint_to_k256_scalar(&e);
+
+    // Decode Y (commitment_y) from compressed SEC1
+    let y_point = match decode_sec1_point(&proof.commitment_y) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Decode X (x_commitment) from compressed SEC1
+    let x_point = match decode_sec1_point(&public.x_commitment) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // z1 * G
+    let lhs_ec = k256::ProjectivePoint::GENERATOR * z1_scalar;
+    // Y + e * X
+    let rhs_ec = y_point + x_point * e_scalar;
+
+    if lhs_ec.to_bytes() != rhs_ec.to_bytes() {
+        return false;
+    }
 
     true
+}
+
+/// Decode a compressed SEC1 point (33 bytes) into a ProjectivePoint.
+fn decode_sec1_point(bytes: &[u8]) -> Option<k256::ProjectivePoint> {
+    use k256::elliptic_curve::sec1::FromEncodedPoint;
+    let encoded = k256::EncodedPoint::from_bytes(bytes).ok()?;
+    let affine: Option<k256::AffinePoint> = k256::AffinePoint::from_encoded_point(&encoded).into();
+    affine.map(k256::ProjectivePoint::from)
 }
 
 /// Fiat-Shamir challenge for Πlog*.
@@ -1476,7 +1588,7 @@ mod tests {
         let proof = prove_pimod(&n1, &p, &q);
 
         // Generate a different modulus (key2)
-        let (pk2, _sk2) = generate_paillier_keypair(512);
+        let (pk2, _sk2) = generate_paillier_keypair(512).unwrap();
         let n2 = pk2.n_biguint();
 
         // Proof generated for n1 must not verify against n2
@@ -1497,7 +1609,7 @@ mod tests {
         let proof = prove_pifac(&n1, &p, &q);
 
         // Generate a different modulus (key2)
-        let (pk2, _sk2) = generate_paillier_keypair(512);
+        let (pk2, _sk2) = generate_paillier_keypair(512).unwrap();
         let n2 = pk2.n_biguint();
 
         // Proof generated for n1 must not verify against n2
@@ -1851,6 +1963,347 @@ mod tests {
         assert_eq!(
             sum, product,
             "MtA with proofs: alpha + beta must equal a * b mod N"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SEC-055: Pienc Pedersen commitment soundness tests
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pienc_tampered_pedersen_s_rejected() {
+        // SEC-055: Verify that tampering with the Pedersen witness commitment
+        // causes verification to fail (previously this check was discarded).
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let m = BigUint::from(42u64);
+        let (ct, r) = encrypt_with_known_r(pk, &m);
+
+        let public = PiEncPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let mut proof = prove_pienc(&m, &r, &public);
+
+        // Tamper with the Pedersen commitment S (use a random value)
+        let n_hat_big = BigUint::from_bytes_be(n_hat);
+        proof.pedersen_s = sample_below(&n_hat_big).to_bytes_be();
+
+        assert!(
+            !verify_pienc(&proof, &public),
+            "SEC-055: tampered Pedersen commitment S must cause Pienc rejection"
+        );
+    }
+
+    #[test]
+    fn test_pienc_wrong_witness_pedersen_rejected() {
+        // SEC-055: Generate proof for m=42, but try to forge Pedersen commitment for m=99.
+        // The Pedersen check must catch this.
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let m = BigUint::from(42u64);
+        let (ct, r) = encrypt_with_known_r(pk, &m);
+
+        let public = PiEncPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let mut proof = prove_pienc(&m, &r, &public);
+
+        // Forge a Pedersen commitment for a different message m'=99
+        let n_hat_big = BigUint::from_bytes_be(n_hat);
+        let s_base = BigUint::from_bytes_be(s);
+        let t_base = BigUint::from_bytes_be(t);
+        let wrong_m = BigUint::from(99u64);
+        let fake_rho = sample_below(&n_hat_big);
+        let fake_pedersen = (s_base.modpow(&wrong_m, &n_hat_big)
+            * t_base.modpow(&fake_rho, &n_hat_big))
+            % &n_hat_big;
+        proof.pedersen_s = fake_pedersen.to_bytes_be();
+
+        assert!(
+            !verify_pienc(&proof, &public),
+            "SEC-055: Pedersen commitment for wrong witness must be rejected"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SEC-056: Piaffg Pedersen commitment soundness tests
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_piaffg_tampered_pedersen_sx_rejected() {
+        // SEC-056: Verify that tampering with S_x causes rejection
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let a = BigUint::from(7u64);
+        let x = BigUint::from(13u64);
+        let y = BigUint::from(99u64);
+
+        let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
+        let c_ax = pk.scalar_mult(&c_a, &x);
+        let n = pk.n_biguint();
+        let rho_y = sample_coprime_for_proof(&n);
+        let c_y = pk.encrypt_with_r(&y, &rho_y);
+        let d = pk.add(&c_ax, &c_y);
+
+        let public = PiAffgPublicInput {
+            pk_n0: pk.n.clone(),
+            pk_n0_squared: pk.n_squared.clone(),
+            c: c_a.data.clone(),
+            d: d.data.clone(),
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let mut proof = prove_piaffg(&x, &y, &rho_y, &public);
+
+        // Tamper with S_x
+        let n_hat_big = BigUint::from_bytes_be(n_hat);
+        proof.pedersen_sx = sample_below(&n_hat_big).to_bytes_be();
+
+        assert!(
+            !verify_piaffg(&proof, &public),
+            "SEC-056: tampered S_x must cause Piaffg rejection"
+        );
+    }
+
+    #[test]
+    fn test_piaffg_tampered_pedersen_sy_rejected() {
+        // SEC-056: Verify that tampering with S_y causes rejection
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let a = BigUint::from(7u64);
+        let x = BigUint::from(13u64);
+        let y = BigUint::from(99u64);
+
+        let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
+        let c_ax = pk.scalar_mult(&c_a, &x);
+        let n = pk.n_biguint();
+        let rho_y = sample_coprime_for_proof(&n);
+        let c_y = pk.encrypt_with_r(&y, &rho_y);
+        let d = pk.add(&c_ax, &c_y);
+
+        let public = PiAffgPublicInput {
+            pk_n0: pk.n.clone(),
+            pk_n0_squared: pk.n_squared.clone(),
+            c: c_a.data.clone(),
+            d: d.data.clone(),
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let mut proof = prove_piaffg(&x, &y, &rho_y, &public);
+
+        // Tamper with S_y
+        let n_hat_big = BigUint::from_bytes_be(n_hat);
+        proof.pedersen_sy = sample_below(&n_hat_big).to_bytes_be();
+
+        assert!(
+            !verify_piaffg(&proof, &public),
+            "SEC-056: tampered S_y must cause Piaffg rejection"
+        );
+    }
+
+    #[test]
+    fn test_piaffg_wrong_witness_rejected() {
+        // SEC-056: Create a valid proof for (x=13, y=99), then tamper z3/z4
+        // to check that the Pedersen verification catches inconsistency.
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let a = BigUint::from(7u64);
+        let x = BigUint::from(13u64);
+        let y = BigUint::from(99u64);
+
+        let (c_a, _r_a) = encrypt_with_known_r(pk, &a);
+        let c_ax = pk.scalar_mult(&c_a, &x);
+        let n = pk.n_biguint();
+        let rho_y = sample_coprime_for_proof(&n);
+        let c_y = pk.encrypt_with_r(&y, &rho_y);
+        let d = pk.add(&c_ax, &c_y);
+
+        let public = PiAffgPublicInput {
+            pk_n0: pk.n.clone(),
+            pk_n0_squared: pk.n_squared.clone(),
+            c: c_a.data.clone(),
+            d: d.data.clone(),
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let mut proof = prove_piaffg(&x, &y, &rho_y, &public);
+
+        // Tamper with z3 (Pedersen response for x)
+        let n_hat_big = BigUint::from_bytes_be(n_hat);
+        proof.z3 = sample_below(&n_hat_big).to_bytes_be();
+
+        assert!(
+            !verify_piaffg(&proof, &public),
+            "SEC-056: tampered z3 must cause Piaffg Pedersen check failure"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SEC-057: Pilogstar EC point commitment soundness tests
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pilogstar_ec_point_commitment_is_33_bytes() {
+        // SEC-057: Verify commitment is compressed SEC1 (33 bytes), not hash (32 bytes)
+        let x = BigUint::from(42u64);
+        let commitment = pilogstar_point_commitment(&x);
+        assert_eq!(
+            commitment.len(),
+            33,
+            "SEC-057: EC point commitment must be 33 bytes (compressed SEC1)"
+        );
+        // First byte must be 0x02 or 0x03 (compressed point prefix)
+        assert!(
+            commitment[0] == 0x02 || commitment[0] == 0x03,
+            "SEC-057: compressed SEC1 must start with 0x02 or 0x03"
+        );
+    }
+
+    #[test]
+    fn test_pilogstar_ec_commitment_different_x() {
+        // SEC-057: Different x values must produce different EC points
+        let x1 = BigUint::from(42u64);
+        let x2 = BigUint::from(43u64);
+        let c1 = pilogstar_point_commitment(&x1);
+        let c2 = pilogstar_point_commitment(&x2);
+        assert_ne!(
+            c1, c2,
+            "SEC-057: different x values must produce different EC points"
+        );
+    }
+
+    #[test]
+    fn test_pilogstar_ec_verification_catches_wrong_x() {
+        // SEC-057: Prove with x=42, try to verify with X = 99*G.
+        // The EC check z1*G == Y + e*X must fail.
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let x = BigUint::from(42u64);
+        let (ct, r) = encrypt_with_known_r(pk, &x);
+        let x_commitment = pilogstar_point_commitment(&x);
+
+        let correct_public = PiLogStarPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            x_commitment,
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let proof = prove_pilogstar(&x, &r, &correct_public);
+
+        // Verify with wrong EC point (99*G instead of 42*G)
+        let wrong_x = BigUint::from(99u64);
+        let wrong_public = PiLogStarPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            x_commitment: pilogstar_point_commitment(&wrong_x),
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        assert!(
+            !verify_pilogstar(&proof, &wrong_public),
+            "SEC-057: EC point check must reject proof with wrong x*G"
+        );
+    }
+
+    #[test]
+    fn test_pilogstar_tampered_commitment_y_rejected() {
+        // SEC-057: Tamper with commitment_y (the prover's alpha*G) in the proof.
+        // The EC check z1*G == Y + e*X must fail.
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let x = BigUint::from(42u64);
+        let (ct, r) = encrypt_with_known_r(pk, &x);
+        let x_commitment = pilogstar_point_commitment(&x);
+
+        let public = PiLogStarPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            x_commitment,
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let mut proof = prove_pilogstar(&x, &r, &public);
+
+        // Replace commitment_y with a different point (999*G)
+        proof.commitment_y = pilogstar_point_commitment(&BigUint::from(999u64));
+
+        assert!(
+            !verify_pilogstar(&proof, &public),
+            "SEC-057: tampered commitment_y must cause EC check failure"
+        );
+    }
+
+    #[test]
+    fn test_pilogstar_invalid_point_bytes_rejected() {
+        // SEC-057: Supply garbage bytes as x_commitment (not a valid SEC1 point).
+        let (pk, _sk) = &*TEST_KEYS;
+        let (n_hat, s, t) = &*TEST_PEDERSEN;
+
+        let x = BigUint::from(42u64);
+        let (ct, r) = encrypt_with_known_r(pk, &x);
+        let x_commitment = pilogstar_point_commitment(&x);
+
+        let correct_public = PiLogStarPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            x_commitment,
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        let proof = prove_pilogstar(&x, &r, &correct_public);
+
+        // Supply invalid bytes as x_commitment
+        let bad_public = PiLogStarPublicInput {
+            pk_n: pk.n.clone(),
+            pk_n_squared: pk.n_squared.clone(),
+            ciphertext: ct.data.clone(),
+            x_commitment: vec![0xFF; 33], // invalid point
+            n_hat: n_hat.clone(),
+            s: s.clone(),
+            t: t.clone(),
+        };
+
+        assert!(
+            !verify_pilogstar(&proof, &bad_public),
+            "SEC-057: invalid EC point bytes must be rejected"
         );
     }
 }

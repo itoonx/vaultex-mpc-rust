@@ -12,16 +12,43 @@ use mpc_wallet_api::state::AppState;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Initialize structured logging with optional JSON format and secret redaction.
+///
+/// - `RUST_LOG` env controls log levels (default: `mpc_wallet_api=info,tower_http=info`)
+/// - `LOG_FORMAT=json` enables JSON output (default: human-readable)
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "mpc_wallet_api=info,tower_http=info".into());
+
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|v| v.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
+    if use_json {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .map_event_format(|_fmt| mpc_wallet_api::logging::RedactingJsonFormat),
+            )
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .map_event_format(|_fmt| mpc_wallet_api::logging::RedactingTextFormat),
+            )
+            .init();
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    // Initialize tracing.
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "mpc_wallet_api=info,tower_http=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    init_tracing();
 
     let config = AppConfig::from_env_with_vault().await;
     let mut state = AppState::from_config(&config).await;
@@ -47,7 +74,13 @@ async fn main() {
     let app = build_router(state, &config.cors_origins);
 
     let addr = format!("0.0.0.0:{}", config.port);
-    tracing::info!("MPC Wallet API starting on {addr}");
+    tracing::info!(
+        bind_address = %addr,
+        session_backend = ?config.session_backend,
+        network = %config.network,
+        rate_limit_rps = config.rate_limit_rps,
+        "MPC Wallet API starting"
+    );
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(
@@ -101,6 +134,48 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_health_live_returns_ok() {
+        let app = test_router().await;
+        let req = Request::builder()
+            .uri("/v1/health/live")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn test_health_ready_degraded_without_nats() {
+        // Default test state has no NATS orchestrator, so NATS should be disconnected.
+        let app = test_router().await;
+        let req = Request::builder()
+            .uri("/v1/health/ready")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        // Without NATS, status should be 503 degraded.
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"].as_str().unwrap(), "degraded");
+        assert_eq!(
+            json["components"]["nats"].as_str().unwrap(),
+            "disconnected"
+        );
+        assert_eq!(
+            json["components"]["redis"].as_str().unwrap(),
+            "not_configured"
+        );
     }
 
     #[tokio::test]

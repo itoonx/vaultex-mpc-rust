@@ -375,7 +375,7 @@ async fn distributed_keygen(
     };
 
     // ── Phase 2: Paillier key generation + ZK proof exchange (Sprint 28) ──
-    let (real_pk, real_sk) = crate::paillier::keygen::keypair_for_protocol(GG20_PAILLIER_BITS);
+    let (real_pk, real_sk) = crate::paillier::keygen::keypair_for_protocol(GG20_PAILLIER_BITS)?;
 
     let p_big = BigUint::from_bytes_be(&real_sk.p);
     let q_big = BigUint::from_bytes_be(&real_sk.q);
