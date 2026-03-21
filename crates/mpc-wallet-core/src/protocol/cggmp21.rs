@@ -91,6 +91,25 @@ pub struct Cggmp21ShareData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[zeroize(skip)]
     pub all_paillier_pks: Option<Vec<PaillierPublicKey>>,
+    /// Real Pedersen N_hat (product of safe primes, big-endian bytes).
+    /// Sprint 28: replaces simulated pedersen_params.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    pub real_pedersen_n_hat: Option<Vec<u8>>,
+    /// Real Pedersen s parameter (big-endian bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    pub real_pedersen_s: Option<Vec<u8>>,
+    /// Real Pedersen t parameter (big-endian bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    pub real_pedersen_t: Option<Vec<u8>>,
+    /// All parties' real Pedersen parameters (N_hat, s, t) indexed by party position.
+    /// Needed for ZK proof verification during pre-signing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    #[allow(clippy::type_complexity)]
+    pub all_pedersen_params: Option<Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>,
 }
 
 impl Cggmp21ShareData {
@@ -104,6 +123,18 @@ impl Cggmp21ShareData {
         self.real_paillier_pk.is_none()
             || self.real_paillier_sk.is_none()
             || self.all_paillier_pks.is_none()
+    }
+
+    /// Returns true if this share has BOTH real Paillier keys AND real Pedersen
+    /// parameters — the full auxiliary info needed for ZK-proof-verified pre-signing.
+    pub fn has_real_aux_info(&self) -> bool {
+        self.real_paillier_pk.is_some()
+            && self.real_paillier_sk.is_some()
+            && self.all_paillier_pks.is_some()
+            && self.real_pedersen_n_hat.is_some()
+            && self.real_pedersen_s.is_some()
+            && self.real_pedersen_t.is_some()
+            && self.all_pedersen_params.is_some()
     }
 }
 
@@ -176,6 +207,15 @@ struct AuxInfoBroadcast {
     pimod_proof: PimodProof,
     /// Πfac proof: N has no small factors (CVE-2023-33241 prevention).
     pifac_proof: PifacProof,
+    /// Real Pedersen N_hat (product of safe primes, big-endian bytes).
+    #[serde(default)]
+    pedersen_n_hat: Option<Vec<u8>>,
+    /// Real Pedersen s parameter (big-endian bytes).
+    #[serde(default)]
+    pedersen_s: Option<Vec<u8>>,
+    /// Real Pedersen t parameter (big-endian bytes).
+    #[serde(default)]
+    pedersen_t: Option<Vec<u8>>,
 }
 
 /// Round 2 message for pre-signing with real MtA: encrypted k_i.
@@ -937,12 +977,19 @@ async fn cggmp21_keygen(
     let pimod_proof = prove_pimod(&n_big, &p_big, &q_big);
     let pifac_proof = prove_pifac(&n_big, &p_big, &q_big);
 
-    // ── Round 4: Broadcast Paillier public key + ZK proofs ──────────────
+    // ── Generate real Pedersen parameters for ZK proofs ─────────────────
+    let (ped_n_hat, ped_s, ped_t) =
+        crate::paillier::zk_proofs::pedersen_params_for_protocol(DEFAULT_PAILLIER_BITS);
+
+    // ── Round 4: Broadcast Paillier public key + Pedersen params + ZK proofs ──
     let aux_msg = AuxInfoBroadcast {
         party_index: my_index,
         paillier_pk: real_pk.clone(),
         pimod_proof,
         pifac_proof,
+        pedersen_n_hat: Some(ped_n_hat.clone()),
+        pedersen_s: Some(ped_s.clone()),
+        pedersen_t: Some(ped_t.clone()),
     };
     let aux_payload =
         serde_json::to_vec(&aux_msg).map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -994,6 +1041,18 @@ async fn cggmp21_keygen(
     let all_paillier_pks: Vec<PaillierPublicKey> =
         all_aux.iter().map(|a| a.paillier_pk.clone()).collect();
 
+    // Collect all parties' Pedersen parameters (ordered by party index)
+    let all_pedersen: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = all_aux
+        .iter()
+        .map(|a| {
+            (
+                a.pedersen_n_hat.clone().unwrap_or_default(),
+                a.pedersen_s.clone().unwrap_or_default(),
+                a.pedersen_t.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+
     // ── Build share data ────────────────────────────────────────────────
     let share_data = Cggmp21ShareData {
         party_index: my_index,
@@ -1006,6 +1065,10 @@ async fn cggmp21_keygen(
         real_paillier_sk: Some(real_sk),
         real_paillier_pk: Some(real_pk),
         all_paillier_pks: Some(all_paillier_pks),
+        real_pedersen_n_hat: Some(ped_n_hat),
+        real_pedersen_s: Some(ped_s),
+        real_pedersen_t: Some(ped_t),
+        all_pedersen_params: Some(all_pedersen),
     };
 
     let share_bytes =
@@ -2051,11 +2114,18 @@ async fn cggmp21_refresh(
     let pimod_proof = prove_pimod(&n_big, &p_big, &q_big);
     let pifac_proof = prove_pifac(&n_big, &p_big, &q_big);
 
+    // Generate fresh real Pedersen parameters
+    let (fresh_ped_n_hat, fresh_ped_s, fresh_ped_t) =
+        crate::paillier::zk_proofs::pedersen_params_for_protocol(DEFAULT_PAILLIER_BITS);
+
     let aux_msg = AuxInfoBroadcast {
         party_index: my_index,
         paillier_pk: fresh_pk.clone(),
         pimod_proof,
         pifac_proof,
+        pedersen_n_hat: Some(fresh_ped_n_hat.clone()),
+        pedersen_s: Some(fresh_ped_s.clone()),
+        pedersen_t: Some(fresh_ped_t.clone()),
     };
     let aux_payload =
         serde_json::to_vec(&aux_msg).map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -2097,6 +2167,16 @@ async fn cggmp21_refresh(
     }
     let fresh_all_pks: Vec<PaillierPublicKey> =
         all_aux.iter().map(|a| a.paillier_pk.clone()).collect();
+    let fresh_all_ped: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = all_aux
+        .iter()
+        .map(|a| {
+            (
+                a.pedersen_n_hat.clone().unwrap_or_default(),
+                a.pedersen_s.clone().unwrap_or_default(),
+                a.pedersen_t.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
 
     // ── Build refreshed share data ───────────────────────────────────────
     let new_share_data = Cggmp21ShareData {
@@ -2110,6 +2190,10 @@ async fn cggmp21_refresh(
         real_paillier_sk: Some(fresh_sk),
         real_paillier_pk: Some(fresh_pk),
         all_paillier_pks: Some(fresh_all_pks),
+        real_pedersen_n_hat: Some(fresh_ped_n_hat),
+        real_pedersen_s: Some(fresh_ped_s),
+        real_pedersen_t: Some(fresh_ped_t),
+        all_pedersen_params: Some(fresh_all_ped),
     };
 
     let new_share_bytes =
@@ -2265,6 +2349,10 @@ mod tests {
             real_paillier_sk: None,
             real_paillier_pk: None,
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
 
         let bytes = serde_json::to_vec(&share).unwrap();
@@ -2781,6 +2869,10 @@ mod tests {
             real_paillier_sk: None,
             real_paillier_pk: None,
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
 
         let share_bytes = serde_json::to_vec(&share_data).unwrap();
@@ -3241,6 +3333,10 @@ mod tests {
             real_paillier_sk: None,
             real_paillier_pk: None,
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
 
         let bytes = serde_json::to_vec(&old_share).unwrap();
@@ -3265,6 +3361,10 @@ mod tests {
             real_paillier_sk: None,
             real_paillier_pk: None,
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
         let old_format = serde_json::to_vec(&old_share2).unwrap();
         // The JSON should NOT contain real_paillier_* fields (skip_serializing_if)
@@ -3318,6 +3418,10 @@ mod tests {
             real_paillier_sk: Some(sk),
             real_paillier_pk: Some(pk.clone()),
             all_paillier_pks: Some(vec![pk]),
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
 
         // Serialize
@@ -3509,6 +3613,10 @@ mod tests {
             real_paillier_sk: None,
             real_paillier_pk: None,
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
         assert!(
             share.needs_paillier_upgrade(),
@@ -3532,6 +3640,10 @@ mod tests {
             real_paillier_sk: Some(sk),
             real_paillier_pk: Some(pk.clone()),
             all_paillier_pks: Some(vec![pk]),
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
         assert!(
             !share.needs_paillier_upgrade(),
@@ -3556,6 +3668,10 @@ mod tests {
             real_paillier_sk: None,
             real_paillier_pk: Some(pk),
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
         assert!(
             share.needs_paillier_upgrade(),
