@@ -964,6 +964,9 @@ async fn cggmp21_keygen(
         *final_share += share_scalar;
     }
 
+    // ── Per-round sync barrier (L-012 fix): ensure all Feldman VSS complete
+    transport.wait_ready().await?;
+
     // ── Generate auxiliary info (Paillier + Pedersen) ────────────────────
     // Legacy simulated Paillier (kept for backward compat serialization)
     let sim_paillier = generate_paillier_keypair(&x_i, my_index);
@@ -1225,6 +1228,9 @@ async fn cggmp21_pre_sign(
             .map_err(|e| CoreError::Crypto(format!("invalid Gamma point: {e}")))?;
         gamma_sum_point += gp.to_projective();
     }
+
+    // ── Per-round sync barrier (L-012 fix): ensure all parties completed Round 1
+    transport.wait_ready().await?;
 
     // ── Round 2: MtA — compute shares of k * gamma ────────────────────
     // Check if real Paillier keys are available for secure MtA
@@ -1529,6 +1535,9 @@ async fn cggmp21_pre_sign(
                 &secp_order,
             );
         }
+
+        // ── Per-round sync barrier (L-012 fix): ensure all MtA round 2 complete
+        transport.wait_ready().await?;
 
         // Broadcast delta_i for aggregation (as Scalar bytes, 32 bytes)
         let delta_broadcast = serde_json::json!({

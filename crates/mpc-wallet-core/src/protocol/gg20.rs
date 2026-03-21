@@ -374,6 +374,10 @@ async fn distributed_keygen(
         (sd, group_pubkey_bytes)
     };
 
+    // ── Per-round sync barrier (L-012 fix): ensure all parties have completed
+    //    Phase 1 before anyone starts Phase 2 broadcasts ──────────────────────
+    transport.wait_ready().await?;
+
     // ── Phase 2: Paillier key generation + ZK proof exchange (Sprint 28) ──
     let (real_pk, real_sk) = crate::paillier::keygen::keypair_for_protocol(GG20_PAILLIER_BITS)?;
 
@@ -588,6 +592,9 @@ async fn distributed_sign(
 
         (r_scalar, k_inv_scalar)
     };
+
+    // ── Per-round sync barrier (L-012 fix) ───────────────────────────────
+    transport.wait_ready().await?;
 
     // ── Round 2: compute partial signature contribution and send to Party 1 ──
     //
