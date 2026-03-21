@@ -21,16 +21,46 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ed25519_dalek::SigningKey;
+use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use mpc_wallet_core::key_store::encrypted::EncryptedFileStore;
 use mpc_wallet_core::key_store::types::{KeyGroupId, KeyMetadata};
 use mpc_wallet_core::key_store::KeyStore;
+use mpc_wallet_core::protocol::sign_authorization::AuthorizationCache;
 use mpc_wallet_core::protocol::MpcProtocol;
 use mpc_wallet_core::transport::nats::NatsTransport;
 use mpc_wallet_core::types::{CryptoScheme, PartyId, ThresholdConfig};
 
 use rpc::*;
+
+/// Default max entries for authorization replay cache.
+const DEFAULT_AUTH_CACHE_MAX_ENTRIES: usize = 10_000;
+
+/// Initialize structured logging with optional JSON format.
+///
+/// - `RUST_LOG` env controls log levels (default: `mpc_wallet_node=info`)
+/// - `LOG_FORMAT=json` enables JSON output (default: human-readable)
+fn init_tracing() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "mpc_wallet_node=info".into());
+
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|v| v.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
+    if use_json {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer().json().with_target(true))
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
+}
 
 /// Node configuration loaded from environment.
 struct NodeConfig {
@@ -40,6 +70,7 @@ struct NodeConfig {
     key_store_password: String,
     signing_key: SigningKey,
     gateway_pubkey: ed25519_dalek::VerifyingKey,
+    auth_cache_max_entries: usize,
 }
 
 impl NodeConfig {
@@ -78,26 +109,51 @@ impl NodeConfig {
             ed25519_dalek::VerifyingKey::from_bytes(&gateway_pubkey_bytes.try_into().unwrap())
                 .expect("GATEWAY_PUBKEY must be a valid Ed25519 public key");
 
-        Self {
+        let auth_cache_max_entries = std::env::var("AUTH_CACHE_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_AUTH_CACHE_MAX_ENTRIES);
+
+        let config = Self {
             party_id: PartyId(party_id),
             nats_url,
             key_store_dir: PathBuf::from(key_store_dir),
             key_store_password,
             signing_key,
             gateway_pubkey,
-        }
+            auth_cache_max_entries,
+        };
+        config.validate();
+        config
+    }
+
+    /// Validate configuration invariants. Panics with clear messages on invalid config.
+    fn validate(&self) {
+        assert!(
+            self.party_id.0 > 0,
+            "PARTY_ID must be >= 1 (got {})",
+            self.party_id.0
+        );
+        assert!(!self.nats_url.is_empty(), "NATS_URL must not be empty");
+        assert!(
+            self.key_store_dir.exists(),
+            "KEY_STORE_DIR does not exist: {} — create it before starting the node",
+            self.key_store_dir.display()
+        );
+        assert!(
+            !self.key_store_password.is_empty(),
+            "KEY_STORE_PASSWORD must not be empty"
+        );
+        assert!(
+            self.auth_cache_max_entries > 0,
+            "AUTH_CACHE_MAX_ENTRIES must be > 0"
+        );
     }
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "mpc_wallet_node=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    init_tracing();
 
     let config = NodeConfig::from_env();
 
@@ -142,13 +198,23 @@ async fn main() {
         "listening for keygen/sign/freeze requests"
     );
 
+    // Authorization replay cache (prevents duplicate SignAuthorization usage)
+    let auth_cache = Arc::new(Mutex::new(AuthorizationCache::new(
+        config.auth_cache_max_entries,
+    )));
+
+    tracing::info!(
+        auth_cache_max_entries = config.auth_cache_max_entries,
+        "authorization cache initialized"
+    );
+
     // Process requests
     let config = Arc::new(config);
     let nats = Arc::new(nats_client);
 
     tokio::select! {
         _ = handle_keygen_requests(keygen_sub, config.clone(), key_store.clone(), nats.clone()) => {}
-        _ = handle_sign_requests(sign_sub, config.clone(), key_store.clone(), nats.clone()) => {}
+        _ = handle_sign_requests(sign_sub, config.clone(), key_store.clone(), nats.clone(), auth_cache.clone()) => {}
         _ = handle_freeze_requests(freeze_sub, config.clone(), key_store.clone(), nats.clone()) => {}
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("shutting down");
@@ -354,6 +420,7 @@ async fn handle_sign_requests(
     config: Arc<NodeConfig>,
     key_store: Arc<EncryptedFileStore>,
     nats: Arc<async_nats::Client>,
+    auth_cache: Arc<Mutex<AuthorizationCache>>,
 ) {
     use futures::StreamExt;
 
@@ -390,9 +457,10 @@ async fn handle_sign_requests(
         let key_store = key_store.clone();
         let nats = nats.clone();
         let reply_to = msg.reply.clone();
+        let auth_cache = auth_cache.clone();
 
         tokio::spawn(async move {
-            let response = execute_sign(&req, &config, &key_store).await;
+            let response = execute_sign(&req, &config, &key_store, &auth_cache).await;
             let payload = serde_json::to_vec(&response).unwrap();
 
             // Use NATS request-reply: respond to the inbox from the request message.
@@ -410,6 +478,7 @@ async fn execute_sign(
     req: &SignRequest,
     config: &NodeConfig,
     key_store: &EncryptedFileStore,
+    auth_cache: &Mutex<AuthorizationCache>,
 ) -> SignResponse {
     // Load this party's share from key store
     let group_id = KeyGroupId::from_string(req.group_id.clone());
@@ -444,7 +513,11 @@ async fn execute_sign(
         &req.sign_authorization,
     ) {
         Ok(auth) => {
-            if let Err(e) = auth.verify(&config.gateway_pubkey, &message_bytes) {
+            // Verify signature + replay protection via AuthorizationCache
+            let mut cache = auth_cache.lock().await;
+            if let Err(e) =
+                auth.verify_with_cache(&config.gateway_pubkey, &message_bytes, &mut cache)
+            {
                 tracing::warn!(
                     group_id = %req.group_id,
                     "SignAuthorization verification FAILED: {e}"
@@ -457,7 +530,7 @@ async fn execute_sign(
                     error: Some(format!("SignAuthorization verification failed: {e}")),
                 };
             }
-            tracing::debug!("SignAuthorization verified");
+            tracing::debug!("SignAuthorization verified + replay-checked");
         }
         Err(e) => {
             return SignResponse {

@@ -166,7 +166,7 @@ fn l_function(x: &BigUint, n: &BigUint) -> BigUint {
 }
 
 /// Sample a random number in Z*_N (coprime to N).
-fn sample_coprime(n: &BigUint) -> BigUint {
+pub(crate) fn sample_coprime(n: &BigUint) -> BigUint {
     let byte_len = (n.bits() as usize).div_ceil(8);
     let mut buf = vec![0u8; byte_len];
     loop {
@@ -193,13 +193,12 @@ pub(crate) fn gcd(a: &BigUint, b: &BigUint) -> BigUint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paillier::keygen::generate_paillier_keypair;
+    use crate::paillier::keygen::{generate_paillier_keypair, test_keypair};
     use std::sync::LazyLock;
 
-    // Generate keypair once — safe prime generation is slow (~1-5s for 512-bit test keys).
-    // We use 512-bit keys for faster tests; the keygen module tests validate 2048-bit.
+    // Shared 512-bit keypair — delegates to keygen::test_keypair() (process-wide LazyLock cache).
     static TEST_KEYS: LazyLock<(PaillierPublicKey, PaillierSecretKey)> =
-        LazyLock::new(|| generate_paillier_keypair(512));
+        LazyLock::new(test_keypair);
 
     #[test]
     fn test_paillier_encrypt_decrypt_roundtrip() {
@@ -261,7 +260,7 @@ mod tests {
     fn test_paillier_different_keys_cant_decrypt() {
         let (pk1, _sk1) = &*TEST_KEYS;
         // Generate a second keypair
-        let (_pk2, sk2) = generate_paillier_keypair(512);
+        let (_pk2, sk2) = generate_paillier_keypair(512).unwrap();
 
         let m = BigUint::from(42u64);
         let ct = pk1.encrypt(&m);

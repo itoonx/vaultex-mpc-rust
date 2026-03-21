@@ -393,6 +393,8 @@ pub struct AppState {
     /// MPC orchestrator — delegates keygen/sign to distributed nodes via NATS.
     /// Gateway holds ZERO key shares (DEC-015).
     pub orchestrator: crate::orchestrator::MpcOrchestrator,
+    /// Secrets backend type (env or vault) — used for health check status.
+    pub secrets_backend: crate::config::SecretsBackend,
 }
 
 impl AppState {
@@ -549,6 +551,7 @@ impl AppState {
             session_ttl: config.session_ttl,
             metrics: Arc::new(metrics),
             orchestrator: crate::orchestrator::MpcOrchestrator::new(),
+            secrets_backend: config.secrets_backend,
         }
     }
 

@@ -35,10 +35,11 @@ use crate::error::CoreError;
 use crate::transport::ProtocolMessage;
 use crate::types::PartyId;
 
-/// Default message TTL: 300 seconds (5 minutes) from signing time.
+/// Default message TTL: 300 seconds from signing time.
 ///
-/// Increased from 30s to accommodate Paillier safe prime generation during
-/// keygen aux-info rounds, which can take 30-120s on slower hardware.
+/// The TTL must be large enough to cover Paillier keygen rounds (~40s on CI
+/// with 2048-bit keys) plus transport latency. 30s was too short and caused
+/// E2E signing hangs on slow CI runners.
 pub const DEFAULT_TTL_SECS: u64 = 300;
 
 /// A signed and replay-protected envelope wrapping a [`ProtocolMessage`].

@@ -35,6 +35,8 @@ use crate::paillier::{PaillierPublicKey, PaillierSecretKey};
 use crate::protocol::{GroupPublicKey, KeyShare, MpcProtocol, MpcSignature};
 use crate::transport::{ProtocolMessage, Transport};
 use crate::types::{CryptoScheme, PartyId, ThresholdConfig};
+use std::collections::HashSet;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use k256::{
@@ -91,6 +93,20 @@ pub struct Cggmp21ShareData {
     pub all_paillier_pks: Option<Vec<PaillierPublicKey>>,
 }
 
+impl Cggmp21ShareData {
+    /// Returns true if this share lacks real Paillier keys and needs a key refresh
+    /// to upgrade from legacy (simulated) Paillier keys.
+    ///
+    /// Shares created before Sprint 28 have `real_paillier_pk = None` and cannot
+    /// participate in secure MtA-based pre-signing. In production, pre-signing
+    /// will be rejected for such shares (SEC-034).
+    pub fn needs_paillier_upgrade(&self) -> bool {
+        self.real_paillier_pk.is_none()
+            || self.real_paillier_sk.is_none()
+            || self.all_paillier_pks.is_none()
+    }
+}
+
 /// Commitment message for Round 1.
 #[derive(Serialize, Deserialize)]
 struct Round1Commitment {
@@ -145,13 +161,8 @@ struct PedersenParams {
     n_hat: Vec<u8>,
 }
 
-/// Default Paillier key size for tests (fast, ~10ms per keygen).
-/// NOTE: 256-bit is INSECURE — test speed only. Production MUST use 2048.
-#[cfg(any(test, feature = "local-transport"))]
-const DEFAULT_PAILLIER_BITS: usize = 512;
-
-/// Default Paillier key size for production (secure, ~1-5s per keygen).
-#[cfg(not(any(test, feature = "local-transport")))]
+/// Default Paillier key size for production (secure, ~10s per keygen with glass_pumpkin).
+/// In test mode, `keypair_for_protocol()` ignores this and returns a cached 512-bit keypair.
 const DEFAULT_PAILLIER_BITS: usize = 2048;
 
 /// Auxiliary info broadcast message (Round 4): Paillier public key + ZK proofs.
@@ -190,6 +201,9 @@ struct PreSignMtaRound2 {
 /// the same pre-signature to sign two different messages would leak the private key.
 #[derive(Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct PreSignature {
+    /// Unique identifier for this pre-signature (SEC-037: persistent nonce reuse protection).
+    #[zeroize(skip)]
+    pub id: String,
     /// Random nonce share k_i (32 bytes, secp256k1 scalar).
     /// SEC-008: zeroized on drop.
     pub k_i: Vec<u8>,
@@ -211,6 +225,76 @@ pub struct PreSignature {
     /// Whether this pre-signature has been consumed (nonce reuse protection).
     #[zeroize(skip)]
     pub used: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEC-037: Persistent pre-signature nonce reuse protection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Persistent store for tracking used pre-signatures (SEC-037).
+///
+/// The in-memory `used` flag on `PreSignature` is lost on crash. If a node crashes
+/// after using a pre-signature but before the flag is persisted, a restart could
+/// replay the same nonce — which is catastrophic for ECDSA (nonce reuse → private
+/// key extraction).
+///
+/// Implementations should persist the used-marker to durable storage (disk, database)
+/// so that a crash-restart cycle cannot replay a pre-signature.
+pub trait PreSignatureStore: Send + Sync {
+    /// Mark a pre-signature as used BEFORE consuming it in signing.
+    /// Returns `Ok(())` if successfully marked, `Err` if already used.
+    fn mark_used(&self, pre_sig_id: &str) -> Result<(), CoreError>;
+
+    /// Check if a pre-signature has been used.
+    fn is_used(&self, pre_sig_id: &str) -> bool;
+}
+
+/// In-memory implementation of `PreSignatureStore` for tests and single-process use.
+///
+/// **Not crash-safe** — this is equivalent to the old `used` flag but demonstrates
+/// the interface. Production deployments should use a durable-storage implementation.
+///
+/// **No eviction** — the `used_ids` set grows without bound. This is acceptable for
+/// tests and short-lived processes, but a production implementation should evict old
+/// entries (e.g., with a TTL or LRU policy) to avoid unbounded memory growth.
+pub struct InMemoryPreSignatureStore {
+    used_ids: Mutex<HashSet<String>>,
+}
+
+impl InMemoryPreSignatureStore {
+    pub fn new() -> Self {
+        Self {
+            used_ids: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+impl Default for InMemoryPreSignatureStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreSignatureStore for InMemoryPreSignatureStore {
+    fn mark_used(&self, pre_sig_id: &str) -> Result<(), CoreError> {
+        let mut set = self
+            .used_ids
+            .lock()
+            .map_err(|e| CoreError::Protocol(format!("pre-signature store lock poisoned: {e}")))?;
+        if !set.insert(pre_sig_id.to_string()) {
+            return Err(CoreError::Protocol(
+                "pre-signature already used — nonce reuse would leak private key (SEC-037)".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn is_used(&self, pre_sig_id: &str) -> bool {
+        self.used_ids
+            .lock()
+            .map(|set| set.contains(pre_sig_id))
+            .unwrap_or(true) // If lock is poisoned, treat as used (safe default)
+    }
 }
 
 /// Round 1 message for pre-signing: broadcast K_i and Gamma_i with Schnorr proofs.
@@ -496,6 +580,22 @@ impl Cggmp21Protocol {
         transport: &dyn Transport,
     ) -> Result<MpcSignature, CoreError> {
         cggmp21_sign_online(pre_sig, message, key_share, transport).await
+    }
+
+    /// SEC-037: Sign with a persistent pre-signature store for crash-safe nonce reuse protection.
+    ///
+    /// The store is checked/marked BEFORE any cryptographic computation. If the node
+    /// crashes after `mark_used` but before signing completes, the pre-signature cannot
+    /// be replayed on restart.
+    pub async fn sign_with_presig_stored(
+        &self,
+        pre_sig: &mut PreSignature,
+        message: &[u8],
+        key_share: &KeyShare,
+        transport: &dyn Transport,
+        store: &dyn PreSignatureStore,
+    ) -> Result<MpcSignature, CoreError> {
+        cggmp21_sign_online_with_store(pre_sig, message, key_share, transport, Some(store)).await
     }
 }
 
@@ -827,8 +927,8 @@ async fn cggmp21_keygen(
         serde_json::to_vec(&sim_pedersen).map_err(|e| CoreError::Serialization(e.to_string()))?;
 
     // ── Real Paillier keygen + ZK proofs (Sprint 28) ────────────────────
-    let (real_pk, real_sk) =
-        crate::paillier::keygen::generate_paillier_keypair(DEFAULT_PAILLIER_BITS);
+    let (real_pk, real_sk) = crate::paillier::keygen::keypair_for_protocol(DEFAULT_PAILLIER_BITS)?;
+
     let p_big = BigUint::from_bytes_be(&real_sk.p);
     let q_big = BigUint::from_bytes_be(&real_sk.q);
     let n_big = real_pk.n_biguint();
@@ -1056,16 +1156,14 @@ async fn cggmp21_pre_sign(
 
     // ── Round 2: MtA — compute shares of k * gamma ────────────────────
     // Check if real Paillier keys are available for secure MtA
-    // TODO(Sprint 28): Real Paillier MtA for pre-signing is implemented but
-    // disabled pending full integration testing. The keygen ZK proof verification
-    // is the critical security fix (CVE-2023-33241). MtA will be enabled in a
-    // follow-up sprint after the protocol round structure is validated end-to-end.
-    let has_real_paillier = false; // Real MtA disabled for now — keygen proofs are the priority
-    let _has_real_paillier_keys = share_data.real_paillier_pk.is_some()
+    // Real Paillier MtA for pre-signing (enabled Sprint 28 Phase C1).
+    // Shares created after Sprint 28 always have real Paillier keys from
+    // keypair_for_protocol(). The simulated fallback remains for legacy shares.
+    let has_real_paillier = share_data.real_paillier_pk.is_some()
         && share_data.real_paillier_sk.is_some()
         && share_data.all_paillier_pks.is_some();
 
-    let (delta, chi_i_scalar) = if has_real_paillier {
+    let (delta, chi_i_scalar): (Scalar, Zeroizing<Scalar>) = if has_real_paillier {
         // ── Real Paillier MtA (Sprint 28) ──────────────────────────────
         // Each party i: encrypt k_i under their own Paillier key, broadcast
         // Enc(k_i). Then for each pair (i,j), run MtA to compute additive
@@ -1099,23 +1197,20 @@ async fn cggmp21_pre_sign(
             })
             .await?;
 
-        // Collect Enc(k_j) from all other signers
+        // Collect Enc(k_j) from all other signers, tracking transport PartyId per keygen index
+        let mut index_to_transport: std::collections::HashMap<u16, PartyId> =
+            std::collections::HashMap::new();
+        index_to_transport.insert(my_index, transport.party_id());
+
         let mut peer_enc_k: Vec<PreSignMtaRound2> = vec![mta_r2_msg];
         for _ in 1..n_signers {
             let msg = transport.recv().await?;
             let r2: PreSignMtaRound2 = serde_json::from_slice(&msg.payload)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
+            index_to_transport.insert(r2.party_index, msg.from);
             peer_enc_k.push(r2);
         }
         peer_enc_k.sort_by_key(|m| m.party_index);
-
-        // Compute Lagrange coefficients for all signers (needed for chi MtA)
-        let mut peer_lambda: std::collections::HashMap<u16, Scalar> =
-            std::collections::HashMap::new();
-        for &s in signers {
-            let lam = lagrange_coefficient(s.0, &signer_indices)?;
-            peer_lambda.insert(s.0, lam);
-        }
 
         // For each peer j: run two MtA instances as Party B:
         //   1. k_j * gamma_i (for delta)
@@ -1157,7 +1252,16 @@ async fn cggmp21_pre_sign(
             let mta_out_chi = mta_b_chi.round2(&mta_r1_in_chi);
             chi_beta_shares.push(mta_out_chi.beta);
 
-            // Send both MtA responses to peer
+            // Send both MtA responses to peer (use transport PartyId, not keygen index)
+            let peer_transport_id = index_to_transport
+                .get(&peer_msg.party_index)
+                .copied()
+                .ok_or_else(|| {
+                    CoreError::Protocol(format!(
+                        "no transport mapping for party {}",
+                        peer_msg.party_index
+                    ))
+                })?;
             let combined_response = serde_json::json!({
                 "from_party": my_index,
                 "to_party": peer_msg.party_index,
@@ -1169,7 +1273,7 @@ async fn cggmp21_pre_sign(
             transport
                 .send(ProtocolMessage {
                     from: my_party_id,
-                    to: Some(PartyId(peer_msg.party_index)),
+                    to: Some(peer_transport_id),
                     round: 12,
                     payload,
                 })
@@ -1177,20 +1281,15 @@ async fn cggmp21_pre_sign(
         }
 
         // Receive MtA responses and compute delta_i, chi_i using Scalar arithmetic.
-        // Key insight: MtA produces alpha + beta = a*b mod N. Since N >> q^2,
-        // a*b < N so the mod N is exact. But alpha and beta individually are
-        // random values in [0,N). We reduce each to mod q (secp256k1 order)
-        // before adding to Scalar accumulators, since we only need the result mod q.
+        //
+        // Critical: MtA produces alpha + beta = a*b (mod N). Since beta is sampled
+        // uniformly from [0, N), the unsigned sum alpha + beta can be either a*b or
+        // a*b + N. Naively reducing both mod q gives the wrong result when the sum
+        // wraps (off by N mod q). We use signed interpretation: values > N/2 represent
+        // negative numbers (value - N), ensuring alpha_signed + beta_signed = a*b exactly.
+        let n_big = my_pk.n_biguint();
+        let n_half = &n_big >> 1;
         let secp_order = BigUint::from_bytes_be(&hex_decode_secp_order());
-
-        // Helper: convert BigUint to secp256k1 Scalar (reduce mod q)
-        let to_scalar = |big: &BigUint| -> Scalar {
-            let reduced = big % &secp_order;
-            let be = reduced.to_bytes_be();
-            let mut padded = [0u8; 32];
-            padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
-            <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded))
-        };
 
         // Start with local products
         let mut delta_scalar = *k_i * *gamma_i;
@@ -1198,10 +1297,20 @@ async fn cggmp21_pre_sign(
 
         // Add beta shares (from acting as Party B on peers' broadcasts)
         for beta_bytes in &delta_beta_shares {
-            delta_scalar += to_scalar(&BigUint::from_bytes_be(beta_bytes));
+            delta_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(beta_bytes),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
         }
         for beta_bytes in &chi_beta_shares {
-            chi_scalar += to_scalar(&BigUint::from_bytes_be(beta_bytes));
+            chi_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(beta_bytes),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
         }
 
         // Receive alpha shares from peers (responses to our Enc(k_i) broadcast)
@@ -1219,10 +1328,20 @@ async fn cggmp21_pre_sign(
 
             // Decrypt as Party A, reduce to Scalar
             let alpha_d = mta_party_a_k.round2_finish(&delta_ct);
-            delta_scalar += to_scalar(&BigUint::from_bytes_be(&alpha_d));
+            delta_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(&alpha_d),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
 
             let alpha_c = mta_party_a_k.round2_finish(&chi_ct);
-            chi_scalar += to_scalar(&BigUint::from_bytes_be(&alpha_c));
+            chi_scalar += to_scalar_signed(
+                &BigUint::from_bytes_be(&alpha_c),
+                &n_big,
+                &n_half,
+                &secp_order,
+            );
         }
 
         // Broadcast delta_i for aggregation (as Scalar bytes, 32 bytes)
@@ -1255,54 +1374,70 @@ async fn cggmp21_pre_sign(
             delta_sum += d_scalar;
         }
 
-        (delta_sum, chi_scalar)
+        (delta_sum, Zeroizing::new(chi_scalar))
     } else {
-        // ── Simulated MtA (legacy, no real Paillier keys) ───────────────
-        let combined_r2 = serde_json::json!({
-            "party_index": my_index,
-            "k_i": k_i.to_repr().as_slice(),
-            "gamma_i": gamma_i.to_repr().as_slice(),
-        });
-        let round2_payload = serde_json::to_vec(&combined_r2)
-            .map_err(|e| CoreError::Serialization(e.to_string()))?;
-
-        transport
-            .send(ProtocolMessage {
-                from: my_party_id,
-                to: None,
-                round: 11,
-                payload: round2_payload,
-            })
-            .await?;
-
-        let mut k_sum = *k_i;
-        let mut gamma_sum_scalar = *gamma_i;
-
-        for _ in 1..n_signers {
-            let msg = transport.recv().await?;
-            let r2: serde_json::Value = serde_json::from_slice(&msg.payload)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
-
-            let k_j_bytes: Vec<u8> = serde_json::from_value(r2["k_i"].clone())
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
-            let gamma_j_bytes: Vec<u8> = serde_json::from_value(r2["gamma_i"].clone())
-                .map_err(|e| CoreError::Serialization(e.to_string()))?;
-
-            let k_j = Scalar::from_repr(*k256::FieldBytes::from_slice(&k_j_bytes))
-                .into_option()
-                .ok_or_else(|| CoreError::Crypto("invalid k_j scalar".into()))?;
-            let gamma_j = Scalar::from_repr(*k256::FieldBytes::from_slice(&gamma_j_bytes))
-                .into_option()
-                .ok_or_else(|| CoreError::Crypto("invalid gamma_j scalar".into()))?;
-
-            k_sum += k_j;
-            gamma_sum_scalar += gamma_j;
+        // ── Legacy shares without real Paillier keys (SEC-034) ───────────
+        // In production, reject legacy shares that lack Paillier keys.
+        // The simulated MtA path broadcasts raw k_i and gamma_i in plaintext,
+        // which is insecure. Users must run key refresh to upgrade.
+        #[cfg(not(any(test, feature = "local-transport")))]
+        {
+            return Err(CoreError::Protocol(
+                "CGGMP21 pre-signing requires real Paillier keys \
+                 — run key refresh to upgrade legacy shares"
+                    .into(),
+            ));
         }
 
-        let delta = k_sum * gamma_sum_scalar;
-        let chi_i_scalar = k_sum * *x_i * lambda_i;
-        gamma_sum_scalar.zeroize();
-        (delta, chi_i_scalar)
+        // In test builds, keep the simulated path for testing convenience.
+        #[cfg(any(test, feature = "local-transport"))]
+        {
+            let combined_r2 = serde_json::json!({
+                "party_index": my_index,
+                "k_i": k_i.to_repr().as_slice(),
+                "gamma_i": gamma_i.to_repr().as_slice(),
+            });
+            let round2_payload = serde_json::to_vec(&combined_r2)
+                .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+            transport
+                .send(ProtocolMessage {
+                    from: my_party_id,
+                    to: None,
+                    round: 11,
+                    payload: round2_payload,
+                })
+                .await?;
+
+            let mut k_sum = *k_i;
+            let mut gamma_sum_scalar = *gamma_i;
+
+            for _ in 1..n_signers {
+                let msg = transport.recv().await?;
+                let r2: serde_json::Value = serde_json::from_slice(&msg.payload)
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+                let k_j_bytes: Vec<u8> = serde_json::from_value(r2["k_i"].clone())
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+                let gamma_j_bytes: Vec<u8> = serde_json::from_value(r2["gamma_i"].clone())
+                    .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+                let k_j = Scalar::from_repr(*k256::FieldBytes::from_slice(&k_j_bytes))
+                    .into_option()
+                    .ok_or_else(|| CoreError::Crypto("invalid k_j scalar".into()))?;
+                let gamma_j = Scalar::from_repr(*k256::FieldBytes::from_slice(&gamma_j_bytes))
+                    .into_option()
+                    .ok_or_else(|| CoreError::Crypto("invalid gamma_j scalar".into()))?;
+
+                k_sum += k_j;
+                gamma_sum_scalar += gamma_j;
+            }
+
+            let delta = k_sum * gamma_sum_scalar;
+            let chi_i_scalar = Zeroizing::new(k_sum * *x_i * lambda_i);
+            gamma_sum_scalar.zeroize();
+            (delta, chi_i_scalar)
+        }
     };
 
     // ── Compute R = delta^{-1} * Gamma_sum ────────────────────────────
@@ -1312,6 +1447,7 @@ async fn cggmp21_pre_sign(
         .into_option()
         .ok_or_else(|| CoreError::Crypto("delta is zero — cannot compute R point".into()))?;
     let big_r_point = (gamma_sum_point * delta_inv).to_affine();
+
     let big_r_bytes = k256::PublicKey::from_affine(big_r_point)
         .map_err(|e| CoreError::Crypto(format!("invalid R point: {e}")))?
         .to_encoded_point(true)
@@ -1319,8 +1455,9 @@ async fn cggmp21_pre_sign(
         .to_vec();
 
     Ok(PreSignature {
+        id: uuid::Uuid::new_v4().to_string(),
         k_i: k_i.to_repr().to_vec(),
-        chi_i: chi_i_scalar.to_repr().to_vec(),
+        chi_i: (*chi_i_scalar).to_repr().to_vec(),
         delta_i: delta.to_repr().to_vec(),
         big_r: big_r_bytes,
         party_id: my_party_id,
@@ -1347,11 +1484,35 @@ async fn cggmp21_sign_online(
     key_share: &KeyShare,
     transport: &dyn Transport,
 ) -> Result<MpcSignature, CoreError> {
-    // ── Nonce reuse protection ────────────────────────────────────────
-    if pre_sig.used {
-        return Err(CoreError::Protocol(
-            "pre-signature already used — nonce reuse would leak private key".into(),
-        ));
+    cggmp21_sign_online_with_store(pre_sig, message, key_share, transport, None).await
+}
+
+/// SEC-037: Sign online with optional persistent pre-signature store.
+///
+/// If `store` is provided, the pre-signature is marked as used in the persistent
+/// store BEFORE any cryptographic computation. This ensures crash-safety: even if
+/// the node crashes mid-signing, the nonce cannot be replayed on restart.
+///
+/// If `store` is `None`, falls back to the in-memory `used` flag (backward compat).
+async fn cggmp21_sign_online_with_store(
+    pre_sig: &mut PreSignature,
+    message: &[u8],
+    key_share: &KeyShare,
+    transport: &dyn Transport,
+    store: Option<&dyn PreSignatureStore>,
+) -> Result<MpcSignature, CoreError> {
+    // ── Nonce reuse protection (SEC-037) ──────────────────────────────
+    // Mark-before-use: persistent store is checked/marked BEFORE any
+    // cryptographic computation to prevent crash-replay attacks.
+    if let Some(store) = store {
+        store.mark_used(&pre_sig.id)?;
+    } else {
+        // Fallback: in-memory flag (not crash-safe, backward compat)
+        if pre_sig.used {
+            return Err(CoreError::Protocol(
+                "pre-signature already used — nonce reuse would leak private key".into(),
+            ));
+        }
     }
     pre_sig.used = true;
 
@@ -1365,9 +1526,11 @@ async fn cggmp21_sign_online(
             .into_option()
             .ok_or_else(|| CoreError::Crypto("invalid k_i scalar in pre-signature".into()))?,
     );
-    let chi_i = Scalar::from_repr(*k256::FieldBytes::from_slice(&pre_sig.chi_i))
-        .into_option()
-        .ok_or_else(|| CoreError::Crypto("invalid chi_i scalar in pre-signature".into()))?;
+    let chi_i = Zeroizing::new(
+        Scalar::from_repr(*k256::FieldBytes::from_slice(&pre_sig.chi_i))
+            .into_option()
+            .ok_or_else(|| CoreError::Crypto("invalid chi_i scalar in pre-signature".into()))?,
+    );
 
     // Parse R point and extract r (x-coordinate as scalar)
     let big_r_pub = k256::PublicKey::from_sec1_bytes(&pre_sig.big_r)
@@ -1385,7 +1548,7 @@ async fn cggmp21_sign_online(
         <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&hash_bytes));
 
     // ── Compute partial signature: sigma_i = k_i * e + chi_i * r ─────
-    let sigma_i = *k_i * e_scalar + chi_i * r_scalar;
+    let sigma_i = *k_i * e_scalar + *chi_i * r_scalar;
 
     // ── Broadcast sigma_i ─────────────────────────────────────────────
     let sign_msg = SignOnlineMsg {
@@ -1878,17 +2041,16 @@ async fn cggmp21_refresh(
     let pedersen_bytes =
         serde_json::to_vec(&sim_pedersen).map_err(|e| CoreError::Serialization(e.to_string()))?;
 
-    // Generate fresh real Paillier keys + ZK proofs (Sprint 28)
+    // Generate fresh real Paillier keys + ZK proofs
     let (fresh_pk, fresh_sk) =
-        crate::paillier::keygen::generate_paillier_keypair(DEFAULT_PAILLIER_BITS);
+        crate::paillier::keygen::keypair_for_protocol(DEFAULT_PAILLIER_BITS)?;
+
     let p_big = BigUint::from_bytes_be(&fresh_sk.p);
     let q_big = BigUint::from_bytes_be(&fresh_sk.q);
     let n_big = fresh_pk.n_biguint();
-
     let pimod_proof = prove_pimod(&n_big, &p_big, &q_big);
     let pifac_proof = prove_pifac(&n_big, &p_big, &q_big);
 
-    // Broadcast fresh Paillier PK + proofs (round 203)
     let aux_msg = AuxInfoBroadcast {
         party_index: my_index,
         paillier_pk: fresh_pk.clone(),
@@ -1915,7 +2077,6 @@ async fn cggmp21_refresh(
     }
     all_aux.sort_by_key(|a| a.party_index);
 
-    // Verify all proofs
     for aux in &all_aux {
         if aux.party_index == my_index {
             continue;
@@ -1934,7 +2095,6 @@ async fn cggmp21_refresh(
             )));
         }
     }
-
     let fresh_all_pks: Vec<PaillierPublicKey> =
         all_aux.iter().map(|a| a.paillier_pk.clone()).collect();
 
@@ -1962,6 +2122,35 @@ async fn cggmp21_refresh(
         group_public_key: key_share.group_public_key.clone(),
         share_data: Zeroizing::new(new_share_bytes),
     })
+}
+
+/// Convert a `BigUint` in `[0, N)` to a secp256k1 `Scalar` using signed reduction.
+///
+/// MtA produces values uniformly in `[0, N)`. Values in `[0, N/2]` are interpreted
+/// as positive and reduced mod `q` directly. Values in `(N/2, N)` represent negative
+/// numbers (`value - N`), so we compute `-(N - value) mod q`.
+///
+/// This ensures `to_scalar_signed(alpha) + to_scalar_signed(beta) == a * b` as a
+/// `Scalar`, even when the unsigned sum `alpha + beta` wraps modulo `N`.
+fn to_scalar_signed(big: &BigUint, n: &BigUint, n_half: &BigUint, secp_order: &BigUint) -> Scalar {
+    use k256::elliptic_curve::ops::Reduce;
+    if big <= n_half {
+        // Positive: reduce directly mod q
+        let reduced = big % secp_order;
+        let be = reduced.to_bytes_be();
+        let mut padded = [0u8; 32];
+        padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
+        <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded))
+    } else {
+        // Negative: true value is big - N, so Scalar = -(N - big) mod q
+        let abs_val = n - big;
+        let reduced = &abs_val % secp_order;
+        let be = reduced.to_bytes_be();
+        let mut padded = [0u8; 32];
+        padded[32usize.saturating_sub(be.len())..].copy_from_slice(&be);
+        let pos = <Scalar as Reduce<U256>>::reduce_bytes(k256::FieldBytes::from_slice(&padded));
+        Scalar::ZERO - pos
+    }
 }
 
 /// Return the secp256k1 curve order as 32 big-endian bytes.
@@ -2355,6 +2544,7 @@ mod tests {
             let mut pre_sig = std::mem::replace(
                 &mut pre_sigs[i],
                 PreSignature {
+                    id: String::new(),
                     k_i: vec![],
                     chi_i: vec![],
                     delta_i: vec![],
@@ -2503,11 +2693,13 @@ mod tests {
         let signers = vec![PartyId(1), PartyId(3)]; // Use parties 1 and 3 (not 2)
         let message = b"verify against group pubkey test";
 
-        let net = LocalTransportNetwork::new(2);
+        // Transport needs PartyId(3), so create with max signer ID
+        let max_id = signers.iter().map(|s| s.0).max().unwrap();
+        let net = LocalTransportNetwork::new(max_id);
         let mut handles = Vec::new();
-        for (i, signer) in signers.iter().enumerate() {
+        for signer in &signers {
             let share = shares[signer.0 as usize - 1].clone();
-            let transport = net.get_transport(PartyId((i + 1) as u16));
+            let transport = net.get_transport(*signer);
             let signers_clone = signers.clone();
             let msg = message.to_vec();
             handles.push(tokio::spawn(async move {
@@ -2937,6 +3129,62 @@ mod tests {
         }
     }
 
+    /// Standalone test: verify MtA correctness with signed Scalar reduction.
+    #[test]
+    fn test_mta_scalar_reduction_correctness() {
+        use crate::paillier::keygen::keypair_for_protocol;
+        use crate::paillier::mta::{MtaPartyA, MtaPartyB};
+        use num_bigint::BigUint;
+
+        let (pk, sk) = keypair_for_protocol(2048).unwrap();
+        let n = pk.n_biguint();
+        let n_half = &n >> 1;
+        let secp_order = BigUint::from_bytes_be(&hex_decode_secp_order());
+
+        // Run multiple trials to cover both wrap and no-wrap cases
+        for trial in 0..10 {
+            let mut rng = rand::thread_rng();
+            let k_1 = Scalar::random(&mut rng);
+            let gamma_2 = Scalar::random(&mut rng);
+
+            let party_a = MtaPartyA::new(
+                pk.clone(),
+                sk.clone(),
+                Zeroizing::new(k_1.to_repr().to_vec()),
+            );
+            let party_b = MtaPartyB::new(pk.clone(), Zeroizing::new(gamma_2.to_repr().to_vec()));
+
+            let round1 = party_a.round1();
+            let round2 = party_b.round2(&round1);
+
+            let alpha_bytes = party_a.round2_finish(&round2.ciphertext);
+            let alpha = BigUint::from_bytes_be(&alpha_bytes);
+            let beta = BigUint::from_bytes_be(&round2.beta);
+
+            // Verify: alpha + beta = k_1 * gamma_2 (mod N)
+            let sum_mod_n = (&alpha + &beta) % &n;
+            let k_1_big = BigUint::from_bytes_be(&k_1.to_repr());
+            let gamma_2_big = BigUint::from_bytes_be(&gamma_2.to_repr());
+            let product_mod_n = (&k_1_big * &gamma_2_big) % &n;
+            assert_eq!(
+                sum_mod_n, product_mod_n,
+                "trial {}: MtA basic correctness failed",
+                trial
+            );
+
+            // Verify signed Scalar reduction
+            let alpha_scalar = to_scalar_signed(&alpha, &n, &n_half, &secp_order);
+            let beta_scalar = to_scalar_signed(&beta, &n, &n_half, &secp_order);
+            let sum_scalar = alpha_scalar + beta_scalar;
+            let expected_scalar = k_1 * gamma_2;
+            assert_eq!(
+                sum_scalar, expected_scalar,
+                "trial {}: signed reduction failed",
+                trial
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_cggmp21_sign_with_real_paillier_keygen() {
         // Test that keygen with real Paillier + signing with simulation MtA works
@@ -3058,7 +3306,7 @@ mod tests {
     fn test_paillier_keys_in_share_data_serde() {
         use crate::paillier::keygen::generate_paillier_keypair;
 
-        let (pk, sk) = generate_paillier_keypair(512);
+        let (pk, sk) = generate_paillier_keypair(512).unwrap();
         let share = Cggmp21ShareData {
             party_index: 1,
             secret_share: vec![1u8; 32],
@@ -3093,5 +3341,248 @@ mod tests {
         let all_pks = restored.all_paillier_pks.clone().unwrap();
         assert_eq!(all_pks.len(), 1);
         assert_eq!(all_pks[0].n_biguint(), original_n);
+    }
+
+    // ── SEC-037: PreSignatureStore nonce reuse protection ────────────────
+
+    #[test]
+    fn test_in_memory_store_rejects_double_use() {
+        let store = InMemoryPreSignatureStore::new();
+        let id = "test-presig-001";
+
+        // First mark should succeed
+        assert!(store.mark_used(id).is_ok());
+        assert!(store.is_used(id));
+
+        // Second mark must fail — nonce reuse prevented
+        let err = store.mark_used(id).unwrap_err();
+        assert!(
+            err.to_string().contains("already used"),
+            "error should indicate double use: {err}"
+        );
+    }
+
+    #[test]
+    fn test_in_memory_store_allows_different_ids() {
+        let store = InMemoryPreSignatureStore::new();
+
+        assert!(store.mark_used("presig-a").is_ok());
+        assert!(store.mark_used("presig-b").is_ok());
+        assert!(store.mark_used("presig-c").is_ok());
+
+        assert!(store.is_used("presig-a"));
+        assert!(store.is_used("presig-b"));
+        assert!(store.is_used("presig-c"));
+        assert!(!store.is_used("presig-d")); // never marked
+    }
+
+    #[test]
+    fn test_presignature_has_unique_id() {
+        // Two pre-signatures constructed with new UUIDs must have different IDs
+        let ps1 = PreSignature {
+            id: uuid::Uuid::new_v4().to_string(),
+            k_i: vec![1u8; 32],
+            chi_i: vec![2u8; 32],
+            delta_i: vec![3u8; 32],
+            big_r: vec![4u8; 33],
+            party_id: PartyId(1),
+            signers: vec![PartyId(1), PartyId(2)],
+            used: false,
+        };
+        let ps2 = PreSignature {
+            id: uuid::Uuid::new_v4().to_string(),
+            k_i: vec![1u8; 32],
+            chi_i: vec![2u8; 32],
+            delta_i: vec![3u8; 32],
+            big_r: vec![4u8; 33],
+            party_id: PartyId(2),
+            signers: vec![PartyId(1), PartyId(2)],
+            used: false,
+        };
+
+        assert_ne!(ps1.id, ps2.id, "each pre-signature must have a unique ID");
+        assert!(!ps1.id.is_empty());
+        assert!(!ps2.id.is_empty());
+    }
+
+    #[test]
+    fn test_store_mark_before_use_ordering() {
+        // Verify that mark_used is called (and succeeds) BEFORE we'd consume the presig.
+        // This simulates the mark-before-use pattern in cggmp21_sign_online_with_store.
+        let store = InMemoryPreSignatureStore::new();
+        let presig_id = uuid::Uuid::new_v4().to_string();
+
+        // Step 1: mark used (simulates what happens before crypto computation)
+        assert!(
+            !store.is_used(&presig_id),
+            "must not be used before marking"
+        );
+        store
+            .mark_used(&presig_id)
+            .expect("first mark must succeed");
+
+        // Step 2: after marking, the ID is recorded even if we crash here
+        assert!(
+            store.is_used(&presig_id),
+            "must be used after marking (crash-safe)"
+        );
+
+        // Step 3: simulating a "restart" — a new attempt to use the same presig must fail
+        let result = store.mark_used(&presig_id);
+        assert!(
+            result.is_err(),
+            "second mark must fail — nonce reuse blocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sign_with_presig_stored_rejects_reuse() {
+        // Build a minimal scenario: we need a valid pre-signature from keygen+presign
+        // to test sign_with_presig_stored. Instead, test the store-rejection path
+        // by pre-marking the ID in the store.
+        let store = InMemoryPreSignatureStore::new();
+        let presig_id = uuid::Uuid::new_v4().to_string();
+
+        // Pre-mark the ID as used (simulates previous use before crash)
+        store.mark_used(&presig_id).unwrap();
+
+        // Create a dummy pre-signature with that ID
+        let mut pre_sig = PreSignature {
+            id: presig_id,
+            k_i: vec![1u8; 32],
+            chi_i: vec![2u8; 32],
+            delta_i: vec![3u8; 32],
+            big_r: vec![4u8; 33],
+            party_id: PartyId(1),
+            signers: vec![PartyId(1), PartyId(2)],
+            used: false, // in-memory flag says "not used" — simulating post-crash state
+        };
+
+        // Create a dummy key share (won't get to crypto — should fail at store check)
+        let key_share = KeyShare {
+            scheme: CryptoScheme::Cggmp21Secp256k1,
+            config: ThresholdConfig {
+                threshold: 2,
+                total_parties: 3,
+            },
+            party_id: PartyId(1),
+            share_data: zeroize::Zeroizing::new(vec![]),
+            group_public_key: GroupPublicKey::Secp256k1(vec![]),
+        };
+
+        let net = crate::transport::local::LocalTransportNetwork::new(2);
+        let transport = net.get_transport(PartyId(1));
+
+        // Even though pre_sig.used == false, the store blocks reuse
+        let result = cggmp21_sign_online_with_store(
+            &mut pre_sig,
+            b"some message",
+            &key_share,
+            &*transport,
+            Some(&store),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "store must reject pre-signature that was already used"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("already used"),
+            "error must mention double use: {err_msg}"
+        );
+    }
+
+    // ── SEC-034: needs_paillier_upgrade tests ─────────────────────────────
+
+    #[test]
+    fn test_needs_paillier_upgrade_true_for_legacy_share() {
+        let share = Cggmp21ShareData {
+            party_index: 1,
+            secret_share: vec![1u8; 32],
+            public_shares: vec![vec![2u8; 33]],
+            group_public_key: vec![4u8; 33],
+            paillier_sk: vec![5u8; 64],
+            paillier_pk: vec![6u8; 32],
+            pedersen_params: vec![7u8; 96],
+            real_paillier_sk: None,
+            real_paillier_pk: None,
+            all_paillier_pks: None,
+        };
+        assert!(
+            share.needs_paillier_upgrade(),
+            "legacy share without real Paillier keys must need upgrade"
+        );
+    }
+
+    #[test]
+    fn test_needs_paillier_upgrade_false_for_modern_share() {
+        use crate::paillier::keygen::generate_paillier_keypair;
+
+        let (pk, sk) = generate_paillier_keypair(512).unwrap();
+        let share = Cggmp21ShareData {
+            party_index: 1,
+            secret_share: vec![1u8; 32],
+            public_shares: vec![vec![2u8; 33]],
+            group_public_key: vec![4u8; 33],
+            paillier_sk: vec![5u8; 64],
+            paillier_pk: vec![6u8; 32],
+            pedersen_params: vec![7u8; 96],
+            real_paillier_sk: Some(sk),
+            real_paillier_pk: Some(pk.clone()),
+            all_paillier_pks: Some(vec![pk]),
+        };
+        assert!(
+            !share.needs_paillier_upgrade(),
+            "share with real Paillier keys must not need upgrade"
+        );
+    }
+
+    #[test]
+    fn test_needs_paillier_upgrade_partial_keys_still_needs_upgrade() {
+        use crate::paillier::keygen::generate_paillier_keypair;
+
+        let (pk, _sk) = generate_paillier_keypair(512).unwrap();
+        // Has pk but missing sk and all_paillier_pks
+        let share = Cggmp21ShareData {
+            party_index: 1,
+            secret_share: vec![1u8; 32],
+            public_shares: vec![vec![2u8; 33]],
+            group_public_key: vec![4u8; 33],
+            paillier_sk: vec![5u8; 64],
+            paillier_pk: vec![6u8; 32],
+            pedersen_params: vec![7u8; 96],
+            real_paillier_sk: None,
+            real_paillier_pk: Some(pk),
+            all_paillier_pks: None,
+        };
+        assert!(
+            share.needs_paillier_upgrade(),
+            "share with only partial Paillier keys must still need upgrade"
+        );
+    }
+
+    // ── SEC-054: Paillier key size validation tests ──────────────────────
+
+    #[test]
+    fn test_paillier_validation_512bit_works_in_test() {
+        use crate::paillier::keygen::{generate_paillier_keypair, validate_paillier_key_size};
+
+        let (pk, _sk) = generate_paillier_keypair(512).unwrap();
+        assert!(
+            validate_paillier_key_size(&pk).is_ok(),
+            "512-bit key validation must succeed in test mode"
+        );
+    }
+
+    #[test]
+    fn test_paillier_validation_rejects_nothing_in_test_mode() {
+        // In test builds, even tiny keys pass validation (this is by design).
+        use crate::paillier::keygen::validate_paillier_bits;
+        assert!(validate_paillier_bits(256).is_ok());
+        assert!(validate_paillier_bits(512).is_ok());
+        assert!(validate_paillier_bits(1024).is_ok());
+        assert!(validate_paillier_bits(2048).is_ok());
     }
 }

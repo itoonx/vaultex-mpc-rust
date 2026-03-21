@@ -73,6 +73,8 @@ pub struct AppConfig {
     pub redis_url: Option<String>,
     /// Session encryption key (hex-encoded 32 bytes). Required for Redis backend.
     pub session_encryption_key: Option<String>,
+    /// Secrets backend type (env vars or Vault).
+    pub secrets_backend: SecretsBackend,
 }
 
 impl AppConfig {
@@ -117,25 +119,26 @@ impl AppConfig {
     /// Internal: build config, optionally overlaying Vault secrets.
     fn from_env_sync(vault_secrets: Option<crate::vault::VaultSecrets>) -> Self {
         // Vault secrets take precedence over env vars for sensitive fields.
+        // Extract inner String from Zeroizing<String> for AppConfig fields.
         let jwt_secret = vault_secrets
             .as_ref()
-            .and_then(|v| v.jwt_secret.clone())
+            .and_then(|v| v.jwt_secret.as_deref().map(String::from))
             .or_else(|| std::env::var("JWT_SECRET").ok())
             .expect("JWT_SECRET must be set (via Vault or JWT_SECRET env var)");
 
         let server_signing_key = vault_secrets
             .as_ref()
-            .and_then(|v| v.server_signing_key.clone())
+            .and_then(|v| v.server_signing_key.as_deref().map(String::from))
             .or_else(|| std::env::var("SERVER_SIGNING_KEY").ok());
 
         let session_encryption_key = vault_secrets
             .as_ref()
-            .and_then(|v| v.session_encryption_key.clone())
+            .and_then(|v| v.session_encryption_key.as_deref().map(String::from))
             .or_else(|| std::env::var("SESSION_ENCRYPTION_KEY").ok());
 
         let redis_url = vault_secrets
             .as_ref()
-            .and_then(|v| v.redis_url.clone())
+            .and_then(|v| v.redis_url.as_deref().map(String::from))
             .or_else(|| std::env::var("REDIS_URL").ok());
 
         let config = Self {
@@ -172,6 +175,9 @@ impl AppConfig {
             ),
             redis_url,
             session_encryption_key,
+            secrets_backend: SecretsBackend::parse(
+                &std::env::var("SECRETS_BACKEND").unwrap_or_else(|_| "env".into()),
+            ),
         };
         config.validate();
         config
@@ -194,6 +200,11 @@ impl AppConfig {
             "SESSION_TTL must be at least 60 seconds (got {})",
             self.session_ttl
         );
+        assert!(
+            self.rate_limit_rps > 0,
+            "RATE_LIMIT_RPS must be > 0 (got {})",
+            self.rate_limit_rps
+        );
         // Redis backend requires URL and encryption key.
         if self.session_backend == BackendType::Redis {
             assert!(
@@ -205,8 +216,13 @@ impl AppConfig {
                 "SESSION_ENCRYPTION_KEY is required when SESSION_BACKEND=redis (hex-encoded 32 bytes)"
             );
         }
-        // Mainnet safety: require explicit keys, no auto-generation.
+        // Mainnet safety: CORS wildcard disallowed + require explicit keys.
         if self.network == "mainnet" {
+            let has_wildcard = self.cors_origins.iter().any(|o| o == "*");
+            assert!(
+                !has_wildcard,
+                "CORS_ALLOWED_ORIGINS must not contain wildcard '*' on mainnet"
+            );
             assert!(
                 self.server_signing_key.is_some(),
                 "SERVER_SIGNING_KEY is required on mainnet (auto-generation disabled)"
@@ -237,6 +253,7 @@ impl AppConfig {
             session_backend: BackendType::Memory,
             redis_url: None,
             session_encryption_key: None,
+            secrets_backend: SecretsBackend::Env,
         }
     }
 }
@@ -265,5 +282,76 @@ mod tests {
         let mut config = AppConfig::for_test();
         config.network = "invalid".into();
         config.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "RATE_LIMIT_RPS must be > 0")]
+    fn test_zero_rate_limit_panics() {
+        let mut config = AppConfig::for_test();
+        config.rate_limit_rps = 0;
+        config.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "SESSION_ENCRYPTION_KEY is required")]
+    fn test_redis_without_encryption_key_panics() {
+        let mut config = AppConfig::for_test();
+        config.session_backend = BackendType::Redis;
+        config.redis_url = Some("redis://localhost:6379".into());
+        config.session_encryption_key = None;
+        config.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "REDIS_URL is required")]
+    fn test_redis_without_url_panics() {
+        let mut config = AppConfig::for_test();
+        config.session_backend = BackendType::Redis;
+        config.redis_url = None;
+        config.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "CORS_ALLOWED_ORIGINS must not contain wildcard")]
+    fn test_cors_wildcard_on_mainnet_panics() {
+        let mut config = AppConfig::for_test();
+        config.network = "mainnet".into();
+        config.cors_origins = vec!["*".into()];
+        config.server_signing_key = Some("aa".repeat(32));
+        config.client_keys_file = Some("/tmp/keys.json".into());
+        config.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "SESSION_TTL must be at least 60 seconds")]
+    fn test_session_ttl_too_low_panics() {
+        let mut config = AppConfig::for_test();
+        config.session_ttl = 10;
+        config.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "SERVER_SIGNING_KEY is required on mainnet")]
+    fn test_mainnet_requires_server_signing_key() {
+        let mut config = AppConfig::for_test();
+        config.network = "mainnet".into();
+        config.server_signing_key = None;
+        config.validate();
+    }
+
+    #[test]
+    fn test_backend_type_parse() {
+        assert_eq!(BackendType::parse("redis"), BackendType::Redis);
+        assert_eq!(BackendType::parse("REDIS"), BackendType::Redis);
+        assert_eq!(BackendType::parse("memory"), BackendType::Memory);
+        assert_eq!(BackendType::parse("anything"), BackendType::Memory);
+    }
+
+    #[test]
+    fn test_secrets_backend_parse() {
+        assert_eq!(SecretsBackend::parse("vault"), SecretsBackend::Vault);
+        assert_eq!(SecretsBackend::parse("VAULT"), SecretsBackend::Vault);
+        assert_eq!(SecretsBackend::parse("env"), SecretsBackend::Env);
+        assert_eq!(SecretsBackend::parse("anything"), SecretsBackend::Env);
     }
 }
