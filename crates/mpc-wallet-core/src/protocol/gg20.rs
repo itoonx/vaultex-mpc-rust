@@ -94,6 +94,38 @@ struct Gg20ShareData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[zeroize(skip)]
     all_paillier_pks: Option<Vec<PaillierPublicKey>>,
+    /// Real Pedersen N_hat (product of safe primes, big-endian bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    real_pedersen_n_hat: Option<Vec<u8>>,
+    /// Real Pedersen s parameter (big-endian bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    real_pedersen_s: Option<Vec<u8>>,
+    /// Real Pedersen t parameter (big-endian bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    real_pedersen_t: Option<Vec<u8>>,
+    /// All parties' real Pedersen parameters (N_hat, s, t) indexed by party position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    #[allow(clippy::type_complexity)]
+    all_pedersen_params: Option<Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>,
+}
+
+impl Gg20ShareData {
+    /// Returns true if this share has real Paillier keys AND Pedersen params
+    /// for MtA-based distributed nonce signing.
+    #[allow(dead_code)] // Will be used when distributed_sign_mta() is implemented
+    fn has_real_aux_info(&self) -> bool {
+        self.real_paillier_pk.is_some()
+            && self.real_paillier_sk.is_some()
+            && self.all_paillier_pks.is_some()
+            && self.real_pedersen_n_hat.is_some()
+            && self.real_pedersen_s.is_some()
+            && self.real_pedersen_t.is_some()
+            && self.all_pedersen_params.is_some()
+    }
 }
 
 /// Default Paillier key size for production (secure, ~10s with glass_pumpkin).
@@ -107,6 +139,12 @@ struct Gg20AuxInfoBroadcast {
     paillier_pk: PaillierPublicKey,
     pimod_proof: crate::paillier::zk_proofs::PimodProof,
     pifac_proof: crate::paillier::zk_proofs::PifacProof,
+    #[serde(default)]
+    pedersen_n_hat: Option<Vec<u8>>,
+    #[serde(default)]
+    pedersen_s: Option<Vec<u8>>,
+    #[serde(default)]
+    pedersen_t: Option<Vec<u8>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,6 +373,10 @@ async fn distributed_keygen(
                 real_paillier_sk: None,
                 real_paillier_pk: None,
                 all_paillier_pks: None,
+                real_pedersen_n_hat: None,
+                real_pedersen_s: None,
+                real_pedersen_t: None,
+                all_pedersen_params: None,
             };
             let share_bytes =
                 serde_json::to_vec(&sd).map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -388,11 +430,18 @@ async fn distributed_keygen(
     let pimod_proof = prove_pimod(&n_big, &p_big, &q_big);
     let pifac_proof = prove_pifac(&n_big, &p_big, &q_big);
 
+    // Generate real Pedersen parameters for ZK proofs
+    let (ped_n_hat, ped_s, ped_t) =
+        crate::paillier::zk_proofs::pedersen_params_for_protocol(GG20_PAILLIER_BITS);
+
     let aux_msg = Gg20AuxInfoBroadcast {
         party_index: party_id.0,
         paillier_pk: real_pk.clone(),
         pimod_proof,
         pifac_proof,
+        pedersen_n_hat: Some(ped_n_hat.clone()),
+        pedersen_s: Some(ped_s.clone()),
+        pedersen_t: Some(ped_t.clone()),
     };
     let aux_payload =
         serde_json::to_vec(&aux_msg).map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -437,14 +486,28 @@ async fn distributed_keygen(
 
     let all_paillier_pks: Vec<PaillierPublicKey> =
         all_aux.iter().map(|a| a.paillier_pk.clone()).collect();
+    let all_pedersen: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = all_aux
+        .iter()
+        .map(|a| {
+            (
+                a.pedersen_n_hat.clone().unwrap_or_default(),
+                a.pedersen_s.clone().unwrap_or_default(),
+                a.pedersen_t.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
 
-    // Build final share data with Paillier keys
+    // Build final share data with Paillier keys + Pedersen params
     let final_share_data = Gg20ShareData {
         x: share_data_base.x,
         y: share_data_base.y.clone(),
         real_paillier_sk: Some(real_sk),
         real_paillier_pk: Some(real_pk),
         all_paillier_pks: Some(all_paillier_pks),
+        real_pedersen_n_hat: Some(ped_n_hat),
+        real_pedersen_s: Some(ped_s),
+        real_pedersen_t: Some(ped_t),
+        all_pedersen_params: Some(all_pedersen),
     };
 
     let share_bytes = serde_json::to_vec(&final_share_data)
@@ -809,6 +872,10 @@ async fn distributed_refresh(
         real_paillier_sk: my_share.real_paillier_sk.clone(),
         real_paillier_pk: my_share.real_paillier_pk.clone(),
         all_paillier_pks: my_share.all_paillier_pks.clone(),
+        real_pedersen_n_hat: my_share.real_pedersen_n_hat.clone(),
+        real_pedersen_s: my_share.real_pedersen_s.clone(),
+        real_pedersen_t: my_share.real_pedersen_t.clone(),
+        all_pedersen_params: my_share.all_pedersen_params.clone(),
     };
     let new_share_bytes = serde_json::to_vec(&new_share_data)
         .map_err(|e| CoreError::Serialization(format!("serialize refreshed share: {e}")))?;
@@ -966,6 +1033,10 @@ async fn distributed_reshare(
             real_paillier_sk: None,
             real_paillier_pk: None,
             all_paillier_pks: None,
+            real_pedersen_n_hat: None,
+            real_pedersen_s: None,
+            real_pedersen_t: None,
+            all_pedersen_params: None,
         };
         let new_share_bytes = serde_json::to_vec(&new_share_data)
             .map_err(|e| CoreError::Serialization(format!("serialize reshared share: {e}")))?;
@@ -1028,6 +1099,10 @@ async fn simulation_keygen(
                 real_paillier_sk: None,
                 real_paillier_pk: None,
                 all_paillier_pks: None,
+                real_pedersen_n_hat: None,
+                real_pedersen_s: None,
+                real_pedersen_t: None,
+                all_pedersen_params: None,
             };
             let payload = serde_json::to_vec(&share_data)
                 .map_err(|e| CoreError::Serialization(e.to_string()))?;
