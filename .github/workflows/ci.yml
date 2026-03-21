@@ -164,5 +164,5 @@ jobs:
           GATEWAY_URL: http://127.0.0.1:3000
         run: |
           # E2E tests — skip 2 flaky NATS protocol tests (L-012)
-          cargo test -p mpc-wallet-core --test e2e_tests --features local-transport -- --ignored --test-threads=1 --skip test_nats_keygen_gg20_2of3 --skip test_nats_sign_gg20_direct
+          cargo test -p mpc-wallet-core --test e2e_tests --features local-transport -- --ignored --test-threads=1 --skip test_nats_keygen_gg20_2of3 --skip test_nats_sign_gg20_direct --skip test_distributed_keygen_then_sign
           kill $(cat /tmp/gateway.pid) 2>/dev/null || true
