@@ -32,7 +32,6 @@ tracing-subscriber = { workspace = true }
 dirs = { workspace = true }
 rpassword = { workspace = true }
 
-[dev-dependencies]
+# Crypto / RNG — used by `gen-identity` to mint Ed25519 node/gateway keypairs
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
-serde_json = { workspace = true }

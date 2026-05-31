@@ -15,3 +15,9 @@ tests/e2e/*.local.toml
 # Node deps for one-shot scripts (e.g. scripts/sui-ref-vector.mjs)
 scripts/node_modules/
 scripts/package-lock.json
+
+# Standalone boot-node generated secrets + state (scripts/node.sh)
+infra/node/node.env
+infra/node/gateway.key
+infra/node/.boot-node.state
+infra/node/keys/
