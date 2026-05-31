@@ -63,6 +63,7 @@ retro/
 | [L-017](lessons/L-017_tron-broadcast-body-shape-and-swagger-reflection.md) | 2026-05-10 | Wire format / API | High | TRON broadcast needs structured `raw_data` JSON alongside `raw_data_hex`; TransferContract omits `fee_limit`; v=27+parity; TronGrid hides errors behind swagger reflection — **FIXED** |
 | [L-018](lessons/L-018_evm-gas-limit-must-be-dynamic.md) | 2026-05-10 | RPC integration | Medium | EVM gas_limit must come from `eth_estimateGas`, not hardcoded EOA default — applies to all per-tx exec caps (Sui/Aptos/TRON/Solana too) — **FIXED** |
 | [L-019](lessons/L-019_aptos-address-short-form-tolerance.md) | 2026-05-10 | Address parsing | Low | Aptos has two address conventions — strict 64-char for derived, short-form (`0xa`, `0x1`) for framework constants; need both parsers applied to the right spots — **FIXED** |
+| [L-020](lessons/L-020_tron-rejects-self-transfer.md) | 2026-06-01 | Live broadcast / validator rules | Low | TRON `TransferContract` rejects self-transfer (`Cannot transfer TRX to yourself`); self-send is not a portable smoke-test primitive — keep a 2nd controlled recipient per chain |
 
 ---
 
@@ -83,6 +84,7 @@ retro/
 | [sessions/SESSION_RETRO_S18_S26](sessions/SESSION_RETRO_S18_S26.md) | 2026-03-19~20 | Sprints 18-26 (M1-M4 complete) | 9 sprints, +748 tests, 4 milestones |
 | [sessions/SESSION_RETRO_S28_PAILLIER_PERF](sessions/SESSION_RETRO_S28_PAILLIER_PERF.md) | 2026-03-20 | Sprint 28 Paillier perf fix (glass_pumpkin) | 801 tests, CI 19min→2.5min, all ZK proofs enabled |
 | [sessions/SESSION_RETRO_S38_S39_LIVE_TESTNET](sessions/SESSION_RETRO_S38_S39_LIVE_TESTNET.md) | 2026-05-06~07 | Sprint 38-39: first live MPC tx on Sepolia + Solana devnet | 2 branches, 4 bugs found+fixed, 3 lessons (L-011..013), 930 tests |
+| [sessions/SESSION_RETRO_S52_REFACTOR_E2E_GATE](sessions/SESSION_RETRO_S52_REFACTOR_E2E_GATE.md) | 2026-06-01 | Sprint 52: Sprint 51 chain-registry refactor E2E gate — live re-broadcast on all 6 chains | 6/6 confirmed, 0 code changes, 1 lesson (L-020), 624 tests |
 
 ---
 

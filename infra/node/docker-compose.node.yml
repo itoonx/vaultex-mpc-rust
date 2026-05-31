@@ -1,0 +1,46 @@
+# Standalone MPC boot node — ONE mpc-node + (optional) co-located NATS.
+#
+# Driven entirely by an env-file (default infra/node/node.env). Use the wrapper:
+#   scripts/node.sh init --party 1
+#   scripts/node.sh up | down | logs | status
+#
+# NATS is gated behind the `bundled-nats` profile so the same file serves both
+# "self-contained boot node" and "connect to external NATS" modes. The node has
+# restart: unless-stopped, so in bundled mode it retries until NATS is healthy
+# (no depends_on coupling, which keeps the external-NATS mode clean).
+name: mpc-boot-node
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    profiles: ["bundled-nats"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  mpc-node:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: node
+    env_file:
+      - ${NODE_ENV_FILE:-node.env}
+    ports:
+      # Publish the health/metrics port to the host (read from the env-file).
+      - "${HEALTH_PORT:-9090}:${HEALTH_PORT:-9090}"
+    volumes:
+      # Default: docker-managed named volume (container's mpc user owns it, so
+      #   on-disk shares written during DKG persist with correct perms).
+      # --keys <hostpath> sets KEYS_MOUNT to a bind mount of existing shares.
+      - ${KEYS_MOUNT:-boot-node-keys}:/data/keys
+    restart: unless-stopped
+
+volumes:
+  boot-node-keys:

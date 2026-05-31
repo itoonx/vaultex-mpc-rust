@@ -37,6 +37,8 @@ enum Commands {
     Simulate(commands::simulate::SimulateArgs),
     /// Run end-to-end MPC keygen + sign + broadcast on any supported chain
     Send(commands::send::SendArgs),
+    /// Generate a fresh Ed25519 identity keypair (NODE_SIGNING_KEY / GATEWAY_PUBKEY)
+    GenIdentity(commands::gen_identity::GenIdentityArgs),
 }
 
 fn print_banner() {
@@ -74,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::AuditVerify(args) => commands::audit_verify::run(args, cli.format).await?,
         Commands::Simulate(args) => commands::simulate::run(args, cli.format).await?,
         Commands::Send(args) => commands::send::run(args, cli.format).await?,
+        Commands::GenIdentity(args) => commands::gen_identity::run(args, cli.format).await?,
     }
 
     Ok(())

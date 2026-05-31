@@ -25,6 +25,7 @@ use mpc_wallet_chains::rpc::providers::dwellir::DwellirProvider;
 use mpc_wallet_chains::rpc::providers::infura::InfuraProvider;
 use mpc_wallet_chains::rpc::RpcProvider;
 use mpc_wallet_chains::solana::rpc_client::SolanaRpcClient;
+use mpc_wallet_chains::token::TokenIdentifier;
 use mpc_wallet_core::key_store::types::KeyGroupId;
 use mpc_wallet_core::key_store::KeyStore;
 use mpc_wallet_core::protocol::{GroupPublicKey, KeyShare, MpcProtocol, MpcSignature};
@@ -201,51 +202,37 @@ pub async fn run(args: SendArgs, format: OutputFormat) -> anyhow::Result<()> {
             .get_balance(&sender)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!("✓ On-chain balance of {sender}: {} lamports", bal);
-        if bal == 0 {
-            eprintln!("⚠️  Sender has 0 lamports — fund via https://faucet.solana.com first.");
-        }
+        report_balance(chain, &network, &sender, bal);
     } else if matches!(chain, Chain::BitcoinTestnet | Chain::BitcoinMainnet) {
         let bal = BitcoinRpcClient::new(&rpc_url)
             .get_balance(&sender)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!("✓ On-chain balance of {sender}: {} sats", bal);
-        if bal == 0 {
-            eprintln!("⚠️  Sender has 0 sats — fund via a testnet faucet first.");
-        }
+        report_balance(chain, &network, &sender, bal);
     } else if matches!(chain, Chain::Aptos | Chain::Movement) {
         let bal = mpc_wallet_chains::aptos::rpc_client::AptosRpcClient::new(&rpc_url)
             .get_balance(&sender)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!("✓ On-chain balance of {sender}: {} octas", bal);
-        if bal == 0 {
-            eprintln!("⚠️  Sender has 0 octas — fund via https://aptos.dev/network/faucet first.");
-        }
+        report_balance(chain, &network, &sender, bal);
     } else if chain == Chain::Sui {
         let bal = mpc_wallet_chains::sui::rpc_client::SuiRpcClient::new(&rpc_url)
             .get_balance(&sender)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!("✓ On-chain balance of {sender}: {} MIST", bal);
-        if bal == 0 {
-            eprintln!("⚠️  Sender has 0 MIST — fund via https://faucet.sui.io/ first.");
-        }
+        report_balance(chain, &network, &sender, bal);
     } else if chain == Chain::Tron {
         let bal = mpc_wallet_chains::tron::rpc_client::TronRpcClient::new(&rpc_url)
             .get_balance(&sender)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!("✓ On-chain balance of {sender}: {} sun", bal);
-        if bal == 0 {
-            eprintln!("⚠️  Sender has 0 sun — fund via https://shasta.tronex.io or https://www.trongrid.io/shasta first.");
-        }
+        report_balance(chain, &network, &sender, bal);
     }
 
     // ── 5. Fetch chain-specific pre-sign data ───────────────────────────────
     let auto_extra = fetch_presign_extras(
         chain,
+        &network,
         &rpc_url,
         &sender,
         &group_pubkey,
@@ -555,47 +542,29 @@ fn resolve_default_rpc_url(
         }
     }
 
-    // 3. Public endpoints — Solana RPC + Bitcoin Esplora REST.
-    if chain == Chain::Solana {
-        return Ok(match network {
-            NetworkEnv::Mainnet => "https://api.mainnet-beta.solana.com".into(),
-            NetworkEnv::Devnet => "https://api.devnet.solana.com".into(),
-            _ => "https://api.testnet.solana.com".into(),
-        });
-    }
-    if chain == Chain::Sui {
-        return Ok(match network {
-            NetworkEnv::Mainnet => "https://fullnode.mainnet.sui.io:443".into(),
-            NetworkEnv::Devnet => "https://fullnode.devnet.sui.io:443".into(),
-            _ => "https://fullnode.testnet.sui.io:443".into(),
-        });
-    }
-    if matches!(chain, Chain::Aptos | Chain::Movement) {
-        // Aptos public REST endpoints.
-        if chain == Chain::Aptos {
-            return Ok(match network {
-                NetworkEnv::Mainnet => "https://api.mainnet.aptoslabs.com".into(),
-                NetworkEnv::Devnet => "https://api.devnet.aptoslabs.com".into(),
-                _ => "https://api.testnet.aptoslabs.com".into(),
-            });
-        }
-        // Movement public REST.
+    // 3. Public endpoint from CHAIN_METADATA. One source of truth — adding
+    //    a chain = adding a metadata entry, not editing this function.
+    //    Movement falls back to its hardcoded URLs (not yet metadata-wired).
+    if matches!(chain, Chain::Movement) {
         return Ok(match network {
             NetworkEnv::Mainnet => "https://mainnet.movementnetwork.xyz/v1".into(),
             _ => "https://testnet.bardock.movementnetwork.xyz/v1".into(),
         });
     }
-    if matches!(chain, Chain::BitcoinTestnet | Chain::BitcoinMainnet) {
-        return Ok(match (chain, network) {
-            (Chain::BitcoinMainnet, NetworkEnv::Mainnet) => "https://blockstream.info/api".into(),
-            _ => "https://blockstream.info/testnet/api".into(),
-        });
-    }
-    if chain == Chain::Tron {
-        return Ok(match network {
-            NetworkEnv::Mainnet => "https://api.trongrid.io".into(),
-            _ => "https://api.shasta.trongrid.io".into(),
-        });
+    // Bitcoin: registry maps `BitcoinMainnet` in a testnet env back to
+    // BitcoinTestnet's metadata, so use the metadata's chain field rather
+    // than the user-facing one.
+    let effective = if matches!(chain, Chain::BitcoinMainnet)
+        && matches!(network, NetworkEnv::Testnet | NetworkEnv::Devnet)
+    {
+        Chain::BitcoinTestnet
+    } else {
+        chain
+    };
+    if let Some(m) = mpc_wallet_chains::metadata::metadata_for(effective) {
+        if let Some(n) = m.network(network) {
+            return Ok(n.default_rpc.to_string());
+        }
     }
 
     Err(anyhow::anyhow!(
@@ -611,8 +580,10 @@ fn resolve_default_rpc_url(
 /// destination (matters for ERC-20 since gas depends on whether the recipient
 /// already has a non-zero token balance — first-touch storage write is ~5x
 /// cheaper than overwriting).
+#[allow(clippy::too_many_arguments)]
 async fn fetch_presign_extras(
     chain: Chain,
+    network: &NetworkEnv,
     rpc_url: &str,
     sender: &str,
     group_pubkey: &GroupPublicKey,
@@ -620,308 +591,123 @@ async fn fetch_presign_extras(
     recipient: &str,
     value_str: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let evm_chains = [
-        Chain::Ethereum,
-        Chain::Polygon,
-        Chain::Bsc,
-        Chain::Arbitrum,
-        Chain::Optimism,
-        Chain::Base,
-        Chain::Avalanche,
-        Chain::Linea,
-    ];
-    if evm_chains.contains(&chain) {
-        use mpc_wallet_chains::evm::erc20;
-        let rpc = EvmRpcClient::new(rpc_url);
-        let chain_id = rpc.get_chain_id().await.map_err(|e| anyhow::anyhow!(e))?;
-        let nonce = rpc
-            .get_nonce(sender)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let (max_fee, max_priority) = rpc
-            .suggest_eip1559_fees()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+    // Step 7: six previously-bespoke per-chain branches collapse into one
+    // trait dispatch. Each provider owns its RPC dance — the CLI just
+    // builds the context, calls fetch_presign_extras, logs the typed
+    // result, and serializes back to the legacy JSON shape that
+    // build_transaction currently reads.
+    use mpc_wallet_chains::presign::PresignContext;
+    let registry = match network {
+        NetworkEnv::Mainnet => ChainRegistry::default_mainnet(),
+        _ => ChainRegistry::default_testnet(),
+    };
+    let provider = registry.provider(chain).map_err(|e| anyhow::anyhow!(e))?;
+    let token_typed = token_spec
+        .map(|v| serde_json::from_value::<TokenIdentifier>(v.clone()))
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("token spec deser: {e}"))?;
+    let ctx = PresignContext {
+        rpc_url,
+        sender,
+        group_pubkey,
+        token: token_typed.as_ref(),
+        recipient,
+        value_str,
+    };
+    let extras = match provider.fetch_presign_extras(ctx).await {
+        Ok(e) => e,
+        // Chains without a presign impl (Substrate, Cosmos, Ton, Monero,
+        // Starknet, UTXO non-Bitcoin) fall through — caller passes any
+        // chain-specific extras via --extra.
+        Err(_) => return Ok(None),
+    };
+    log_presign(&extras);
+    Ok(Some(extras.to_legacy_extras_json()))
+}
 
-        // Determine effective tx (to, value, data) per token spec, then
-        // estimate gas. For native tx, defaults to a 21k floor (intrinsic
-        // gas of an EOA→EOA transfer); estimate fails fast if the call
-        // would revert pre-broadcast, surfacing the issue before MPC sign.
-        let (est_to, est_value_hex, est_data_hex, fallback_gas) = match token_spec
-            .and_then(|v| v.get("kind"))
-            .and_then(|v| v.as_str())
-        {
-            Some("evm") => {
-                let contract = token_spec
-                    .and_then(|v| v.get("contract"))
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("token.contract missing"))?;
-                let calldata =
-                    erc20::encode_transfer(recipient, value_str).map_err(|e| anyhow::anyhow!(e))?;
-                (
-                    contract.to_string(),
-                    "0x0".to_string(),
-                    format!("0x{}", hex::encode(calldata)),
-                    100_000u64,
-                )
-            }
-            _ => {
-                // Native ETH transfer.
-                let value_hex = value_str_to_hex(value_str)?;
-                (recipient.to_string(), value_hex, String::new(), 21_000u64)
-            }
-        };
-
-        let estimated = rpc
-            .estimate_gas(sender, &est_to, &est_data_hex, &est_value_hex)
-            .await
-            .unwrap_or(fallback_gas);
-        // 25% safety margin — covers gas refund variance + state changes
-        // between estimate and broadcast.
-        let gas_limit = estimated.saturating_mul(125) / 100;
-        let gas_limit = gas_limit.max(fallback_gas);
-
-        eprintln!(
-            "✓ chain_id={chain_id} nonce={nonce} fees: max_fee={max_fee} wei priority={max_priority} wei · gas_limit={gas_limit} (estimated {estimated}, +25% margin)",
-        );
-        return Ok(Some(serde_json::json!({
-            "chain_id": chain_id,
-            "nonce": nonce,
-            "gas_limit": gas_limit,
-            "max_fee_per_gas": max_fee as u64,
-            "max_priority_fee_per_gas": max_priority as u64,
-        })));
-    }
-    if chain == Chain::Solana {
-        let rpc = SolanaRpcClient::new(rpc_url);
-        let blockhash = rpc
-            .get_latest_blockhash()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!("✓ recent_blockhash={blockhash}");
-        return Ok(Some(serde_json::json!({
-            "from": sender,
-            "recent_blockhash": blockhash,
-        })));
-    }
-    if matches!(chain, Chain::BitcoinTestnet | Chain::BitcoinMainnet) {
-        let rpc = BitcoinRpcClient::new(rpc_url);
-        let utxos = rpc
-            .get_utxos(sender)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let total: u64 = utxos.iter().map(|u| u.value).sum();
-        eprintln!("✓ {} UTXO(s) totalling {} sats", utxos.len(), total);
-        let pubkey_hex = compressed_pubkey_hex(group_pubkey)?;
-        // Pass UTXO list as JSON; the tx builder picks the largest one.
-        let utxos_json: Vec<serde_json::Value> = utxos
-            .into_iter()
-            .map(|u| {
-                serde_json::json!({
-                    "txid": u.txid,
-                    "vout": u.vout,
-                    "value": u.value,
-                })
-            })
-            .collect();
-        return Ok(Some(serde_json::json!({
-            "addr_type": "p2wpkh",
-            "pubkey_hex": pubkey_hex,
-            "utxos": utxos_json,
-            "change_address": sender,
-            "fee_rate_sat_per_vb": 2u64,
-        })));
-    }
-    if chain == Chain::Sui {
-        use mpc_wallet_chains::sui::rpc_client::SuiRpcClient;
-        let rpc = SuiRpcClient::new(rpc_url);
-
-        // Always fetch SUI coins for gas payment (regardless of token).
-        let sui_coins = rpc
-            .get_owned_coins(sender, "0x2::sui::SUI")
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        if sui_coins.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Sui sender {sender} owns no SUI coin objects — needed for gas; fund via https://faucet.sui.io/"
-            ));
+/// Emit the chain-specific eprintln status line for the typed presign payload.
+fn log_presign(extras: &mpc_wallet_chains::presign::PresignExtras) {
+    use mpc_wallet_chains::presign::PresignExtras;
+    match extras {
+        PresignExtras::Evm {
+            chain_id,
+            nonce,
+            gas_limit,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        } => eprintln!(
+            "✓ chain_id={chain_id} nonce={nonce} fees: max_fee={max_fee_per_gas} wei priority={max_priority_fee_per_gas} wei · gas_limit={gas_limit}",
+        ),
+        PresignExtras::Sol {
+            recent_blockhash, ..
+        } => eprintln!("✓ recent_blockhash={recent_blockhash}"),
+        PresignExtras::Btc { utxos, .. } => {
+            let total: u64 = utxos.iter().map(|u| u.value_sats).sum();
+            eprintln!("✓ {} UTXO(s) totalling {} sats", utxos.len(), total);
         }
-        let gas_coin = sui_coins
-            .iter()
-            .max_by_key(|c| c.balance.0)
-            .expect("non-empty checked above");
-        let gas_price = rpc
-            .get_reference_gas_price()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        eprintln!(
-            "✓ gas_coin={} version={} balance={} MIST · ref_price={} MIST/gas",
-            gas_coin.object_id, gas_coin.version.0, gas_coin.balance.0, gas_price
-        );
-
-        let pubkey_hex = match group_pubkey {
-            GroupPublicKey::Ed25519(b) if b.len() == 32 => hex::encode(b),
-            _ => return Err(anyhow::anyhow!("Sui requires 32-byte Ed25519 group key")),
-        };
-
-        let mut presign = serde_json::json!({
-            "sender": sender,
-            "pubkey_hex": pubkey_hex,
-            "gas_payment_object_id": gas_coin.object_id,
-            "gas_payment_version": gas_coin.version.0,
-            "gas_payment_digest": gas_coin.digest,
-            "gas_price": gas_price,
-            "gas_budget": 10_000_000u64,
-        });
-
-        // For Sui Coin<T> transfers, also fetch a source coin object of that type.
-        if let Some(t) = token_spec {
-            if t.get("kind").and_then(|v| v.as_str()) == Some("sui") {
-                let coin_type = t
-                    .get("type_tag")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Sui token spec missing type_tag"))?;
-                let token_coins = rpc
-                    .get_owned_coins(sender, coin_type)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))?;
-                if token_coins.is_empty() {
-                    return Err(anyhow::anyhow!(
-                        "Sui sender {sender} owns no Coin<{coin_type}> objects — fund via the relevant faucet"
-                    ));
-                }
-                let src = token_coins
-                    .iter()
-                    .max_by_key(|c| c.balance.0)
-                    .expect("non-empty");
-                eprintln!(
-                    "✓ source_coin<{coin_type}>={} version={} balance={}",
-                    src.object_id, src.version.0, src.balance.0
-                );
-                if let serde_json::Value::Object(ref mut o) = presign {
-                    o.insert(
-                        "coin_payment_object_id".into(),
-                        serde_json::json!(src.object_id),
-                    );
-                    o.insert(
-                        "coin_payment_version".into(),
-                        serde_json::json!(src.version.0),
-                    );
-                    o.insert("coin_payment_digest".into(), serde_json::json!(src.digest));
-                }
-            }
-        }
-
-        return Ok(Some(presign));
-    }
-    if matches!(chain, Chain::Aptos | Chain::Movement) {
-        use mpc_wallet_chains::aptos::rpc_client::AptosRpcClient;
-        let rpc = AptosRpcClient::new(rpc_url);
-        let account = rpc
-            .get_account(sender)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let chain_id = rpc.get_chain_id().await.map_err(|e| anyhow::anyhow!(e))?;
-        let gas_unit_price = rpc
-            .estimate_gas_price()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let expiration = now.saturating_add(60); // valid for 60 seconds
-                                                 // Sender's Ed25519 pubkey, hex-encoded for the AptosProvider extras path.
-        let pubkey_hex = match group_pubkey {
-            GroupPublicKey::Ed25519(b) if b.len() == 32 => hex::encode(b),
-            _ => return Err(anyhow::anyhow!("Aptos requires 32-byte Ed25519 group key")),
-        };
-        // Aptos validators reject txs whose `max_gas_amount * gas_unit_price`
-        // is below the per-tx minimum (intrinsic gas ~1500 + signature
-        // verification + script execution). 100_000 gas units is a safe
-        // upper bound for a simple `aptos_account::transfer` — unused gas is
-        // refunded.
-        let max_gas_amount = 100_000u64;
-        eprintln!(
-            "✓ sequence={} chain_id={} gas_price={} octas budget={} exp=now+60s",
-            account.sequence_number.0, chain_id, gas_unit_price, max_gas_amount
-        );
-        return Ok(Some(serde_json::json!({
-            "sender": sender,
-            "pubkey_hex": pubkey_hex,
-            "sequence_number": account.sequence_number.0,
-            "max_gas_amount": max_gas_amount,
-            "gas_unit_price": gas_unit_price,
-            "expiration_timestamp_secs": expiration,
-            "chain_id": chain_id,
-        })));
-    }
-    if chain == Chain::Tron {
-        use mpc_wallet_chains::tron::rpc_client::TronRpcClient;
-        let rpc = TronRpcClient::new(rpc_url);
-        let block_ref = rpc.get_now_block().await.map_err(|e| anyhow::anyhow!(e))?;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        let expiration = now_ms.saturating_add(60_000);
-        let owner_hex = hex::encode(
-            mpc_wallet_chains::tron::tx::decode_tron_address(sender)
-                .map_err(|e| anyhow::anyhow!(e))?,
-        );
-
-        // fee_limit policy — diverges by contract type:
-        //   - TransferContract (native TRX): MUST omit per L-017
-        //   - TriggerSmartContract (TRC-20):  MUST include (validator rejects without)
-        let is_trc20 = token_spec
-            .and_then(|v| v.get("kind"))
-            .and_then(|v| v.as_str())
-            == Some("tron");
-        let mut presign = serde_json::json!({
-            "owner_address": owner_hex,
-            "ref_block_bytes": hex::encode(block_ref.ref_block_bytes),
-            "ref_block_hash": hex::encode(block_ref.ref_block_hash),
-            "timestamp": now_ms,
-            "expiration": expiration,
-        });
-        if is_trc20 {
-            // Default 100 TRX cap; refunded for unused energy.
-            if let serde_json::Value::Object(ref mut o) = presign {
-                o.insert("fee_limit".into(), serde_json::json!(100_000_000i64));
-            }
+        PresignExtras::Sui {
+            gas_payment,
+            gas_price,
+            coin_payment,
+            ..
+        } => {
             eprintln!(
-                "✓ block=ref_block_bytes:0x{} hash:0x{} exp=now+60s fee_limit=100_000_000 sun (TRC-20)",
-                hex::encode(block_ref.ref_block_bytes),
-                hex::encode(block_ref.ref_block_hash),
+                "✓ gas_coin={} version={} · ref_price={} MIST/gas",
+                gas_payment.object_id, gas_payment.version, gas_price
             );
-        } else {
-            eprintln!(
-                "✓ block=ref_block_bytes:0x{} hash:0x{} exp=now+60s (fee_limit omitted — native TransferContract)",
-                hex::encode(block_ref.ref_block_bytes),
-                hex::encode(block_ref.ref_block_hash),
-            );
+            if let Some(c) = coin_payment {
+                eprintln!("✓ source_coin={} version={}", c.object_id, c.version);
+            }
         }
-        return Ok(Some(presign));
+        PresignExtras::Aptos {
+            sequence_number,
+            chain_id,
+            gas_unit_price,
+            max_gas_amount,
+            ..
+        } => eprintln!(
+            "✓ sequence={sequence_number} chain_id={chain_id} gas_price={gas_unit_price} octas budget={max_gas_amount} exp=now+60s"
+        ),
+        PresignExtras::Tron {
+            ref_block_bytes,
+            ref_block_hash,
+            fee_limit,
+            ..
+        } => match fee_limit {
+            Some(f) => eprintln!(
+                "✓ block=ref_block_bytes:0x{ref_block_bytes} hash:0x{ref_block_hash} exp=now+60s fee_limit={f} sun (TRC-20)"
+            ),
+            None => eprintln!(
+                "✓ block=ref_block_bytes:0x{ref_block_bytes} hash:0x{ref_block_hash} exp=now+60s (fee_limit omitted — native TransferContract)"
+            ),
+        },
     }
-    Ok(None)
 }
 
 /// Render a `GroupPublicKey` as a 33-byte compressed hex string for chains
 /// (like Bitcoin P2WPKH) that need it in `extras`.
-fn compressed_pubkey_hex(group_pubkey: &GroupPublicKey) -> anyhow::Result<String> {
-    match group_pubkey {
-        GroupPublicKey::Secp256k1(bytes) if bytes.len() == 33 => Ok(hex::encode(bytes)),
-        GroupPublicKey::Secp256k1Uncompressed(bytes) if bytes.len() == 65 => {
-            let parity = if bytes[64] & 1 == 0 { 0x02 } else { 0x03 };
-            let mut out = Vec::with_capacity(33);
-            out.push(parity);
-            out.extend_from_slice(&bytes[1..33]);
-            Ok(hex::encode(out))
+/// Print on-chain balance and a metadata-driven faucet hint when zero.
+/// Unit name and faucet URL come from `CHAIN_METADATA` — no more
+/// hardcoded `eprintln!()` literals per chain.
+fn report_balance<B: std::fmt::Display>(chain: Chain, network: &NetworkEnv, sender: &str, bal: B) {
+    let effective = if matches!(chain, Chain::BitcoinMainnet)
+        && matches!(network, NetworkEnv::Testnet | NetworkEnv::Devnet)
+    {
+        Chain::BitcoinTestnet
+    } else {
+        chain
+    };
+    let (unit, faucet) = mpc_wallet_chains::metadata::metadata_for(effective)
+        .and_then(|m| m.network(network).map(|n| (m.native_unit, n.faucet_url)))
+        .unwrap_or(("units", None));
+    eprintln!("✓ On-chain balance of {sender}: {bal} {unit}");
+    // Compare against the zero literal as a string — works for any Display
+    // type the per-chain RPC client returns (u64/u128/i64).
+    if bal.to_string() == "0" {
+        match faucet {
+            Some(url) => eprintln!("⚠️  Sender has 0 {unit} — fund via {url} first."),
+            None => eprintln!("⚠️  Sender has 0 {unit} — fund first."),
         }
-        other => Err(anyhow::anyhow!(
-            "compressed_pubkey_hex: expected secp256k1 key, got {:?}",
-            std::mem::discriminant(other)
-        )),
     }
 }
 
@@ -1017,21 +803,13 @@ fn redact_key(url: &str) -> String {
     url.to_string()
 }
 
-/// Convert a value string ("0x..." hex or bare decimal) into 0x-prefixed hex.
-fn value_str_to_hex(s: &str) -> anyhow::Result<String> {
-    if s.starts_with("0x") {
-        return Ok(s.to_string());
-    }
-    // Decimal — convert to hex via u128 (fits all reasonable wei values).
-    let v: u128 = s
-        .parse()
-        .map_err(|e| anyhow::anyhow!("value not decimal u128: {e}"))?;
-    Ok(format!("0x{:x}", v))
-}
-
 /// Translate `--token <shorthand>` (or `--token-json <json>`) into the canonical
 /// JSON `TokenIdentifier` shape that chain providers parse. Returns `None` for
 /// the implicit native case (no flag set, or shorthand "native").
+///
+/// Step 6 of the standardization refactor: shorthand parsing delegates to
+/// `TokenIdentifier::parse_shorthand()` in the chains crate so the CLI and
+/// any SDK consumer share a single source of truth.
 fn parse_token_spec(
     shorthand: Option<&str>,
     json: Option<&str>,
@@ -1044,55 +822,13 @@ fn parse_token_spec(
     let Some(s) = shorthand else {
         return Ok(None);
     };
-    if s == "native" {
+    let token = TokenIdentifier::parse_shorthand(s).map_err(|e| anyhow::anyhow!("--token: {e}"))?;
+    if token.is_native() {
         return Ok(None);
     }
-    let (prefix, rest) = s.split_once(':').ok_or_else(|| {
-        anyhow::anyhow!("--token shorthand must be 'native' or '<kind>:<args>', got '{s}'")
-    })?;
-    let v = match prefix {
-        "erc20" => serde_json::json!({
-            "kind": "evm", "contract": rest, "standard": "erc20",
-        }),
-        "erc721" | "erc1155" => {
-            return Err(anyhow::anyhow!(
-                "--token {prefix}: NFT support deferred; see docs/TOKEN_TRANSFER_DESIGN.md §7"
-            ));
-        }
-        "spl" | "spl-2022" => {
-            let parts: Vec<&str> = rest.split(':').collect();
-            if parts.len() != 2 {
-                return Err(anyhow::anyhow!(
-                    "--token spl shorthand: '{prefix}:<mint>:<decimals>'"
-                ));
-            }
-            let decimals: u8 = parts[1]
-                .parse()
-                .map_err(|e| anyhow::anyhow!("--token spl decimals must be u8: {e}"))?;
-            let program = if prefix == "spl-2022" {
-                "token2022"
-            } else {
-                "spl_token"
-            };
-            serde_json::json!({
-                "kind": "spl", "mint": parts[0], "program": program, "decimals": decimals,
-            })
-        }
-        "sui-coin" => serde_json::json!({ "kind": "sui", "type_tag": rest }),
-        "aptos-coin" => serde_json::json!({
-            "kind": "aptos", "flavor": { "type": "coin", "type_tag": rest },
-        }),
-        "aptos-fa" => serde_json::json!({
-            "kind": "aptos", "flavor": { "type": "fungible_asset", "metadata": rest },
-        }),
-        "trc20" => serde_json::json!({ "kind": "tron", "contract": rest }),
-        other => {
-            return Err(anyhow::anyhow!(
-                "--token: unknown shorthand prefix '{other}'"
-            ))
-        }
-    };
-    Ok(Some(v))
+    Ok(Some(
+        serde_json::to_value(&token).map_err(|e| anyhow::anyhow!("token serialize: {e}"))?,
+    ))
 }
 
 /// Query an ERC-20 contract's `balanceOf(holder)` via `eth_call`. Returns the
@@ -1114,9 +850,33 @@ async fn erc20_balance_of(
 }
 
 fn explorer_url(chain: Chain, network: &NetworkEnv, tx_hash: &str) -> Option<String> {
+    // Metadata-driven for the 6 wired LIVE chains. For Solana devnet/testnet
+    // and Aptos devnet/testnet, the legacy URL appended a `?cluster=...` /
+    // `?network=...` query — preserve that here as a chain-specific suffix.
+    let effective = if matches!(chain, Chain::BitcoinMainnet)
+        && matches!(network, NetworkEnv::Testnet | NetworkEnv::Devnet)
+    {
+        Chain::BitcoinTestnet
+    } else {
+        chain
+    };
+    if let Some(m) = mpc_wallet_chains::metadata::metadata_for(effective) {
+        if let Some(n) = m.network(network) {
+            let mut url = n.explorer_tx_url(tx_hash);
+            // Devnet/testnet query suffixes that the metadata doesn't model:
+            match (chain, network) {
+                (Chain::Solana, NetworkEnv::Devnet) => url.push_str("?cluster=devnet"),
+                (Chain::Solana, NetworkEnv::Testnet) => url.push_str("?cluster=testnet"),
+                (Chain::Aptos, NetworkEnv::Devnet) => url.push_str("?network=devnet"),
+                (Chain::Aptos, NetworkEnv::Testnet) => url.push_str("?network=testnet"),
+                _ => {}
+            }
+            return Some(url);
+        }
+    }
+    // Fallback for chains not yet in CHAIN_METADATA (EVM L2s, Movement, etc.)
+    // — preserves the pre-refactor URLs.
     let base = match (chain, network) {
-        (Chain::Ethereum, NetworkEnv::Mainnet) => "https://etherscan.io/tx/",
-        (Chain::Ethereum, _) => "https://sepolia.etherscan.io/tx/",
         (Chain::Polygon, NetworkEnv::Mainnet) => "https://polygonscan.com/tx/",
         (Chain::Polygon, _) => "https://amoy.polygonscan.com/tx/",
         (Chain::Bsc, _) => "https://bscscan.com/tx/",
@@ -1127,18 +887,7 @@ fn explorer_url(chain: Chain, network: &NetworkEnv, tx_hash: &str) -> Option<Str
         (Chain::Base, NetworkEnv::Mainnet) => "https://basescan.org/tx/",
         (Chain::Base, _) => "https://sepolia.basescan.org/tx/",
         (Chain::Avalanche, _) => "https://snowtrace.io/tx/",
-        (Chain::Solana, NetworkEnv::Mainnet) => "https://explorer.solana.com/tx/",
-        (Chain::Solana, _) => "https://explorer.solana.com/tx/{}?cluster=devnet",
-        (Chain::Sui, NetworkEnv::Mainnet) => "https://suiscan.xyz/mainnet/tx/",
-        (Chain::Sui, _) => "https://suiscan.xyz/testnet/tx/",
-        (Chain::Aptos, NetworkEnv::Mainnet) => "https://aptoscan.com/transaction/",
-        (Chain::Aptos, NetworkEnv::Devnet) => "https://aptoscan.com/transaction/{}?network=devnet",
-        (Chain::Aptos, _) => "https://aptoscan.com/transaction/{}?network=testnet",
         (Chain::Movement, _) => "https://explorer.movementnetwork.xyz/txn/{}?network=testnet",
-        (Chain::BitcoinMainnet, _) => "https://mempool.space/tx/",
-        (Chain::BitcoinTestnet, _) => "https://mempool.space/testnet/tx/",
-        (Chain::Tron, NetworkEnv::Mainnet) => "https://tronscan.org/#/transaction/",
-        (Chain::Tron, _) => "https://shasta.tronscan.org/#/transaction/",
         _ => return None,
     };
     if base.contains("{}") {
@@ -1222,9 +971,67 @@ mod tests {
     }
 
     #[test]
-    fn test_default_rpc_evm_no_keys_errors() {
-        let r = resolve_default_rpc_url(Chain::Ethereum, &NetworkEnv::Testnet, None, None);
-        assert!(r.is_err());
+    fn test_default_rpc_evm_no_keys_falls_back_to_metadata_public_rpc() {
+        // Post-Step-5: Ethereum has a metadata-listed public Sepolia RPC,
+        // so callers no longer need a Dwellir/Infura key for read-only use.
+        let url =
+            resolve_default_rpc_url(Chain::Ethereum, &NetworkEnv::Testnet, None, None).unwrap();
+        assert!(
+            url.contains("publicnode") || url.contains("https://"),
+            "got {url}"
+        );
+    }
+
+    #[test]
+    fn parity_default_rpc_matches_metadata_for_live_chains() {
+        // The post-Step-5 default RPC for each LIVE chain must equal the
+        // metadata entry — no scattered hardcoded strings drifting from
+        // CHAIN_METADATA.
+        let cases = [
+            (Chain::Solana, NetworkEnv::Mainnet),
+            (Chain::Solana, NetworkEnv::Devnet),
+            (Chain::Solana, NetworkEnv::Testnet),
+            (Chain::Sui, NetworkEnv::Mainnet),
+            (Chain::Sui, NetworkEnv::Testnet),
+            (Chain::Aptos, NetworkEnv::Mainnet),
+            (Chain::Aptos, NetworkEnv::Testnet),
+            (Chain::BitcoinTestnet, NetworkEnv::Testnet),
+            (Chain::Tron, NetworkEnv::Mainnet),
+            (Chain::Tron, NetworkEnv::Testnet),
+        ];
+        for (c, env) in cases {
+            let url = resolve_default_rpc_url(c, &env, None, None).unwrap();
+            let meta_url = mpc_wallet_chains::metadata::metadata_for(c)
+                .and_then(|m| m.network(&env))
+                .map(|n| n.default_rpc.to_string())
+                .unwrap_or_else(|| panic!("metadata missing for {c:?} {env:?}"));
+            assert_eq!(url, meta_url, "drift for {c:?} {env:?}");
+        }
+    }
+
+    #[test]
+    fn parity_explorer_url_matches_metadata_for_live_chains() {
+        // Sample one tx hash per chain; the constructed URL must contain
+        // the metadata's explorer base URL.
+        let cases = [
+            (Chain::Ethereum, NetworkEnv::Mainnet, "0xabc"),
+            (Chain::Ethereum, NetworkEnv::Testnet, "0xabc"),
+            (Chain::Solana, NetworkEnv::Mainnet, "Abc"),
+            (Chain::Sui, NetworkEnv::Testnet, "Abc"),
+            (Chain::Aptos, NetworkEnv::Mainnet, "0xabc"),
+            (Chain::Tron, NetworkEnv::Mainnet, "abc"),
+            (Chain::BitcoinTestnet, NetworkEnv::Testnet, "abc"),
+        ];
+        for (c, env, h) in cases {
+            let url =
+                explorer_url(c, &env, h).unwrap_or_else(|| panic!("no url for {c:?} {env:?}"));
+            let base = mpc_wallet_chains::metadata::metadata_for(c)
+                .and_then(|m| m.network(&env))
+                .map(|n| n.explorer_base_url)
+                .unwrap_or_else(|| panic!("metadata missing for {c:?} {env:?}"));
+            assert!(url.starts_with(base), "{c:?} {env:?}: {url} !~ {base}");
+            assert!(url.contains(h), "{c:?} {env:?}: tx hash missing: {url}");
+        }
     }
 
     #[test]
