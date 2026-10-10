@@ -44,7 +44,7 @@ hkdf = "0.12"
 jsonwebtoken = "9"
 
 # Blockchain SDKs
-alloy = { version = "1.5", features = ["full"] }
+alloy = { version = "1.5", default-features = false, features = ["std", "consensus", "eips", "k256", "serde"] } # ponytail: only consensus/eips/primitives (+serde) are used: EVM tx encode, recover, JSON
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
 
 # Serialization
@@ -97,3 +97,75 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Internal crates
 mpc-wallet-core = { path = "crates/mpc-wallet-core" }
 mpc-wallet-chains = { path = "crates/mpc-wallet-chains" }
+
+# ponytail: tests are dominated by crypto math (bignum, curves, hashes, Argon2) that is ~15x slower
+# unoptimized. Optimize only those hot dependencies; everything else (incl. proc-macros) stays at
+# opt-level 0 so cold builds stay cheap. Add a crate here only if a profile shows it hot.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package.num-bigint]
+opt-level = 3
+
+[profile.dev.package.num-integer]
+opt-level = 3
+
+[profile.dev.package.num-traits]
+opt-level = 3
+
+[profile.dev.package.num-modular]
+opt-level = 3
+
+[profile.dev.package.glass_pumpkin]
+opt-level = 3
+
+[profile.dev.package.k256]
+opt-level = 3
+
+[profile.dev.package.elliptic-curve]
+opt-level = 3
+
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+
+[profile.dev.package.ecdsa]
+opt-level = 3
+
+[profile.dev.package.ff]
+opt-level = 3
+
+[profile.dev.package.group]
+opt-level = 3
+
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+
+[profile.dev.package.frost-core]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.sha3]
+opt-level = 3
+
+[profile.dev.package.keccak]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.starknet-crypto]
+opt-level = 3
+
+[profile.dev.package.starknet-curve]
+opt-level = 3
+
+[profile.dev.package.starknet-types-core]
+opt-level = 3
+
+[profile.dev.package.lambdaworks-math]
+opt-level = 3

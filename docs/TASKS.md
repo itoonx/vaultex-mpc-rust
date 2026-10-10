@@ -49,6 +49,11 @@ These are the defaults chosen so that **nothing irreversible or outward-facing h
    - a checkpoint commit `[R<n>][T<id>] <what> — tests pass`, with the Co-Authored-By trailer;
    - fragments only: `claims/<ws>/*.toml`, `changelog.d/<ws>-*.md`, `status/<ws>.toml`.
    - Never skip ZK or crypto checks in tests, and never inflate timeouts to hide slowness.
+   - **CPU budget (the owner's laptop overheated on 2026-10-10):**
+     - Run every cargo command as `CARGO_BUILD_JOBS=4 taskpolicy -b cargo …`.
+     - Allow at most one cargo build or test at a time across all agents.
+     - Research and review agents never compile.
+     - Always use the same flags (`--workspace --features local-transport`) so the cache is reused. Switching to `-p` rebuilds about 160 crates.
 4. **Merge gate into `integration/phase1`** (run by the orchestrator, never by the task agent):
    1. Re-run fmt, clippy and test **at the repo root** after merging; never trust agent-reported results.
    2. `/simplify` pass.
