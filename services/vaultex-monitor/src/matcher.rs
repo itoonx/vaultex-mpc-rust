@@ -15,7 +15,7 @@
 //! | MR-07 | a float-signed call that raises an allowance on a listed token by a non-zero amount | 1, freeze; refills blocked |
 //! | MR-08 | a non-zero allowance from the float on a listed token (periodic reads) | 1, freeze; refills blocked |
 //! | MR-09 | a `transferFrom` on a listed token that moves the float's tokens | 1, freeze |
-//! | MR-10 | a monitor cap exceeded: per transaction, or rolling 24 h amount or count, per asset | 1, freeze |
+//! | MR-10 | a monitor cap exceeded: per transaction, or rolling 24 h amount or count, per asset (the fee-spend cap is not built yet) | 1, freeze |
 //! | MR-11 | a destination off the allowlist (allowlist mode), or never paid before (open mode) | 1, freeze / 2 |
 //! | MR-19 | an allowance-raising call by the float with a zero amount | info |
 //!
@@ -30,6 +30,10 @@
 //! fsync per line; `receipts.anchor` (the last verified receipt head); and `closed.txt`, which the
 //! operator maintains: one `<alert id> <record reference>` line per alert that a ceremony,
 //! incident or drill record has closed. The refill check reads them.
+//!
+//! A transaction's alerts are journaled before the transaction itself, and it counts as seen only
+//! once both are: after a crash or a write error in between, the restarted monitor classifies it
+//! again, and the alerts already journaled are not raised twice (they are deduplicated by id).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -230,8 +234,12 @@ pub struct Alert {
     pub at_ms: u64,
 }
 
-/// An append-only JSON-lines file, synced after every line.
-struct Journal(File);
+/// An append-only JSON-lines file, synced after every line. After a failed write it refuses
+/// every later one, so no line is ever appended behind a torn one.
+struct Journal {
+    file: File,
+    failed: bool,
+}
 
 impl Journal {
     /// Opens `path` for appending. A last line without its newline is a write that never
@@ -248,14 +256,24 @@ impl Journal {
             file.set_len(complete as u64)?;
             file.sync_all()?;
         }
-        Ok(Self(file))
+        Ok(Self {
+            file,
+            failed: false,
+        })
     }
 
     fn append<T: Serialize>(&mut self, record: &T) -> io::Result<()> {
+        if self.failed {
+            return Err(io::Error::other("an earlier write to this journal failed"));
+        }
         let mut line = serde_json::to_vec(record)?;
         line.push(b'\n');
-        self.0.write_all(&line)?;
-        self.0.sync_data()
+        let written = self
+            .file
+            .write_all(&line)
+            .and_then(|()| self.file.sync_data());
+        self.failed = written.is_err();
+        written
     }
 }
 
@@ -383,7 +401,8 @@ impl Matcher {
         self.cfg.spender_set(&self.history)
     }
 
-    /// Classifies the transactions of one scanned block and returns the alerts they raise.
+    /// Classifies the transactions of one scanned block and returns the alerts they raise. On an
+    /// error the monitor must stop: the transaction being classified is not marked seen.
     pub fn observe(&mut self, events: &[Event], now_ms: u64) -> io::Result<Vec<Alert>> {
         let mut out = Vec::new();
         for event in events {
@@ -414,7 +433,7 @@ impl Matcher {
         c: &Contract,
         now_ms: u64,
     ) -> io::Result<Vec<Alert>> {
-        if !self.seen.insert(txid.to_owned()) {
+        if self.seen.contains(txid) {
             return Ok(Vec::new()); // the other provider, or a re-inclusion after a fork
         }
         let mut f = Findings::default();
@@ -452,17 +471,20 @@ impl Matcher {
         if let (Some(asset), Some(to)) = (&outflow.asset, &outflow.to) {
             self.caps(asset, to, outflow.amount, block_time_ms, &mut f);
         }
-        self.outflows.append(&outflow)?;
-        self.history.push(outflow);
 
+        // Alerts first, then the transaction, then the in-memory state (see the module doc).
         let mut alerts = self.raise_findings(txid, f, now_ms)?;
-        match self.accepted.get(txid) {
-            Some(&time_s) => alerts.extend(self.check_time(txid, time_s, block_time_ms, now_ms)?),
-            None => {
-                let deadline = now_ms + self.cfg.grace_ms;
-                self.pending
-                    .insert(txid.to_owned(), (deadline, block_time_ms));
-            }
+        let receipt = self.accepted.get(txid).copied();
+        if let Some(time_s) = receipt {
+            alerts.extend(self.check_time(txid, time_s, block_time_ms, now_ms)?);
+        }
+        self.outflows.append(&outflow)?;
+        self.seen.insert(txid.to_owned());
+        self.history.push(outflow);
+        if receipt.is_none() {
+            let deadline = now_ms + self.cfg.grace_ms;
+            self.pending
+                .insert(txid.to_owned(), (deadline, block_time_ms));
         }
         Ok(alerts)
     }
@@ -601,8 +623,9 @@ impl Matcher {
             }
             let txid = hex::encode(b.tx_hash.0);
             self.accepted.insert(txid.clone(), b.time_s);
-            if let Some((_, block_time_ms)) = self.pending.remove(&txid) {
+            if let Some(&(_, block_time_ms)) = self.pending.get(&txid) {
                 alerts.extend(self.check_time(&txid, b.time_s, block_time_ms, now_ms)?);
+                self.pending.remove(&txid);
             }
         }
         Ok(alerts)
@@ -645,11 +668,11 @@ impl Matcher {
             .collect();
         let mut alerts = Vec::new();
         for txid in due {
-            self.pending.remove(&txid);
             let mut f = Findings::default();
             let why = format!("no accept receipt within {} ms", self.cfg.grace_ms);
             f.add("MR-04", 1, true, why);
             alerts.extend(self.raise_findings(&txid, f, now_ms)?);
+            self.pending.remove(&txid);
         }
         Ok(alerts)
     }
@@ -669,7 +692,7 @@ impl Matcher {
             self.nonzero.remove(&key);
             return Ok(Vec::new());
         }
-        if !self.nonzero.insert(key.clone()) {
+        if self.nonzero.contains(&key) {
             return Ok(Vec::new());
         }
         let why = format!(
@@ -680,9 +703,13 @@ impl Matcher {
         );
         let mut f = Findings::default();
         f.add("MR-08", 1, true, why);
-        self.raise_findings(&format!("{key}:{}", now_ms / 1000), f, now_ms)
+        let alerts = self.raise_findings(&format!("{key}:{}", now_ms / 1000), f, now_ms)?;
+        self.nonzero.insert(key);
+        Ok(alerts)
     }
 
+    /// Journals one alert per rule, unless an alert with that id is already journaled. An id
+    /// counts as raised only once its line is written.
     fn raise_findings(
         &mut self,
         subject: &str,
@@ -699,8 +726,9 @@ impl Matcher {
                 detail: why.join("; "),
                 at_ms: now_ms,
             };
-            if self.raised.insert(alert.id.clone()) {
+            if !self.raised.contains(&alert.id) {
                 self.alerts.append(&alert)?;
+                self.raised.insert(alert.id.clone());
                 alerts.push(alert);
             }
         }
@@ -1071,6 +1099,66 @@ pub mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn a_crash_after_the_alerts_and_before_the_outflow_classifies_again() {
+        let w = Writer::start();
+        let receipt = || w.body(&txid(1), true, (T0 / 1000) as u64);
+        // Guard-accepted, but above the per-transaction cap and off the allowlist.
+        let tx = event(1, 0, trc20(STRANGER, 1001));
+        // `kept` alert lines survive the crash: all, one (a crash between them), or none.
+        for (kept, again) in [(2, vec![]), (1, vec!["MR-11"]), (0, vec!["MR-10", "MR-11"])] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut m = open(&dir, "allowlist");
+            m.receipts(&[receipt()], 0).unwrap();
+            let first = m.observe(std::slice::from_ref(&tx), 0).unwrap();
+            assert_eq!(rules(&first), ["MR-10", "MR-11"]);
+            drop(m);
+            let outflows = fs::read_to_string(dir.path().join(OUTFLOWS)).unwrap();
+            let alerts = fs::read_to_string(dir.path().join(ALERTS)).unwrap();
+            let alerts: String = alerts.split_inclusive('\n').take(kept).collect();
+            fs::write(dir.path().join(OUTFLOWS), "").unwrap();
+            fs::write(dir.path().join(ALERTS), alerts).unwrap();
+
+            // The rescan after the restart classifies and journals it again.
+            let mut m = open(&dir, "allowlist");
+            m.receipts(&[receipt()], 0).unwrap();
+            let raised = m.observe(std::slice::from_ref(&tx), 0).unwrap();
+            assert_eq!(rules(&raised), again, "kept {kept}");
+            let state = State::load(dir.path()).unwrap();
+            assert_eq!(
+                fs::read_to_string(dir.path().join(OUTFLOWS)).unwrap(),
+                outflows
+            );
+            assert_eq!(state.alerts, first, "each alert once, as first raised");
+            // From now on it counts once, and its receipt still matches it (no MR-04).
+            assert!(m.observe(std::slice::from_ref(&tx), 0).unwrap().is_empty());
+            assert!(m.tick(u64::MAX).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_failed_alert_write_leaves_the_transaction_unseen() {
+        let tx = event(1, 0, trc20(STRANGER, 1001));
+        for restart in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut m = open(&dir, "allowlist");
+            m.alerts.failed = true; // as after an I/O error
+            assert!(m.observe(std::slice::from_ref(&tx), 0).is_err());
+            let state = State::load(dir.path()).unwrap();
+            assert!(state.outflows.is_empty() && state.alerts.is_empty());
+            if restart {
+                drop(m);
+                m = open(&dir, "allowlist");
+            } else {
+                m.alerts.failed = false;
+            }
+            // Nothing was marked seen or raised: every finding comes back.
+            let alerts = m.observe(std::slice::from_ref(&tx), 0).unwrap();
+            assert_eq!(rules(&alerts), ["MR-10", "MR-11"], "restart {restart}");
+            assert_eq!(State::load(dir.path()).unwrap().outflows.len(), 1);
+        }
     }
 
     #[test]

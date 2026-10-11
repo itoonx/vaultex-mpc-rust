@@ -11,10 +11,14 @@
 //! - `vaultex-monitor refill-check` runs the check required before every refill ([`refill`]):
 //!   exit 0 PASS, 1 FAIL, 2 could not complete.
 //!
+//! `watch` exits with status 1 when its last provider watcher stops, and at once when the
+//! matcher's journal or the output fails: it fails closed rather than run on without scanning or
+//! recording.
+//!
 //! Not built yet: the soft-freeze path (T07-4; alerts marked `freeze` are only reported), the
-//! independent intent-digest check (MR-05, after the `INTENT_V1` RFC), token event logs,
-//! solidified-height agreement between providers, balance reconciliation and the permission
-//! snapshot.
+//! independent intent-digest check (MR-05, after the `INTENT_V1` RFC), the fee-spend cap of
+//! MR-10, token event logs, solidified-height agreement between providers, balance reconciliation
+//! (MR-13) and the permission snapshot.
 
 mod abi;
 mod cursor;
@@ -35,6 +39,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use serde::Serialize;
 use serde_json::json;
+use tokio::task::JoinSet;
 
 use matcher::{Alert, Config, Matcher, TRX};
 use provider::{Backoff, HttpProvider, Provider, ProviderError};
@@ -308,11 +313,19 @@ fn journal_error(e: io::Error) -> String {
     format!("cannot journal: {e}")
 }
 
+/// Why a provider's watcher stopped.
+enum Stop {
+    /// Its cursor or its provider's chain data failed: only this provider stops.
+    Provider(String),
+    /// The shared matcher journal or the output failed: the whole monitor stops.
+    Fatal(String),
+}
+
 async fn run(args: WatchArgs) -> Result<Infallible, String> {
     let providers = http_providers(&args.sources)?;
     std::fs::create_dir_all(&args.state_dir)
         .map_err(|e| format!("{}: {e}", args.state_dir.display()))?;
-    let mut monitor = match &args.config {
+    let monitor = match &args.config {
         Some(path) => Some(Monitor::open(path, &args.sources, &args.state_dir)?),
         None => None,
     };
@@ -327,7 +340,8 @@ async fn run(args: WatchArgs) -> Result<Infallible, String> {
         eprintln!("vaultex-monitor: no --watch address or --config; scanning only");
     }
 
-    let mut tasks = tokio::task::JoinSet::new();
+    let mut watchers = JoinSet::new();
+    let mut readers = JoinSet::new();
     let mut healths = Vec::new();
     for provider in providers {
         let provider = Arc::new(provider);
@@ -346,17 +360,27 @@ async fn run(args: WatchArgs) -> Result<Infallible, String> {
         let matcher = monitor.as_ref().map(|m| Arc::clone(&m.matcher));
         if let Some(matcher) = matcher.clone() {
             let name = format!("{name} (allowance reads)");
-            tasks.spawn(async move {
+            readers.spawn(async move {
                 let Err(e) = allowance_loop(provider, matcher).await;
                 (name, e)
             });
         }
-        tasks.spawn(async move {
+        watchers.spawn(async move {
             let Err(e) = watch_loop(w, health, matcher).await;
             (name, e)
         });
     }
+    supervise(watchers, readers, monitor, healths).await
+}
 
+/// Runs until the monitor must stop: when the last provider watcher has stopped, a watcher or an
+/// allowance reader hits a fatal error (they only end on one), or the receipt poll fails.
+async fn supervise(
+    mut watchers: JoinSet<(String, Stop)>,
+    mut readers: JoinSet<(String, String)>,
+    mut monitor: Option<Monitor>,
+    healths: Vec<Arc<Mutex<Health>>>,
+) -> Result<Infallible, String> {
     let mut tick = tokio::time::interval(HEALTH_EVERY);
     tick.tick().await; // the first tick is immediate
     let mut receipt_tick = tokio::time::interval(RECEIPT_POLL);
@@ -365,14 +389,21 @@ async fn run(args: WatchArgs) -> Result<Infallible, String> {
             _ = receipt_tick.tick(), if monitor.is_some() => {
                 monitor.as_mut().expect("guarded by the branch condition").poll()?;
             }
-            done = tasks.join_next() => {
+            done = watchers.join_next() => {
                 let Some(done) = done else {
                     return Err("every provider watcher stopped".into());
                 };
-                let (name, error) = done.map_err(|e| format!("watcher task failed: {e}"))?;
+                let (name, error) = match done.map_err(|e| format!("watcher task failed: {e}"))? {
+                    (name, Stop::Fatal(e)) => return Err(format!("{name}: {e}")),
+                    (name, Stop::Provider(e)) => (name, e),
+                };
                 eprintln!("vaultex-monitor: {name} stopped: {error}");
                 emit(&[json!({"kind": "provider_failed", "provider": name, "error": error})])
                     .map_err(|e| format!("cannot write to stdout: {e}"))?;
+            }
+            Some(done) = readers.join_next(), if !readers.is_empty() => {
+                let (name, error) = done.map_err(|e| format!("allowance task failed: {e}"))?;
+                return Err(format!("{name}: {error}"));
             }
             _ = tick.tick() => {
                 let now = Instant::now();
@@ -386,15 +417,16 @@ async fn run(args: WatchArgs) -> Result<Infallible, String> {
     }
 }
 
-/// Runs one provider's watcher until a fatal error: provider errors back off and retry, cursor,
-/// journal or output failures stop it (fail closed: its health turns degraded and the failure is
-/// printed). With a matcher, a step's transactions are classified and journaled before its events
+/// Runs one provider's watcher until it must stop: provider errors back off and retry; a cursor
+/// failure or a fork deeper than the cursor remembers stops this provider (fail closed: its health
+/// turns degraded and the failure is printed); a matcher journal or output failure stops the
+/// monitor. With a matcher, a step's transactions are classified and journaled before its events
 /// are printed and its cursor is committed.
 async fn watch_loop<P: Provider>(
     mut w: Watcher<P>,
     health: Arc<Mutex<Health>>,
     matcher: Option<Arc<Mutex<Matcher>>>,
-) -> Result<Infallible, String> {
+) -> Result<Infallible, Stop> {
     let name = w.name().to_owned();
     let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(60));
     loop {
@@ -409,13 +441,17 @@ async fn watch_loop<P: Provider>(
                                 .lock()
                                 .unwrap()
                                 .observe(&events, now_ms())
-                                .map_err(journal_error)?,
+                                .map_err(|e| Stop::Fatal(journal_error(e)))?,
                             None => Vec::new(),
                         };
-                        emit(&events).map_err(|e| format!("cannot write events: {e}"))?;
-                        emit_alerts(&alerts).map_err(|e| format!("cannot write alerts: {e}"))?;
-                        w.commit()
-                            .map_err(|e| format!("cannot persist the cursor: {e}"))?;
+                        // stdout is shared by every task: an output failure is the monitor's.
+                        emit(&events)
+                            .map_err(|e| Stop::Fatal(format!("cannot write events: {e}")))?;
+                        emit_alerts(&alerts)
+                            .map_err(|e| Stop::Fatal(format!("cannot write alerts: {e}")))?;
+                        w.commit().map_err(|e| {
+                            Stop::Provider(format!("cannot persist the cursor: {e}"))
+                        })?;
                     }
                     Progress::AtHead => tokio::time::sleep(POLL).await,
                 }
@@ -429,13 +465,14 @@ async fn watch_loop<P: Provider>(
                 );
                 tokio::time::sleep(wait).await;
             }
-            Err(fatal) => return Err(fatal.to_string()),
+            Err(fatal) => return Err(Stop::Provider(fatal.to_string())),
         }
     }
 }
 
 /// Reads the float's allowances on every listed token to every spender in the watched set, once
 /// a minute, on one provider (rule MR-08). A failed read ends the round; the next round retries.
+/// It ends only on a matcher journal or output failure, which stops the monitor.
 async fn allowance_loop<P: Provider>(
     p: P,
     matcher: Arc<Mutex<Matcher>>,
@@ -679,6 +716,42 @@ mod tests {
         assert_eq!(line["kind"], "alert");
         assert_eq!(line["id"], "MR-04:ab");
         assert_eq!(line["freeze"], true);
+    }
+
+    #[tokio::test]
+    async fn the_monitor_stops_with_its_last_watcher_or_on_a_fatal_error() {
+        let healths = || vec![Arc::new(Mutex::new(Health::new("a")))];
+        // Allowance readers never end on their own; they must not keep the monitor up.
+        let readers = || {
+            let mut set = JoinSet::new();
+            set.spawn(std::future::pending::<(String, String)>());
+            set
+        };
+        let mut watchers = JoinSet::new();
+        watchers.spawn(async { ("a".to_owned(), Stop::Provider("cursor".into())) });
+        watchers.spawn(async { ("b".to_owned(), Stop::Provider("deep fork".into())) });
+        let Err(e) = supervise(watchers, readers(), None, healths()).await;
+        assert_eq!(e, "every provider watcher stopped");
+
+        // A journal or output failure stops it at once, while another watcher still runs.
+        let mut watchers = JoinSet::new();
+        watchers.spawn(std::future::pending());
+        watchers.spawn(async { ("a".to_owned(), Stop::Fatal("cannot journal: full".into())) });
+        let Err(e) = supervise(watchers, readers(), None, healths()).await;
+        assert_eq!(e, "a: cannot journal: full");
+
+        // So does an allowance reader's.
+        let mut watchers = JoinSet::new();
+        watchers.spawn(std::future::pending());
+        let mut failing = JoinSet::new();
+        failing.spawn(async {
+            (
+                "a (allowance reads)".to_owned(),
+                "cannot journal".to_owned(),
+            )
+        });
+        let Err(e) = supervise(watchers, failing, None, healths()).await;
+        assert_eq!(e, "a (allowance reads): cannot journal");
     }
 
     #[test]

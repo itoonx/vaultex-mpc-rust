@@ -16,8 +16,9 @@
 //!    transactions never have a receipt).
 //!
 //! The report goes into the evidence pack, signed with the monitor evidence key under the
-//! `vaultex-refill-check-v1` namespace (`docs/ops/evidence-pack.md`). The permission snapshot and
-//! the Guard-state checks of RB-9 come with later tasks and are listed as not checked.
+//! `vaultex-refill-check-v1` namespace (`docs/ops/evidence-pack.md`). Balance reconciliation
+//! (MR-13 clean), the permission snapshot and the Guard-state checks of RB-9 come with later tasks
+//! and are listed as not checked: a PASS here does not cover them.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -203,7 +204,11 @@ pub async fn check<P: Provider>(
     }
 
     let pass = r.fails == 0;
-    r.note("not checked here: the permission snapshot and the Guard state (later tasks)".into());
+    r.note(
+        "not checked here (later tasks; RB-9 requires them too): balance reconciliation \
+         (MR-13 clean), the permission snapshot and the Guard state"
+            .into(),
+    );
     r.note(format!("result: {}", if pass { "PASS" } else { "FAIL" }));
     Ok((r.text, pass))
 }
@@ -306,6 +311,11 @@ mod tests {
         let (report, pass) = run(&p, &cfg, dir.path(), TRX, 100_000_000).await;
         assert!(pass, "{report}");
         assert!(report.ends_with("result: PASS\n"), "{report}");
+        // A PASS names the RB-9 conditions it does not cover.
+        assert!(
+            report.contains("balance reconciliation (MR-13 clean)"),
+            "{report}"
+        );
         assert!(report.contains("spender set: 1 address(es)"));
         // Every read is at solidified height: one allowance (one token, one spender), no balanceOf.
         assert_eq!(
