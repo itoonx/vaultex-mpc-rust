@@ -1,0 +1,7 @@
+
+# cargo-vet audits file
+
+[criteria.crypto-reviewed]
+description = "All cryptographic code in this crate (primitives, constant-time code, randomness and key handling) was reviewed for correctness and misuse resistance by a qualified cryptography reviewer. A crate that implements no cryptography meets this. It says nothing else about the crate, so policies require it together with safe-to-deploy."
+
+[audits]
