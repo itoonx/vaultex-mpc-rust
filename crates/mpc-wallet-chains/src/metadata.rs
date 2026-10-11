@@ -91,8 +91,9 @@ pub struct ChainMetadata {
     pub native_decimals: u8,
     /// Default address derivation format for this chain.
     pub default_addr_type: AddressType,
-    /// MPC schemes whose signatures can be finalized into this chain's
-    /// signed-tx format.
+    /// MPC schemes whose signatures can spend from this chain's
+    /// `default_addr_type` address. Chain gating
+    /// (`ChainRegistry::derive_address`) serves an address only to these.
     pub compatible_schemes: &'static [CryptoScheme],
     /// Token standards this chain accepts (always includes `Native`).
     pub token_standards: &'static [TokenStandard],
@@ -263,12 +264,6 @@ const TRON_NETWORKS: &[NetworkInfo] = &[
 const SECP256K1_ECDSA_SCHEMES: &[CryptoScheme] =
     &[CryptoScheme::Gg20Ecdsa, CryptoScheme::Cggmp21Secp256k1];
 
-const BITCOIN_SCHEMES: &[CryptoScheme] = &[
-    CryptoScheme::Gg20Ecdsa,
-    CryptoScheme::Cggmp21Secp256k1,
-    CryptoScheme::FrostSecp256k1Tr,
-];
-
 const ED25519_SCHEMES: &[CryptoScheme] = &[CryptoScheme::FrostEd25519];
 
 const EVM_TOKENS: &[TokenStandard] = &[TokenStandard::Native, TokenStandard::Erc20];
@@ -289,6 +284,9 @@ const TRON_TOKENS: &[TokenStandard] = &[TokenStandard::Native, TokenStandard::Tr
 /// The metadata table. Scope (Step 3): the 6 LIVE-broadcast chains. Other
 /// `Chain` variants stay unwired against this table and their providers
 /// keep using the trait's default `metadata()` panic until they migrate.
+///
+/// An entry here is also what lets chain gating serve the chain's address:
+/// add one only once the address is proven spendable on that chain.
 pub const CHAIN_METADATA: &[ChainMetadata] = &[
     ChainMetadata {
         chain: Chain::Ethereum,
@@ -308,7 +306,9 @@ pub const CHAIN_METADATA: &[ChainMetadata] = &[
         native_unit: "sats",
         native_decimals: 8,
         default_addr_type: AddressType::Bech32P2wpkh,
-        compatible_schemes: BITCOIN_SCHEMES,
+        // ECDSA only: FROST-Secp256k1-TR (Schnorr) cannot spend a P2WPKH output,
+        // and Taproot outputs are not supported, so it gets no Bitcoin address.
+        compatible_schemes: SECP256K1_ECDSA_SCHEMES,
         token_standards: BTC_TOKENS,
         networks: BITCOIN_TESTNET_NETWORKS,
     },
