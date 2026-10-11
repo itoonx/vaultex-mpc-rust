@@ -359,7 +359,9 @@ async function attempt(step, tx, signers, expect, extraSigs = []) {
   tx = await coSign(nile, tx, signers);
   tx.signature.push(...extraSigs.map((i) => tx.signature[i]));
   const weight = await nile.trx.getSignWeight(structuredClone(tx)); // mutates its argument
-  const before = await nile.trx.getBalance(A.F);
+  // Head state (full node), like waitInfo: getBalance reads solidified state, which lags the head
+  // block, so before/after would both be stale and mix in earlier steps' fees.
+  const before = await nile.trx.getUnconfirmedBalance(A.F);
   const broadcast = await send(tx);
   const entry = {
     txid: tx.txID,
@@ -373,7 +375,7 @@ async function attempt(step, tx, signers, expect, extraSigs = []) {
     const info = await waitInfo(tx.txID);
     entry.info = { block: info.blockNumber, fee: info.fee ?? 0, result: info.result ?? "SUCCESS", receipt: info.receipt };
   }
-  entry.balanceDeltaSun = before - (await nile.trx.getBalance(A.F));
+  entry.balanceDeltaSun = before - (await nile.trx.getUnconfirmedBalance(A.F));
   entry.met =
     expect === "accept"
       ? broadcast.ok && entry.info.result === "SUCCESS" && (entry.info.receipt?.result ?? "SUCCESS") === "SUCCESS"
@@ -387,8 +389,9 @@ const hexAddr = (b58) => nile.address.toHex(b58).toLowerCase();
 const keySet = (p) => (p?.keys ?? []).map((k) => k.address.toLowerCase()).sort();
 const sameSet = (keys, b58s) => isDeepStrictEqual(keys, b58s.map(hexAddr).sort());
 
+// Head state (full node): S3.read and S13.read follow waitInfo, which returns before solidification.
 async function permissions() {
-  const acc = await nile.trx.getAccount(A.F);
+  const acc = await nile.trx.getUnconfirmedAccount(A.F);
   return {
     owner: { threshold: acc.owner_permission?.threshold, keys: keySet(acc.owner_permission) },
     active: (acc.active_permission ?? []).map((p) => ({ id: p.id ?? 0, threshold: p.threshold, operations: p.operations, keys: keySet(p) })),
@@ -533,9 +536,12 @@ async function run() {
   const mustAccept = ["S3", "S4", "S5", "S13", "S13.newKG"];
   const mustRefuse = ["S6", "S7", "S8", "S9", "S10", "S13.oldKG"];
   const by = Object.fromEntries(results.steps.map((s) => [s.step, s]));
+  // GO only on the expected outcome, not just accepted/refused: S10 must be refused by the permission
+  // check itself, and accepted transfers must show receipt SUCCESS (a reverted TRC-20 is not a GO).
+  const mustMeet = ["S3.read", "S4.recipient", "S13.read"];
   const go =
-    mustAccept.every((s) => by[s]?.broadcast?.ok || (s === "S3" && state === "configured")) &&
-    mustRefuse.every((s) => by[s]?.refused);
+    mustAccept.every((s) => by[s]?.met === true || (s === "S3" && state === "configured")) &&
+    [...mustRefuse, ...mustMeet].every((s) => by[s]?.met === true);
   results.verdict = {
     reading: go ? "GO" : by.S10?.refused === false ? "NO-GO (active permission can rewrite permissions)" : "NO-GO or tooling: read the steps",
     unexpected: results.steps.filter((s) => s.met === false).map((s) => s.step),

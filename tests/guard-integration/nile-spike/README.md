@@ -14,9 +14,13 @@ ROADMAP M6 #11: can the Guard be an additive co-signer using TRON's own permissi
 - A TRC-20 transfer co-signed by KOP and KG must confirm. `AccountPermissionUpdate` signed under the
   active permission must be refused.
 
-**GO** = S3, S4, S5 and S13 succeed **and** S6–S10 are refused. **NO-GO** = co-signing fails for either
-transfer shape, or the active permission can sign an `AccountPermissionUpdate`. NO-GO starts the
-veto-hook fallback (K-alt).
+**GO** = each gating step meets its expected outcome: S3 (skipped when the float already holds the S3
+set), S4, S5, S13 and the KG2 transfer confirm with receipt `SUCCESS`; the S3 and S13 read-backs show
+the expected permissions and R gains exactly 1 token in S4; S6–S10 and the old-KG transfer are refused
+with the error listed below (S10 by `Permission denied`, not by any other check). **NO-GO** = co-signing
+fails for either transfer shape, or the active permission can sign an `AccountPermissionUpdate`. NO-GO
+starts the veto-hook fallback (K-alt). Any other outcome is reported as "NO-GO or tooling: read the
+steps". S12, S14, S15 and S16 are recorded but do not gate GO.
 
 ## Steps (`node spike.mjs run --broadcast`)
 
@@ -42,6 +46,9 @@ a broadcast with a high-S signature, and a KMS- or vendor-held key in place of K
 
 Every step is written to `out/spike-results.json` (git-ignored; testnet hashes and addresses only)
 as it completes, followed by a `verdict` entry. The go/no-go note is written from that file.
+Permission read-backs and per-step TRX deltas read the full node's head state (not solidified state),
+so they see a step as soon as its receipt is in. The broadcast run is single-shot once S13 has
+rotated KG: a rerun stops before sending (permissions are neither fresh nor the S3 set).
 
 ## Safety
 
