@@ -14,7 +14,8 @@
 #   R2  status "verified" or "limitation" needs at least one evidence item.
 #   R3  status "withdrawn" needs the [withdrawn] table and an empty surfaces list;
 #       withdrawn.replaced_by, if set, names a claim that is not withdrawn.
-#   R4  a live claim has observed < expires <= observed + max_age_days[kind];
+#   R4  a live claim has observed <= today and
+#       observed < expires <= observed + max_age_days[kind];
 #       past its expiry date it fails the check until it is re-verified or
 #       withdrawn. A withdrawn claim is a permanent record and has no expires.
 #   R5  a live claim of kind "metric" needs [instrument] (toolchain, features,
@@ -22,7 +23,9 @@
 #   R6  every surface is declared in claims/surfaces.toml. For each language
 #       that the claim's surfaces use, the claim gives quotes (en) or quotes_zh
 #       (zh), every quote occurs verbatim in each surface of that language, and
-#       a zh surface also needs text_zh.
+#       a zh surface also needs text_zh. Every quote has no leading or trailing
+#       whitespace and at least 4 word characters (regex \w), so that a blank
+#       or punctuation-only quote cannot satisfy R7.
 #   R7  coverage: every claim-bearing line of a surface contains a quote of a
 #       non-withdrawn claim that lists that surface, or is an exempt line in
 #       claims/surfaces.toml. Fenced code blocks, headings, table header and

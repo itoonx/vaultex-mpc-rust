@@ -200,6 +200,8 @@ def check(today, use_git):
             errors.append(f"{where}: missing field 'expires' (R4)")
         elif type_ok(observed, "date") and type_ok(expires, "date") and kind in schema["max_age_days"]:
             max_age = schema["max_age_days"][kind]
+            if observed > today:
+                errors.append(f"{where}: observed {observed} is in the future (R4)")
             if not observed < expires <= observed + dt.timedelta(days=max_age):
                 errors.append(f"{where}: expires must be after observed and within {max_age} days for kind {kind} (R4)")
             if expires < today:
@@ -244,6 +246,12 @@ def check(today, use_git):
         for field, lang in (("quotes", "en"), ("quotes_zh", "zh")):
             if data.get(field) and lang not in langs:
                 errors.append(f"{where}: {field} given but no {lang} surface is listed (R6)")
+            # A blank or punctuation-only quote occurs in almost every line and
+            # would make R7 coverage vacuous.
+            for q in data.get(field, []):
+                if q != q.strip() or len(re.findall(r"\w", q)) < 4:
+                    errors.append(f"{where}: {field} entry {q[:70]!r} needs no outer whitespace"
+                                  " and at least 4 word characters (R6)")
 
     for cid, (where, data) in sorted(claims.items()):
         target = data.get("withdrawn", {}).get("replaced_by")
