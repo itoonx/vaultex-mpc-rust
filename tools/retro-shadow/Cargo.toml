@@ -1,0 +1,7 @@
+[package]
+name = "retro-shadow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vaultex Rung-0 retro-shadow: replays public chain history of consenting accounts through the kernel (skeleton)"
+publish = false # working name until ADR-12

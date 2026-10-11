@@ -4022,6 +4022,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "retro-shadow"
+version = "0.1.0"
+
+[[package]]
 name = "rfc6979"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5374,6 +5378,41 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vaultex-cli-admin"
+version = "0.1.0"
+
+[[package]]
+name = "vaultex-guard"
+version = "0.1.0"
+
+[[package]]
+name = "vaultex-monitor"
+version = "0.1.0"
+
+[[package]]
+name = "vaultex-redteam"
+version = "0.1.0"
+
+[[package]]
+name = "vaultex-types"
+version = "0.1.0"
+dependencies = [
+ "bcs",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "vaultex-verify"
+version = "0.1.0"
+dependencies = [
+ "vaultex-types",
+]
 
 [[package]]
 name = "version_check"

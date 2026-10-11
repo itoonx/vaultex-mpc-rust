@@ -1,0 +1,20 @@
+[package]
+name = "vaultex-types"
+# The contract version moves on its own: 0.1 = contracts v0 (draft), 0.2 = the M6 freeze, 0.3 = v2.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Vaultex wire contracts v0: canonical (BCS) types shared by the verifier kernel, Guard and monitor"
+publish = false # working name until ADR-12
+
+# Kernel boundary (ROADMAP M6 #1): pure crates only. kernel.yml fails CI if an async runtime,
+# network, MPC or transport crate appears in this tree.
+[dependencies]
+bcs = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }

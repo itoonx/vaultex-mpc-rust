@@ -1,0 +1,59 @@
+name: Kernel
+
+# Kernel boundary (ROADMAP M6 #1). The verifier kernel (`vaultex-verify`) and the contract types it
+# links (`vaultex-types`) must not depend, even transitively, on an async runtime, a network or
+# HTTP stack, or the MPC/transport crates. `cargo tree` only resolves the graph; nothing is
+# compiled. Owned by WS-05; it follows ci.yml's integrity rules (bash + pipefail, SHA-pinned
+# actions, read-only token).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  boundary:
+    name: Kernel dependency boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: No async runtime, network, MPC or transport crate in the kernel tree
+        run: |
+          # Normal + build dependencies, for every target platform.
+          banned='^(tokio[a-z0-9_-]*|async-nats|reqwest|hyper[a-z0-9_-]*|axum[a-z0-9_-]*|mio|socket2|mpc-wallet-[a-z0-9_-]+|frost-[a-z0-9_-]+|cggmp[a-z0-9_-]*|paillier-zk) v'
+          for crate in vaultex-types vaultex-verify; do
+            tree=$(cargo tree --locked -p "$crate" --edges no-dev --target all --prefix none --format '{p}')
+            # Guard against a vacuous pass: the tree must start with the crate itself.
+            grep -q "^$crate v" <<<"$tree" || { echo "::error::cargo tree printed no tree for $crate"; exit 1; }
+            hits=$(grep -E "$banned" <<<"$tree" | sed "s/ (\*)$//" | sort -u || true)
+            if [ -n "$hits" ]; then
+              echo "::error::$crate depends on crates the kernel must never link:"
+              echo "$hits"
+              exit 1
+            fi
+            echo "$crate: $(cut -d" " -f1,2 <<<"$tree" | sort -u | wc -l | tr -d " ") crates, none banned"
+          done
