@@ -1,0 +1,52 @@
+name: Claims
+
+# Claims-lint (ROADMAP M5 #10, Beta criterion B8). The job gates on scripts/ci/claims_lint.sh, which
+# fails if:
+#   - a claim in claims/<NN>/*.toml breaks claims/schema.toml or rules R1-R9 (`claims/claims.py
+#     check`): bad or unknown fields, unpinned or missing evidence, an expired claim, a README line
+#     that no claim covers, or CLAIMS.md out of date;
+#   - CLAIMS.md is not byte-identical to a fresh render of claims/** (catches CRLF, which R9 folds);
+#   - a file under claims/ sits where the renderer never reads it, so it would drop out of CLAIMS.md
+#     without an error.
+# No path filter: a README edit changes coverage (R7), and a required check must always report.
+# The daily run catches claims that expire (R4) while nobody pushes; metric claims last 7 days.
+# The checker resolves every evidence commit (R8), so the checkout needs full history.
+# Stdlib Python on the runner (>= 3.11), git and cmp only: no toolchain, no build, no network.
+# Pins follow ci.yml: actions by full commit SHA, read-only token, bash -euo pipefail.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 4 * * *" # daily, 04:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  claims:
+    name: Claims-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Test the lint
+        run: python3 -B -m unittest discover -s scripts/ci -p test_claims_lint.py
+
+      - name: Claims-lint
+        run: bash scripts/ci/claims_lint.sh
