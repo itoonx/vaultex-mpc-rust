@@ -1,555 +1,112 @@
-# MPC Wallet SDK — Shared Agent Memory
+# CLAUDE.md: stable rules for agents in this repository
 
-> This file is auto-loaded by Claude Code at every session start.
-> Every agent reads this first. No need to re-explain project context.
+Vaultex is a threshold-MPC wallet research prototype in Rust, aimed at a self-hosted wallet stack. It is unaudited pre-alpha software for testnets only; read the banner in [README.md](README.md) before you rely on anything in the code.
 
----
+**This file holds rules, never status.** Status lives in [CLAIMS.md](CLAIMS.md) (rendered from `claims/`), [SECURITY_STATUS.md](SECURITY_STATUS.md) and, once the CI status job lands, `docs/status/`. Do not add test counts, batch logs, progress tables, finding or decision tables, or architecture notes here. The history that used to sit here is frozen in [the old CLAUDE.md (archived)](docs/archive/CLAUDE-history-2026-06-01.md); never cite it as current.
 
-## What This Project Is
+## Read first
 
-**MPC Wallet SDK** — a Rust workspace for threshold multi-party computation wallets.
-No single party ever holds a complete private key. Supports EVM, Bitcoin, Solana, Sui, Stark.
-Target: open-source SDK for enterprise custody systems.
+1. This file.
+2. Your task card in [docs/TASKS.md](docs/TASKS.md) §6 and the run protocol in §2.
+3. The [docs/ROADMAP.md](docs/ROADMAP.md) sections your card cites, plus §5.0 (shared files) and your workstream card in §5.2 (the paths you own).
+4. [SECURITY_STATUS.md](SECURITY_STATUS.md): known weaknesses by category. Do not build on a weakness it lists.
+5. Your role file in `.claude/agents/` and [docs/AGENTS.md](docs/AGENTS.md). Where they disagree with ROADMAP §9, the roadmap wins.
 
-**Workspace root:** `/Users/thecoding/git/project/mpc-wallet`
+## Layout
 
-```
-crates/
-  mpc-wallet-core/    ← MPC protocols, transport, key store (traits + impls)
-  mpc-wallet-chains/  ← Chain providers: EVM, Bitcoin, Solana, Sui
-  mpc-wallet-cli/     ← CLI binary (demo only)
-services/
-  api-gateway/        ← REST API server, auth middleware, MpcOrchestrator
-  mpc-node/           ← Standalone MPC node (1 party, 1 share, NATS + KeyStore)
-docs/
-  AGENTS.md           ← Agent roles, ownership, instructions (READ THIS NEXT)
-  SPRINT.md           ← Current sprint tasks + Gate Status table
-  SECURITY_FINDINGS.md← Open findings — R6 maintains this
-  PRD.md              ← Product requirements
-  EPICS.md            ← Epic A–J breakdown
-  DECISIONS.md        ← DEC-001..N decision log
-specs/
-  AUTH_SPEC.md        ← Key-exchange auth protocol spec (28 sections)
-  SIGN_AUTHORIZATION_SPEC.md ← MPC node independent verification spec
-retro/
-  RETRO.md            ← Retrospective index (decisions, lessons, security)
-  decisions/          ← DEC-001..010 architectural decision records
-  lessons/            ← L-001..006 bugs, root causes, fixes
-  security/           ← AUTH-AUDIT-001 security audit reports
-LESSONS.md            ← Bugs found, root causes, fixes, key insights (READ BEFORE CODING)
-```
+- `crates/`: libraries (`mpc-wallet-core`: protocols, transport, key store; `mpc-wallet-chains`: chain encoders and providers; `mpc-wallet-cli`).
+- `services/`: `mpc-node` and `api-gateway`.
+- `docs/`, `specs/`: current documents. `docs/adr/`, `docs/rfcs/`: decisions and specs. `docs/archive/`: superseded documents, history only.
+- `claims/<ws>/*.toml`, `changelog.d/<ws>-*.md`, `status/<ws>.toml`: per-workstream fragments. `retro/`: retrospectives.
 
----
+## Roles (charters: ROADMAP §9.1)
 
-## The Team — Agent Roles
+| Role | Charter |
+|---|---|
+| R0 Architect | Contracts, shared files and dependency batches (WS-03); leads the cut (WS-04) |
+| R1 Crypto | `cggmp24` wrapper and aux lifecycle (WS-08); reviews kernel encodings. No GG20 or Stark work |
+| R2 Infra | Transport and control plane (WS-09); node (WS-10); Guard persistence; deployment (with R9) |
+| R3 Chains | TRON first (WS-05 decoder, WS-06, WS-16); every other chain is experimental |
+| R4 Service | Guard service (WS-06); gateway relay (WS-11); adapter (WS-16) |
+| R5 QA | KPI is oracle-backed evidence, not test count (WS-13, CI) |
+| R6 Security | Harness author and threat-model drafter. Advisory only, never the merge gate |
+| R7 PM | Owns the roadmap artifacts, decision days, RFQs and discovery logistics |
+| R8 SDK | Thin TS Guard client (WS-06) now, a TS client at M13; other SDKs deferred |
+| R9 DevOps | CI, the release chain and deployment (WS-02, WS-07, WS-12) |
+| R10 Scribe | Claims ledger and CI-generated status (WS-01). Never hand-edits status |
 
-| Role | ID | Worktree | Owns |
-|------|----|----------|------|
-| Architect | R0 | `/Users/thecoding/git/worktrees/mpc-r0` | traits, types, error, Cargo.toml |
-| Crypto | R1 | `/Users/thecoding/git/worktrees/mpc-r1` | protocol/*.rs |
-| Infra | R2 | `/Users/thecoding/git/worktrees/mpc-r2` | transport/nats.rs, key_store/rocksdb.rs, audit-ledger |
-| EVM Chain | R3a | `/Users/thecoding/git/worktrees/mpc-r3a` | chains/evm/ |
-| Bitcoin Chain | R3b | `/Users/thecoding/git/worktrees/mpc-r3b` | chains/bitcoin/ |
-| Solana Chain | R3c | `/Users/thecoding/git/worktrees/mpc-r3c` | chains/solana/ |
-| Sui Chain | R3d | `/Users/thecoding/git/worktrees/mpc-r3d` | chains/sui/ |
-| Service | R4 | — | services/, mpc-wallet-cli/ |
-| QA | R5 | — | tests/, .github/workflows/ |
-| Security | R6 | `/Users/thecoding/git/worktrees/mpc-r6` | docs/SECURITY*.md (read-only source) |
-| PM | R7 | `/Users/thecoding/git/worktrees/mpc-r7` | docs/PRD.md, EPICS.md, SPRINT.md, DECISIONS.md |
+The owner approves plans, answers the Decision Inbox (TASKS §3) and approves every merge into `dev` and `main`. Changes to this file go through WS-01 and the owner's review.
 
-**Full role definitions, ownership maps, and instruction templates → `docs/AGENTS.md`**
+## Workflow
 
----
+1. **Plan.** R7 turns the roadmap into task cards in `docs/TASKS.md`. Work that waits on an owner decision is skipped, not guessed.
+2. **Work.** One workstream = one branch = one worktree outside the main checkout, cut from the integration branch. Edit only the paths your workstream owns (ROADMAP §5.2 and the shared-file table in §5.0); a change anywhere else becomes a request to the owning stream.
+3. **Contracts before code; shared files have one owner.** Shared types land through R0 (WS-03) before dependent work branches. Workspace `Cargo.toml`: R0. `Cargo.lock`: regenerated only at merge time. `ci.yml`, `CODEOWNERS`, `deny.toml`: WS-02. `README*.md`, `CLAUDE.md`, `CHANGELOG.md`, `CLAIMS.md`, `SECURITY_STATUS.md`: WS-01. `docs/status/**`: generated by CI.
+4. **Fragments, not shared documents.** Write `claims/<ws>/*.toml`, `changelog.d/<ws>-*.md` and `status/<ws>.toml`. Only WS-01 renders `CLAIMS.md`, `CHANGELOG.md` and the README status block. `README.md` and `README.zh-CN.md` always change together.
+5. **IDs.** Findings, decisions and lessons take GitHub issue numbers (ROADMAP §5.0; final form under ADR-16). Never invent new SEC-, DEC- or L- numbers. Agent runs are "batches", never "sprints", and numbers are never reused.
+6. **Gates (ROADMAP §9.2), three layers:** CI required checks on every PR; human CODEOWNERS review on trust paths (crypto, transport, node, gateway, kernel, CI, supply chain); external review where a milestone requires it (M6, M7, M8, M10). The R6 agent writes an advisory note; it never approves or blocks a merge.
+7. **Merge.** Task agents never merge. A run orchestrator merges into its local integration branch only after re-running fmt, clippy and tests at the repo root. `dev` reaches `main` only by PR, with passing CI and the owner's approval.
 
-## The One Workflow (non-negotiable)
+## Before a task counts as finished (ROADMAP §9.4)
 
-```
-1. R7 PM  →  reads codebase + findings  →  writes Task Specs with Security Checklists
-             ends report with: "PROPOSED TASKS — awaiting human approval"
+1. Linked artifacts: a CI run, transaction hash, drill log or report.
+2. An external-oracle test on any trust path; mutation-checked refusal tests where refusals exist.
+3. A claims fragment and a changelog fragment; specs and docs match the code.
+4. CODEOWNERS approval by a human, with the R6 advisory note attached.
+5. No new dependency without R0 + owner approval and `cargo-deny`/`cargo-vet` output; the SLOC budget respected, or an ADR.
+6. A public-safety check (see "Never").
 
-2. Human  →  approves / adjusts plan
+## Evidence rules
 
-3. Agents →  work in their OWN worktree on their OWN branch
-             checkpoint commit after EVERY cargo test pass
-             "[R{N}] checkpoint: what changed — tests pass"
+- Every factual claim is **VERIFIED** (file:line, command output or URL), **HYPOTHESIS** (name the cheapest test) or **ESTIMATE** (give the basis). Prove a diagnosis against ground truth before acting on it.
+- Status is generated, not written. Never put a status word into a tracked document unless a `claims/` entry backs it (word list: ROADMAP §9.5 and the claims-lint rules). Commit messages never declare a milestone closed; milestones close only on linked artifacts signed by the gatekeeper.
+- Trust-path changes carry an external-oracle test: `k256`/`ecrecover`, byte-equal vectors from a canonical SDK, a public-testnet run, or the adversarial harness. A test that only agrees with the implementation's own output is not evidence.
+- Every refusal test is mutation-checked: it must fail when its check is removed.
+- Crypto: prove the algebra on paper before writing code, and keep the equation chain in a comment above the implementation. If you cannot prove it, do not implement it.
+- Never skip, stub or weaken ZK proofs, key validation or signature checks in tests. New tests and fixtures use production-size cryptographic parameters (cache them); never add reduced parameters. Existing test-size parameters are a listed limitation, not a pattern to copy.
+- Never inflate timeouts, TTLs or CI limits to hide slowness or flakiness; fix the root cause.
+- Re-check a finding against the current code before planning work on it.
+- Never trust an agent's reported result: after any agent work, re-run fmt, clippy and tests at the repo root.
 
-4. R6     →  audits each branch against R7's Security Checklist
-             issues VERDICT: APPROVED or DEFECT per branch
-             CRITICAL/HIGH finding = DEFECT = merge blocked
+## Build and test
 
-5. Merge  →  orchestrator merges ONLY branches with R6 APPROVED verdict
-```
-
----
-
-## Checkpoint Commit Rule
-
-Every agent commits after **every** `cargo test` pass — no exceptions:
+Toolchain: Rust 1.93.1, the installed version. A `rust-toolchain.toml`, when present, is authoritative. Do not install, update or switch toolchains or global tools without the owner's approval.
 
 ```bash
-git add -A
-git commit -m "[R{N}] checkpoint: {what changed} — tests pass"
-# final:
-git commit -m "[R{N}] complete: {task summary}"
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --features local-transport -- --test-threads=4
 ```
 
----
-
-## Current State (as of Sprint 52 — CHAIN REGISTRY REFACTOR LIVE-VALIDATED ON ALL 6 CHAINS)
-
-### Auth System (3 methods, Redis-ready)
-
-Three auth methods — priority: **mTLS → Session JWT → Bearer JWT**.
-If a header is **present** but invalid, auth fails immediately — no fall-through.
-
-```
-mTLS          = Machine → Machine   (TLS cert identity, service-to-service)
-Session JWT   = App → Server        (HS256 signed with key-exchange derived key)
-Bearer JWT    = Human → System      (RS256/ES256 from IdP like Auth0/Okta)
-```
-
-**Endpoints:**
-- `POST /v1/auth/hello` — ClientHello (X25519 + Ed25519), rate-limited 10 req/sec
-- `POST /v1/auth/verify` — ClientAuth → session token
-- `POST /v1/auth/refresh-session` — extend TTL (configurable via SESSION_TTL)
-- `GET /v1/auth/revoked-keys` — revocation list
-- `POST /v1/auth/revoke-key` — dynamic revocation (admin-only, behind auth)
-
-**Architecture (`services/api-gateway/`):**
-```
-src/
-  lib.rs              ← Library crate (build_router())
-  main.rs             ← Binary (loads config, connects Redis if configured)
-  auth/
-    types.rs          ← AuthenticatedSession (Zeroize+ZeroizeOnDrop), transcript hashing
-    handshake.rs      ← Server-side handshake state machine (session_ttl param)
-    client.rs         ← Client SDK (HandshakeClient)
-    session.rs        ← SessionBackend trait + InMemoryBackend + SessionStore facade
-    session_redis.rs  ← RedisSessionBackend (encrypted keys, ChaCha20-Poly1305)
-    session_jwt.rs    ← Session JWT: create/extract_session_id/verify_with_key
-    redis_backend.rs  ← RealRedisClient + RedisReplayBackend + RedisRevocationBackend
-    mtls.rs           ← MtlsServiceRegistry + MtlsIdentity (cert-based auth)
-    signer.rs         ← AuthSigner trait + LocalSigner (Ed25519)
-    kms_signer.rs     ← KmsSigner stub (AWS KMS placeholder)
-  routes/auth.rs      ← Handshake + revoke-key endpoints
-  middleware/
-    auth.rs           ← 3-method middleware (mTLS → Session JWT → Bearer JWT)
-    rate_limit.rs     ← Token-bucket rate limiter (per-key)
-  state.rs            ← AppState, ReplayCacheBackend trait, RevocationBackend trait
-  config.rs           ← BackendType enum (Memory|Redis), env loading
-tests/
-  auth_security_audit.rs ← 46 security integration tests
-```
-
-**Redis integration (SESSION_BACKEND=redis):**
-- Sessions: encrypted with ChaCha20-Poly1305 (KEK from SESSION_ENCRYPTION_KEY) before Redis storage
-- Replay cache: Redis SET NX EX (atomic, TTL-based)
-- Revoked keys: Redis SET (SADD/SISMEMBER)
-- All backends are trait-based: `SessionBackend`, `ReplayCacheBackend`, `RevocationBackend`
-- SCAN used instead of KEYS (non-blocking)
-
-**KMS/HSM readiness:**
-- `AuthSigner` trait: `LocalSigner` (current) or `KmsSigner` (AWS KMS stub)
-- `KeyEncryptionProvider` trait: `LocalKeyEncryption` or future HSM backend
-- See `specs/REDIS_KMS_MIGRATION_SPEC.md`
-
-Full spec: `specs/AUTH_SPEC.md` (28 sections) | Migration: `specs/REDIS_KMS_MIGRATION_SPEC.md`
-
-### MPC Node Architecture (DEC-015 — Sprint 15)
-
-Production architecture: Gateway holds ZERO key shares. Each MPC node holds exactly 1 share.
-
-```
-Gateway (orchestrator — MpcOrchestrator, NO shares)
-    │ NATS control channels
-    ├── MPC Node 1 (share 1, EncryptedFileStore)
-    ├── MPC Node 2 (share 2, EncryptedFileStore)
-    └── MPC Node 3 (share 3, EncryptedFileStore)
-```
-
-**Crates:**
-- `services/mpc-node/` — standalone MPC node binary (Party ID + KeyStore + NATS)
-- `services/api-gateway/src/orchestrator.rs` — MpcOrchestrator (NATS pub/sub, metadata only)
-- `crates/mpc-wallet-core/src/rpc/` — shared NATS RPC messages (KeygenReq/Resp, SignReq/Resp)
-
-**NATS Control Channels:**
-- `mpc.control.keygen.{group_id}` — orchestrator → nodes keygen request
-- `mpc.control.sign.{group_id}` — orchestrator → nodes sign request (with SignAuthorization)
-- `mpc.control.freeze.{group_id}` — orchestrator → nodes freeze/unfreeze
-
-### Sign Authorization (MPC node independent verification)
-
-**Problem:** Gateway is a single point of trust. If compromised, attacker can sign any transaction.
-**Solution:** `SignAuthorization` — Ed25519-signed proof that gateway produces after auth + policy + approvals.
-Each MPC node **independently verifies** before participating in signing (DEC-012).
-
-```
-Gateway (creates proof)    →    MPC Node (verifies before sign)
-  - requester_id                  ✓ gateway signature valid
-  - message_hash (binding)        ✓ message hash matches
-  - policy_passed                 ✓ policy check passed
-  - approval_count/required       ✓ approval quorum met
-  - timestamp (2-min TTL)         ✓ not expired
-```
-
-**File:** `crates/mpc-wallet-core/src/protocol/sign_authorization.rs` (9 tests)
-**Spec:** `specs/SIGN_AUTHORIZATION_SPEC.md`
-
-### Tests on `main`
-```
-967 tests pass (cargo test --workspace) + 16 E2E (--ignored, need live infra)
-cargo fmt        clean
-cargo clippy     clean (0 warnings, -D warnings)
-cargo audit      clean (.cargo/audit.toml ignores unmaintained transitive deps)
-CI pipeline      ALL GREEN (fmt + clippy + test + audit + E2E)
-```
-
-### Sprint Status
-- **Sprint 1–8:** COMPLETE — core MPC protocols, transport, key store, policy, approvals, audit
-- **Sprint 9:** COMPLETE — ABAC, MFA, EVM simulation, GG20 key refresh
-- **Sprint 10:** COMPLETE — FROST Ed25519/Secp256k1 refresh, signed policy bundles, Bitcoin simulation
-- **Sprint 11:** COMPLETE — Policy templates, Solana/Sui simulation, CLI simulate, ChainRegistry
-- **Sprint 12:** COMPLETE — GG20 key resharing, multi-cloud ops (distribution + quorum risk)
-- **Sprint 13:** COMPLETE — FROST reshare, DR plan, RPC failover, chaos framework
-- **Sprint 14:** COMPLETE — JetStream ACL (E5), WORM storage config (F4), CI fixes (clippy + audit)
-- **Sprint 15:** COMPLETE — Production readiness (standard errors, Vault, NatsTransport fix, sig verification, gateway↔node split, benchmarks, CI E2E)
-- **Sprint 16:** COMPLETE — FROST keygen over NATS, request-reply control plane, 14 new chain tests, real SignAuthorization in gateway, E2E re-enabled, DEC-015 security audit (SEC-025..031)
-- **Sprint 17:** COMPLETE — Security hardening (SEC-008, SEC-013, SEC-014, SEC-017, SEC-019, SEC-023, SEC-025 resolved), authorization_id replay protection, 10 security regression tests
-- **Sprint 18:** COMPLETE — Control plane hardening (SEC-026 signed control messages, AuthorizationCache replay dedup, 5 hardening integration tests, R6 audit APPROVED)
-- **Sprint 19:** COMPLETE — CGGMP21 Foundation (CryptoScheme::Cggmp21Secp256k1, Feldman VSS keygen, Paillier+Pedersen aux info, 12 new protocol tests)
-- **Sprint 20:** COMPLETE — CGGMP21 Signing (pre-signing phase, online 1-round signing, identifiable abort, low-s normalization, 7 new signing tests)
-- **Sprint 21:** COMPLETE — CGGMP21 Integration (key refresh, 50 chains wired, 32 protocol tests, R6 audit APPROVED)
-- **Sprint 22:** COMPLETE — KMS/HSM Integration (AES-256-GCM key wrapping, KMS envelope encryption interface, Vault credential rotation, secret refresher)
-- **Sprint 23:** COMPLETE — SGX Prototype (design doc, MockEnclaveProvider, AttestationVerifier, R6 audit APPROVED)
-- **Sprint 24:** COMPLETE — Policy DSL (PolicyRule composable types, JSON parser, recursive AND/OR/NOT evaluator, EvaluationContext)
-- **Sprint 25:** COMPLETE — Key Delegation + Org Hierarchy (DelegationToken, Organization/Team/Vault model, team-scoped RBAC)
-- **Sprint 26:** COMPLETE — Address Whitelist + Velocity Limits + Webhook System (24h cool-down, multi-window velocity, HMAC-SHA256 webhooks)
-- **Sprint 27a:** COMPLETE — Real Paillier cryptosystem (CVE-2023-33241 fix): safe prime keygen, Paillier encrypt/decrypt, homomorphic ops, Πmod + Πfac ZK proofs
-- **Sprint 27b:** COMPLETE — MtA sub-protocol (Paillier-encrypted), Πenc + Πaff-g + Πlog* ZK proofs (5/5 CGGMP21 proofs done)
-- **Sprint 28:** COMPLETE — Mandatory ZK proofs in CGGMP21 + GG20, remove simulated MtA, real Paillier wired end-to-end
-- **Sprint 29:** COMPLETE — TSSHOCK Fiat-Shamir hardening (CVE-2022-47931/47930), SEC-056 PiAffg EC binding, SEC-058 legacy Paillier removal, CVE Security Report
-- **Sprint 30:** COMPLETE — SEC-054 Paillier guard, SEC-035 K_i abort, SEC-028/029 zeroize, all P1/P2 findings resolved (68/68), FilePreSignatureStore
-- **Sprint 31:** COMPLETE — Chi_i Schnorr PoK for sound identifiable abort, Stark protocol rewrite (starknet-crypto 0.8), Threshold Stark ECDSA (production)
-- **Sprint 32–33:** COMPLETE — Benchmark baseline for all 7 protocols, mpc-node test coverage 0→35, CI benchmark gate, protocol common module
-- **Sprint 34:** COMPLETE — Deployment readiness (mpc-node /health endpoint, Prometheus metrics, Helm chart, Docker compose E2E)
-- **Sprint 35:** COMPLETE — Audit preparation (threat model refresh, security regression suite, CVE-2025-66016 verification, SBOM, audit scope doc)
-- **Sprint 36:** COMPLETE — BIP32 HD wallet derivation for secp256k1 MPC protocols (GG20 + CGGMP21)
-- **Sprint 37:** COMPLETE — OpenAPI spec export (utoipa), SDK quickstart guide, error code catalog
-- **Sprint 38:** COMPLETE — First live Sepolia MPC broadcast (GG20 ECDSA over real Ethereum testnet); L-011, L-012, L-013
-- **Sprint 39:** COMPLETE — First live Solana devnet MPC broadcast (FROST-Ed25519, real signed transaction)
-- **Sprint 40:** COMPLETE — First live Bitcoin testnet broadcast (P2WPKH + GG20 ECDSA); L-014 (FROST-TR Taproot tweak parked)
-- **Sprint 41:** COMPLETE — First live Sui testnet broadcast (FROST-Ed25519, real `TransactionData::V1`); L-015 (Sui hand-rolled BCS shape)
-- **Sprint 42:** COMPLETE — First live Aptos testnet broadcast (FROST-Ed25519, real `RawTransaction`); L-016 (auth order + signing message + min gas)
-- **Sprint 43:** COMPLETE — First live TRON Shasta MPC broadcast (GG20 ECDSA, hand-rolled protobuf `Transaction.raw`); L-017
-- **Sprint 44:** COMPLETE — Cross-chain token transfer schema design (`TokenIdentifier` at chain-crate level); research + design only, no chain wire-up
-- **Sprint 45:** COMPLETE — EVM ERC-20 token transfer (live USDC-Sepolia broadcast `0x23ab51bde4db9e737f0f6039c21bf418f68147d230f9100119715643ceb090a9`, 0.1 USDC self-transfer, 40,707 gas); ABI encoder, dynamic `gas_limit` via `eth_estimateGas`, CLI `--token`/`--token-json` flags; L-018
-- **Sprint 46:** COMPLETE — Sui `Coin<T>` PTB transfer (Object input as `SplitCoins` source, T inferred on-chain — 296-byte BCS matches `@mysten/sui`) + Aptos legacy `0x1::coin::transfer<T>` entry function (211-byte BCS matches `@aptos-labs/ts-sdk`); CLI `--token sui-coin:...` / `--token aptos-coin:...`; live Aptos testnet tx `0x72c2e3b599d55a0df9d15d55e7b77022f2163e9120acc3ca9d60c8c7adbe7892` (`0x1::coin::transfer<AptosCoin>`); Sui live deferred (non-SUI testnet token funding pending); no new lessons (leveraged L-015/L-016/L-018)
-- **Sprint 47:** COMPLETE — Aptos Fungible Asset standard (`0x1::primary_fungible_store::transfer`): `EntryFunction::primary_fungible_store_transfer` + `RawTransaction::new_fungible_asset_transfer`; type arg always `0x1::fungible_asset::Metadata`, args = `[Object<Metadata>, recipient, amount]` — Metadata Object's runtime address replaces `Coin<T>`'s type-system identity (different identity model); `parse_aptos_address_padded` for short-form framework constants like `0xa` (sender/recipient still strict 64-char); 265-byte BCS byte-equal to `@aptos-labs/ts-sdk` reference vector; live Aptos testnet tx `0xb3a41e3339db31111b8613442d895ffe2fc15615bd8624a821d52bc72b8f76f8` (native APT routed through FA at canonical metadata `0xa`); L-019
-- **Sprint 48:** COMPLETE — TRON TRC-20 token transfer (`TriggerSmartContract`, ContractType=31): protobuf `encode_trigger_smart_contract`/`encode_any_trigger`/`encode_contract_envelope` (generalizes prior contract wrapper), constants `CONTRACT_TYPE_TRANSFER=1` + `CONTRACT_TYPE_TRIGGER_SMART_CONTRACT=31`; `build_trc20_transfer_raw_data` one-shot helper with **mandatory `fee_limit`** (TVM calls require it — opposite of L-017's native-transfer omission); `decode_contract_to_json` dispatches by contract type to produce broadcast JSON; `encode_trc20_transfer_calldata` emits 68-byte selector `0xa9059cbb` + 32-byte recipient (hash160, drops `0x41` prefix) + 32-byte amount; `build_tron_transaction` dispatches `TokenIdentifier::Tron` to TRC-20 path with `fee_limit` defaulting to 100 TRX; CLI presign branches by contract type (TRC-20 auto-injects `fee_limit=100_000_000` sun, native still omits per L-017); 211-byte BCS-equivalent byte-equal to tronweb reference vector pinned in `tron::proto::tests::proto_matches_tronweb_trc20_reference`; live TRON Shasta tx `0x54a73460ea78e5558ce78471e72600c68cc88a428dd76f2a47aa7a5e527fc296` (community testnet USDT `TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs`, 0.0001 USDT self-transfer); no new lessons (worked first try)
-- **Sprint 52:** COMPLETE — Sprint 51 refactor E2E gate. Live MPC re-broadcast on **all 6 chains** from the same funded testnet wallets, validating the CHAIN_METADATA / `fetch_presign_extras` provider refactor end-to-end (presign RPC dance now owned by each provider, CLI dispatch only). All 6 confirmed on-chain: Sepolia `0x299e31bf…2a40c00f` (block 10963455, GG20), Solana devnet `4BSvgaFy…iR3cNsHn` (finalized, FROST-Ed25519), Bitcoin testnet `2084bef0…1aeaaba1` (P2WPKH, GG20, 2 UTXOs), Sui testnet `FtVMnEvo…Gv6zGtWF` (success, FROST-Ed25519), Aptos testnet `0x9773f20e…6a47dafb` (Executed, `0x1::aptos_account::transfer`, seq 5), TRON Shasta `5821dd9d…07204b404` (SUCCESS, GG20). Each: load wallet → provider presign → threshold sign → recover/verify-against-sender → broadcast. **One refactor-surface finding (not a bug): TRON rejects self-transfer** (`Cannot transfer TRX to yourself`), so TRON sent to a controlled second address (`TE8xGvXfuYQijhYKDoFizRWQXjNv3u11CS`, derived via `export-address --chain tron` from the Sepolia GG20 group); all other chains self-transferred. Filled missing `group_id` (`16be267f-…`) for the tron-shasta entry in `funded-wallets.local.json`. Zero code changes — pure live validation. Toolchain now rustc 1.93.1 (alloy 1.7.3), 624/624 lib tests green.
-
-- **Sprint 51:** COMPLETE — Chain registry & token standardization. Single source of truth for per-chain config: `crates/mpc-wallet-chains/src/metadata.rs` (`ChainMetadata` + `NetworkInfo` + `pub const CHAIN_METADATA`) covers the 6 LIVE chains (Ethereum, BitcoinTestnet, Solana, Sui, Aptos, Tron). New modules `address_type.rs` (typed `AddressType` enum retires `"p2wpkh"`/`"taproot"` strings) and `presign.rs` (typed `PresignExtras` enum + `PresignContext` — replaces opaque `serde_json::Value` extras). `ChainProvider` trait gains `metadata() -> &'static ChainMetadata` and `async fetch_presign_extras(ctx) -> Result<PresignExtras, CoreError>` — each of the 6 providers now owns its RPC dance (nonce/gas/blockhash/UTXOs/etc), CLI just dispatches. CLI's `fetch_presign_extras` body has **zero** chain-conditional branches (6 if-arms collapsed to 1 trait call); `resolve_default_rpc_url`/`explorer_url`/balance-check `eprintln!`s all read from metadata. `DwellirProvider::chain_slug` reads `metadata.dwellir_slug` first; hardcoded fallback now lists only chains not yet in CHAIN_METADATA. `parse_token_spec` delegates to `TokenIdentifier::parse_shorthand()` in the chains crate so CLI + SDK share one parser. 12 commits on dev (`0a75c7ab` … `a2ac5f3e`); 624/624 workspace lib tests (was 617 — +7 metadata/dwellir parity tests, +5 token shorthand round-trip); fmt + clippy --workspace -D warnings clean on every commit. Zero crypto/protocol/encoder code touched — pure plumbing. **Adding a new chain to the LIVE set is now one CHAIN_METADATA entry + one provider impl, with zero CLI edits.** E2E gate (Step 9 of plan: live broadcast per chain) deferred — refactor surface validated by unit + parity tests; live re-broadcasts to be batched in Sprint 52. Plan file: `/Users/thecoding/.claude/plans/graceful-roaming-floyd.md`.
-
-- **Sprint 50:** COMPLETE — Sui `Coin<T>` live close-out — **TOKEN SUITE LIVE ON ALL 6 CHAINS**. Funded Sui testnet MPC wallet (`0x009c9bf4…`, group `99ee01ec-…`) with 20 Circle testnet USDC via `faucet.circle.com` (type tag `0xa1ec7fc0…::usdc::USDC`, 6 decimals, legacy `Coin<T>` standard — drop-in for the Sprint 46 PTB path). CLI presign auto-picked source `Coin<USDC>` object `0x60af844b…` (balance 20_000_000) and gas SUI `0xc3bcc249…` (balance 898_002_120 MIST); FROST-Ed25519 2-of-3 produced 296-byte BCS `TransactionData::V1` (PTB: `SplitCoins(src_coin, [100_000]) → TransferObjects([split], sender)`) + 97-byte Ed25519 sig envelope. Live Sui testnet tx `DFQmfoEbdiF5NJhXBomcCnm5uwbHK2WF7eFAUSnzPeM2` (status=success, gas ~2.35M MIST = ~0.00235 SUI, 0.1 USDC self-transfer); no new lessons (Sprint 46 hand-rolled BCS held; only blocker was sourcing a non-SUI testnet token, resolved via Circle official faucet listing Sui Testnet as a supported chain). Updates: `tests/e2e/funded-wallets.local.json` `sui-testnet` block gains `funded_usdc`/`usdc_type_tag`/`usdc_decimals`/`usdc_faucet`/`verified_usdc_tx`; Token Coverage table row flips Sui from CODE-COMPLETE → LIVE.
-
-- **Sprint 49:** COMPLETE — Solana SPL Token transfer + generic instruction refactor — **TOKEN SUITE COMPLETE**. New `solana/instruction.rs` (~150 LOC) with generic `Instruction` + `AccountMeta` + `build_message` (4-bucket account ordering: writable+signer / readonly+signer / writable+nonsigner / readonly+nonsigner; program-id-before-accounts traversal matching `@solana/web3.js` `CompiledKeys`; v0/legacy versioning + ALT). New `solana/ata.rs` (~155 LOC): `find_program_address` (PDA via SHA-256 + on-curve check via `ed25519-dalek`), `derive_ata`, `TOKEN_PROGRAM_ID` / `TOKEN_2022_PROGRAM_ID` / `ASSOCIATED_TOKEN_PROGRAM_ID` constants base58-verified by tests. New `solana/spl.rs` (~110 LOC): `create_ata_idempotent` (discriminator 1) + `transfer_checked` (discriminator 12, amount LE u64 + decimals u8). Refactored `solana/tx.rs`: deleted ~120 LOC of hardcoded `build_message_bytes`/`build_message_bytes_v0`; native SOL now uses the same instruction-based path as SPL via `system_transfer_instruction`. SPL build flow always emits `[CreateATAIdempotent, TransferChecked]` so missing-recipient-ATA case auto-resolves (~0.002 SOL rent). 320-byte SPL message byte-equal to `@solana/spl-token` `compileToLegacyMessage` reference, pinned in `chain_solana_integration::spl_message_matches_spl_token_sdk_reference`. Live Solana devnet tx `4556JgY7Z6Cc1ucQckBHqAXfSWpgiksA1KT96tB4ZcdKMHsjRL3LDYu9YgiFaRZj2cawLpAiDsXn8FLrHweSfHRw` (devnet USDC, 0.1 to self via FROST-Ed25519 2-of-3); +9 tests (5 ATA + 1 instruction roundtrip + 2 SPL + 1 SPL ref vector). No new lessons.
-
-**M1-M4: DONE | All protocols production threshold signing | All 68 security findings RESOLVED | 967 tests | GG20 + CGGMP21 + FROST + Stark ECDSA + HD derivation | Cross-chain token transfer LIVE on all 6 chains: EVM ERC-20 + Sui Coin<T> + Aptos Coin + Aptos FA + TRON TRC-20 + Solana SPL — TOKEN SUITE LIVE END-TO-END**
-
-### Token Transfer Coverage (Sprint 44–45 onward)
-
-First cross-chain token transfer support shipped. Native-asset sends remain covered by Sprint 38–43.
-
-| Chain | Token Standard | Status | Sprint |
-|-------|----------------|--------|--------|
-| EVM | ERC-20 | LIVE (USDC-Sepolia) | 45 |
-| Sui | `Coin<T>` (PTB SplitCoins+TransferObjects) | LIVE (testnet `DFQmfoEbdiF5NJhXBomcCnm5uwbHK2WF7eFAUSnzPeM2`, 0.1 Circle USDC self-transfer via FROST-Ed25519 2-of-3) | 46 (code) / 50 (live) |
-| Aptos | legacy `0x1::coin::transfer<T>` | LIVE (testnet `0x72c2e3b5…`, `<AptosCoin>` path) | 46 |
-| Aptos | Fungible Asset (`0x1::primary_fungible_store::transfer`) | LIVE (testnet `0xb3a41e33…`, native APT via FA at metadata `0xa`) | 47 |
-| TRON | TRC-20 (`TriggerSmartContract` + `transfer(address,uint256)`) | LIVE (Shasta `0x54a73460…`, 0.0001 USDT @ `TG3XXyExBkPp…`, fee_limit 100 TRX) | 48 |
-| Solana | SPL Token (`CreateATAIdempotent` + `TransferChecked`) | LIVE (devnet `4556JgY7…`, 0.1 devnet USDC self-transfer via FROST-Ed25519 2-of-3) | 49 |
-
-**TOKEN SUITE COMPLETE — ALL 6 CHAINS LIVE** — single `TokenIdentifier` enum, zero changes to `ChainProvider` trait, ~1700 LOC across 6 sprints (44 design + 45–49 per-chain code + 50 Sui live close-out). Schema validated and broadcast end-to-end on every in-scope chain (Bitcoin out of scope; NFTs deferred but schema reserves room).
-
-### Live Testnet Broadcast Coverage (Sprint 38–43)
-
-Six chains have completed end-to-end live MPC sends from real key shares to real testnet RPCs:
-
-| Chain | Network | Protocol | Sprint |
-|-------|---------|----------|--------|
-| Ethereum | Sepolia | GG20 ECDSA | 38 |
-| Solana | Devnet | FROST-Ed25519 | 39 |
-| Bitcoin | Testnet (P2WPKH) | GG20 ECDSA | 40 |
-| Sui | Testnet | FROST-Ed25519 | 41 |
-| Aptos | Testnet | FROST-Ed25519 | 42 |
-| TRON | Shasta | GG20 ECDSA | 43 |
-
-Sprint 43 reference TRON tx: `632a52ef4129f52e03d950cd7552202a964c126d6a251ccb6b0a6467f04b9ce2`
-from `TGbSVxCm4yConwQyQQifV5We2Zmany8SFS`.
-
-### New in Sprint 29
-- CVE-2022-47931 (TSSHOCK alpha-shuffle) FIX: `hash_update_lp()` length-prefixed encoding in all Fiat-Shamir hashes
-- CVE-2022-47930 (TSSHOCK replay) FIX: `session_id` + `prover_index` bound into ZK proof challenges (Pienc, PiAffg, PiLogstar)
-- Domain separators bumped to v2/v3: pienc-v2, piaffg-v3, pilogstar-v2, pifac-commit-v2, pifac-challenge-v2
-- SEC-056 FIX: PiAffg `commitment_bx` is now real EC point `alpha*G` (was raw scalar), included in Fiat-Shamir hash, verifier checks `z1*G == Bx + e*X`
-- SEC-058 FIX: Deleted simulated Paillier (`generate_paillier_keypair`/`PaillierKeyPair`), legacy share fields set to empty, real Paillier keys mandatory
-- SEC-034 verified RESOLVED: MtA uses real Paillier encryption end-to-end (since Sprint 28)
-- SEC-055/057 verified RESOLVED: Pienc Pedersen and PiLogstar EC verification equations are correct
-- CVE-2025-66017 safety documentation added to `sign_with_presig` API
-- Comprehensive CVE Security Report: `docs/CVE_SECURITY_REPORT.md` (18 CVEs, 68 findings)
-- R6 audit: 5 MEDIUM findings resolved (SEC-034, SEC-055, SEC-056, SEC-057, SEC-058)
-
-### New in Sprint 31
-- Chi_i Schnorr proof of knowledge in CGGMP21 round 13 (prevents framing attack in identifiable abort)
-- Stark protocol rewrite: starknet-crypto 0.8, real ECDSA signing, Pedersen hash for tx+address
-- Threshold Stark ECDSA: Feldman VSS over Stark EC order, MtA-based pre-signing, 1-round online sign
-- PiLogStarStark + PiAffgStark ZK proofs on Stark curve
-- starknet-curve 0.6 + starknet-types-core 0.2 dependencies
-- 882 tests as of Sprint 31 (16 new Stark threshold + ZK proof tests)
-
-### New in Sprint 30
-- SEC-054 FIX: Runtime assert production_bits >= 2048 in Paillier keygen
-- SEC-035 FIX: K_i points stored in PreSignature for identifiable abort
-- SEC-028/029 FIX: key_store_password + signing key intermediates wrapped in Zeroizing in mpc-node
-- SEC-024 FIX: Deleted dead distributed_sign() (coordinator nonce vulnerability)
-- SEC-026/027 FIX: Removed unsigned MpcOrchestrator::connect() — only signed connect_with_key()
-- SEC-030/031 FIX: Per-group-id rate limiter in mpc-node keygen+sign handlers
-- SEC-037 FIX: FilePreSignatureStore with fsync crash-safe nonce reuse protection
-- SEC-060 FIX: Removed vestigial Pifac commitment, deterministic Fiat-Shamir (pifac-challenge-v3)
-- All 68 security findings resolved (68/68)
-
-### New in Sprint 22
-- AES-256-GCM key wrapping replaces XOR placeholder in `KeyEncryptionProvider` (R2)
-- `KmsKeyEncryption` struct: envelope encryption interface with DEK cache + TTL (R2)
-- `KmsClient` struct: key wrapping operations (wrap/unwrap/generate_data_key) with KMS config (R4)
-- Vault credential rotation: `renew_lease()`, `read_secret_version()`, `SecretRefresher` background task (R4)
-- `VAULT_REFRESH_INTERVAL` config for auto-refresh (default 300s)
-- DEC-016: KMS for DEK wrapping only, Ed25519 signing stays local (AWS KMS doesn't support Ed25519)
-
-### New in Sprint 21
-- CGGMP21 key refresh: additive re-sharing preserves group pubkey + fresh Paillier/Pedersen aux info (R1)
-- All 50 secp256k1 chains wired: `ChainRegistry::compatible_schemes()` maps chains to [Gg20, Cggmp21] (R3)
-- 17 chain integration tests verifying CGGMP21 Ecdsa sigs work with EVM, UTXO, TRON, Cosmos (R3)
-- 32 CGGMP21 protocol integration tests: keygen, signing, pre-signing, abort, cross-protocol (R5)
-- R6 audit: APPROVED — 2 MEDIUM (MtA simulation expected), 3 LOW, 5 INFO (SEC-034..SEC-043)
-- CI fix: E2E tests now pass `--features local-transport` (SEC-014 integration test compatibility)
-
-### New in Sprint 20
-- CGGMP21 pre-signing: offline batchable phase producing `PreSignature` (k_i, chi_i, big_r)
-- CGGMP21 online signing: 1-round sigma_i aggregation from pre-signatures
-- `sign()` on MpcProtocol trait: keygen uses pre_sign + sign_with_presig internally
-- Identifiable abort: detects cheating party when final signature verification fails
-- Low-s normalization (SEC-012 pattern) and recovery_id computation
-- 7 new tests (pre-sign, full flow, direct sign, different messages, verify, abort, low-s)
-
-### New in Sprint 19
-- `CryptoScheme::Cggmp21Secp256k1` variant added to type system (R0)
-- `Cggmp21Protocol` implementing `MpcProtocol` trait with full keygen (R1)
-- CGGMP21 keygen: 3-round DKG with Feldman VSS, Schnorr proofs of knowledge, commitment scheme
-- Auxiliary info: simulated Paillier key pairs (N, p, q) + Pedersen parameters (s, t, N_hat)
-- `Cggmp21ShareData` with `Zeroizing` secret share, public shares, group pubkey, aux info
-- Wired into mpc-node, api-gateway, and CLI (all match arms updated)
-- 12 new tests (keygen 2-of-3, keygen 3-of-5, share format, aux info, scheme display/parse)
-
-### New in Sprint 18
-- SEC-026 FIX: All control plane messages (keygen/sign/freeze) Ed25519-signed by gateway, verified by MPC nodes before processing
-- `AuthorizationCache`: node-side dedup cache with TTL-based expiry, max_entries capacity limit, `verify_with_cache()` entry point
-- `SignedControlMessage` struct in `rpc/mod.rs` with `sign_control_message()` / `verify_control_message()` helpers
-- `unwrap_signed_message()` in mpc-node validates control plane messages before deserialization
-- 5 new hardening integration tests + 5 rpc unit tests + 3 cache unit tests = 13 new tests
-- R6 Sprint 17-18 audit: APPROVED — all Sprint 17 checklist verified, SEC-007 status corrected
-
-### New in Sprint 17
-- SEC-008 FIX: GG20 secret scalars explicitly zeroized in keygen, sign, refresh, reshare
-- SEC-013 FIX: FROST protocols validate `from` field against expected signer set
-- SEC-014 FIX: `LocalTransport` gated behind `#[cfg(any(test, feature = "demo"))]`
-- SEC-017 FIX: Solana tx builder validates `from` address matches signing pubkey
-- SEC-019: `quinn-proto` already at patched 0.11.14 (confirmed + cargo update)
-- SEC-023 FIX: Sui invalid hex validation tests added
-- SEC-025 FIX: `GATEWAY_PUBKEY` mandatory in mpc-node (nodes reject startup without it)
-- `authorization_id` field added to SignAuthorization for replay deduplication
-- 10 security regression tests (R5)
-
-### New in Sprint 16
-- FROST Ed25519 keygen over NATS with broadcast fix in `nats.rs` (R1)
-- NATS URL fix + Request-Reply control plane for orchestrator/mpc-node/rpc (R2)
-- 14 new chain simulation tests: Substrate, TON, TRON, Monero (R3)
-- Real `SignAuthorization` wired in gateway sign route (R4)
-- All E2E tests re-enabled in CI with request-reply (R5)
-- DEC-015 security audit by R6 — APPROVED (SEC-025 through SEC-031 filed)
-
-### New in Sprint 15
-- `services/mpc-node/` — Epic DEC-015: standalone MPC node binary (NATS + EncryptedFileStore + SignAuthorization)
-- `services/api-gateway/src/orchestrator.rs` — MpcOrchestrator replaces WalletStore (gateway holds 0 shares)
-- `services/api-gateway/src/errors.rs` — Standard ApiError + ErrorCode (structured JSON errors)
-- `services/api-gateway/src/vault.rs` — HashiCorp Vault integration (SECRETS_BACKEND=vault)
-- `crates/mpc-wallet-core/src/rpc/` — Shared NATS RPC protocol messages
-- NatsTransport: eager subscription + broadcast support (L-008 fix)
-- 14 signature verification tests covering all 50 chains
-- CI: 5 jobs (fmt, clippy, test, audit, E2E with Vault+Redis+NATS)
-
-### New in Sprint 12–14
-- `mpc_wallet_core::protocol` — Epic H2: GG20 key resharing (change threshold + add/remove parties)
-- `mpc_wallet_core::ops` — Epic I: multi-cloud node distribution constraints, quorum risk assessment, RPC failover pool, chaos test framework, disaster recovery plan
-- `mpc_wallet_core::transport::jetstream` — Epic E5: JetStream stream config + per-party ACL with subject isolation
-- `mpc_wallet_core::audit` — Epic F4: WORM storage config (S3 Object Lock + local append-only)
-- FROST Ed25519 + Secp256k1 reshare (DKG-based, new group key)
-- CI fully green: clippy -D warnings, cargo audit with .cargo/audit.toml
-
-### New in Sprint 11
-- `mpc_wallet_core::policy::templates` — Epic B4: policy templates (Exchange/Treasury/Custodian presets) with `PolicyTemplate::apply()` convenience
-- `mpc_wallet_chains::solana::simulate` — Epic G3: Solana transaction simulation (program allowlist + value checks)
-- `mpc_wallet_chains::sui::simulate` — Epic G4: Sui transaction simulation (value + gas budget checks)
-- `mpc-wallet-cli` — Epic G5: `simulate` command for pre-sign transaction risk assessment
-- `mpc_wallet_chains::registry` — `ChainRegistry` unified provider factory (DEC-007)
-
-### New in Sprint 10
-- `mpc_wallet_core::protocol::frost_refresh` — Epic H1: FROST Ed25519 key refresh (DKG-based re-sharing preserves group pubkey)
-- `mpc_wallet_core::protocol::frost_secp_refresh` — Epic H1: FROST Secp256k1 key refresh (additive re-sharing for Taproot)
-- `mpc_wallet_core::policy::signed_bundle` — Epic B3: policy signed bundles (Ed25519 sign+verify for policy integrity)
-- `mpc_wallet_chains::bitcoin::simulate` — Epic G2: Bitcoin transaction simulation (fee/dust/RBF checks)
-
-### New in Sprint 9
-- `mpc_wallet_core::identity::abac` — Epic A3: ABAC attribute extensions (dept/cost_center/risk_tier extracted from JWT claims)
-- `mpc_wallet_core::identity::mfa` — Epic A4: MFA step-up enforcement (require_mfa flag + admin-gated operations)
-- `mpc_wallet_chains::evm::simulate` — Epic G1: EVM transaction simulation (risk scoring + proxy detection)
-- `mpc_wallet_core::protocol::gg20_refresh` — Epic H1: GG20 key refresh (additive re-sharing preserves group pubkey)
-
-### New in Sprint 8
-- `mpc_wallet_core::transport::session_key` — Epic E3: per-session X25519 ECDH + ChaCha20-Poly1305 encryption, HKDF key derivation, nonce counter
-- `mpc_wallet_core::identity` — Epic A1 (FR-A.1): JWT token validation (RS256/ES256/HS256), claims extraction, `AuthContext` population from JWT
-- `mpc_wallet_core::policy` — Epic B3: daily velocity limit enforcement in `PolicyStore::check()`, rolling 24h window counter, `record_transaction()` + `prune_velocity()`
-- `mpc_wallet_core::protocol::MpcProtocol` — Epic H1 prep: `refresh()` default stub on trait (returns not-implemented)
-- `mpc_wallet_chains::provider::ChainProvider` — Epic G1 prep: `simulate_transaction()` default stub + `SimulationResult` type
-
-### New in Sprint 7
-- `mpc_wallet_core::transport::nats` — Epic E2: mTLS support via `NatsTlsConfig` + `connect_signed_tls()`, PEM cert loading, client key zeroization (SEC-004 pattern)
-- `mpc_wallet_core::rbac` — Epic A2 (FR-A.2): RBAC permission model with `ApiRole` (initiator/approver/admin), `AuthContext`, `Permissions` guards, `CoreError::Unauthorized`
-- `mpc_wallet_chains::solana::tx` — Solana v0 versioned transactions with `0x80` version prefix, `AddressLookupTable` support, legacy backward-compatible
-- `mpc-wallet-cli` — Epic F3: `audit-verify --pack-file <path>` command using `AuditLedger::verify_pack()`
-- `mpc_wallet_core::session::state` — `Session.initiator_id` field for RBAC audit trail + SoD enforcement
-
-### New in Sprint 6
-- `NatsTransport` — SEC-007 WIRED: SignedEnvelope on every send/recv, peer key registry, monotonic seq_no
-- `mpc_wallet_core::session` — FR-D3: `save_to_dir` / `load_from_dir` persistence across restarts
-- `mpc_wallet_core::audit` — FR-F.2: `export_evidence_pack` JSON bundle + `verify_pack` tamper-check
-- EVM `tx.rs` — SEC-012 FIX: auto-normalise high-S ECDSA signatures (EIP-2 low-S enforcement)
-
-### New in Sprint 5
-- `mpc_wallet_core::approvals` — Approval workflow: Ed25519 quorum enforcement, maker/checker/approver SoD (FR-C)
-- `mpc_wallet_core::audit` — Append-only hash-chained audit ledger with Ed25519 service signatures + `verify()` tamper detection (FR-F)
-- `mpc_wallet_core::transport::signed_envelope` — SEC-007 FIX: Ed25519 signed envelope + seq_no replay protection + TTL
-- Bitcoin `tx.rs` — SEC-009 FIX: require `prev_script_pubkey` for Taproot sighash (invalid tx prevention)
-- Bitcoin `tx.rs` — SEC-016 FIX: `SerializableTx::to_tx()` unwrap → proper error propagation
-
-### New in Sprint 4
-- `mpc_wallet_core::policy` — Policy Engine with "no policy → no sign" gate (FR-B5)
-- `mpc_wallet_core::session` — Session Manager with tx_fingerprint idempotency lock (FR-D1/D2)
-- Real freeze/unfreeze persistence in `EncryptedFileStore` (FR-H3)
-- SEC-004 ROOT FIX: `KeyShare.share_data` is now `Zeroizing<Vec<u8>>`
-- SEC-015 FIX: `KeyShare::Debug` redacts `share_data` → `"[REDACTED]"`
-
-### Open CRITICAL Security Findings (block production)
-| ID | Summary | Owner | Sprint |
-|----|---------|-------|--------|
-| (none) | All CRITICAL findings resolved | — | — |
-
-### Resolved CRITICAL Findings
-| ID | Summary | Resolved |
-|----|---------|---------|
-| SEC-001 | GG20 reconstructed full private key | Sprint 2 T-S2-01 — distributed additive-share signing |
-| SEC-002 | Hardcoded "demo-password" in CLI | Sprint 2 T-S2-03 — rpassword interactive prompt |
-| SEC-003 | NatsTransport = all `todo!()` stubs | Sprint 3 T-S3-01 — real async-nats implementation |
-| SEC-011 | Sui tx was JSON stub | Sprint 2 T-S2-04 — real BCS encoding |
-
-### Open HIGH Findings (block merge)
-| ID | Summary | Owner |
-|----|---------|-------|
-| (none) | All HIGH findings resolved | — |
-
-### Resolved HIGH Findings
-| ID | Summary | Resolved |
-|----|---------|---------|
-| SEC-004 | `KeyShare.share_data` Vec<u8> not zeroized | Sprint 4 T-S4-00/T-S4-01 — `Zeroizing<Vec<u8>>` root fix |
-| SEC-005 | EncryptedFileStore password not zeroized | Sprint 3 T-S3-02 — Zeroizing<String> |
-| SEC-006 | Argon2 default params too weak | Sprint 3 T-S3-02 — 64MiB/3t/4p |
-| SEC-007 | ProtocolMessage.from unauthenticated | Sprint 6 T-S6-01 — NatsTransport wired with SignedEnvelope Ed25519 + seq_no |
-| SEC-009 | Bitcoin Taproot sighash uses empty script_pubkey | Sprint 5 T-S5-03 — require prev_script_pubkey |
-| SEC-012 | EVM high-S ECDSA signatures not normalised | Sprint 6 T-S6-03 — auto-normalise via n-s + flip recovery_id |
-| SEC-015 | KeyShare derives Debug — share bytes in logs | Sprint 4 T-S4-00 — manual Debug impl redacts share_data |
-| SEC-016 | Bitcoin SerializableTx::to_tx() uses unwrap | Sprint 5 T-S5-03 — proper error propagation |
-
-### Resolved MEDIUM/LOW Findings (Sprint 17–30)
-| ID | Severity | Summary | Resolved |
-|----|----------|---------|---------|
-| SEC-008 | MEDIUM | GG20 secret scalar not zeroized | Sprint 17 — explicit zeroize in keygen/sign/refresh/reshare |
-| SEC-013 | MEDIUM | FROST `from` field not validated | Sprint 17 — validate against expected signer set |
-| SEC-014 | LOW | LocalTransport no feature gate | Sprint 17 — `#[cfg(any(test, feature = "demo"))]` |
-| SEC-017 | LOW | Solana from-address not validated | Sprint 17 — validate matches signing pubkey |
-| SEC-018 | LOW | rustls-pemfile unmaintained | Sprint 17 — mitigated (async-nats audit documented) |
-| SEC-019 | LOW | quinn-proto DoS vulnerability | Sprint 17 — already patched at 0.11.14 |
-| SEC-023 | LOW | Sui missing hex validation test | Sprint 17 — invalid hex test added |
-| SEC-024 | MEDIUM | Dead distributed_sign() coordinator nonce vulnerability | Sprint 30 — deleted dead code |
-| SEC-025 | MEDIUM | GATEWAY_PUBKEY optional in mpc-node | Sprint 17 — made mandatory, startup rejects without it |
-| SEC-026 | MEDIUM | Unsigned control plane messages | Sprint 30 — removed unsigned connect(), only signed connect_with_key() |
-| SEC-027 | MEDIUM | MpcOrchestrator unsigned connect | Sprint 30 — removed unsigned connect() path |
-| SEC-028 | MEDIUM | key_store_password not zeroized in mpc-node | Sprint 30 — wrapped in Zeroizing |
-| SEC-029 | MEDIUM | Signing key intermediates not zeroized | Sprint 30 — wrapped in Zeroizing in mpc-node |
-| SEC-030 | LOW | No rate limit on mpc-node keygen handler | Sprint 30 — per-group-id rate limiter |
-| SEC-031 | LOW | No rate limit on mpc-node sign handler | Sprint 30 — per-group-id rate limiter |
-| SEC-035 | MEDIUM | K_i points missing from PreSignature (abort unsound) | Sprint 30 — K_i stored for identifiable abort |
-| SEC-037 | MEDIUM | PreSignature nonce reuse on crash | Sprint 30 — FilePreSignatureStore with fsync |
-| SEC-054 | MEDIUM | Paillier keygen no minimum bit-length guard | Sprint 30 — runtime assert >= 2048 bits |
-| SEC-060 | LOW | Vestigial Pifac commitment in Fiat-Shamir | Sprint 30 — removed, deterministic pifac-challenge-v3 |
-
-Full findings log → `docs/SECURITY_FINDINGS.md`
-
----
-
-## Key Decisions Already Made
-
-| DEC | Decision |
-|-----|----------|
-| DEC-001 | Sprint 2 delivered distributed ECDSA (additive-share signing, no key reconstruction) |
-| DEC-002 | Solana: manual binary serialization + round-trip tests validate structure |
-| DEC-003 | Sui: `bcs` crate for BCS encoding — DONE Sprint 2 |
-| DEC-004 | Sprint 2 GG20 hard commitment — DELIVERED |
-| DEC-005 | Sprint 7 RBAC: Epic A2 only (roles + guards); OIDC/ABAC/MFA deferred to Sprint 8 |
-| DEC-006 | Solana v0: manual serialization continues (DEC-002 extended); no solana-sdk dependency |
-| DEC-007 | ChainRegistry: unified provider factory pattern — single entry point for all chain providers |
-| DEC-008 | FROST reshare = fresh DKG (new group key); GG20 reshare preserves group key via additive re-sharing |
-| DEC-009 | Work on `dev` branch; PR to `main` only after CI green |
-| DEC-010 | Split api-gateway into lib.rs + main.rs for integration test access |
-| DEC-011 | Session keys use `Zeroize + ZeroizeOnDrop`; revoked_keys behind `RwLock` for dynamic revocation |
-| DEC-012 | Sign Authorization: MPC nodes independently verify gateway proof before signing |
-| DEC-013 | Remove API keys — simplify to 3 auth methods (mTLS, Session JWT, Bearer JWT) |
-| DEC-014 | Redis + KMS/HSM migration: trait-based backends, encrypted session storage |
-| DEC-015 | Split MPC nodes from gateway — each node holds exactly 1 share, gateway holds 0 |
-
-Full decision log → `docs/DECISIONS.md` and `retro/decisions/`
-
----
-
-## What NOT to do
-
-- **Never** merge a branch without R6 `APPROVED` verdict
-- **Never** modify files outside your owned list (check `docs/AGENTS.md`)
-- **Never** commit without `cargo test` passing first
-- **Never** spawn agents — propose plan, wait for human approval
-- **Never** add a new crate dependency without R0 approval + `cargo audit` check
-- **Never** put secret material in logs, error messages, or debug output
-
----
-
-## Quick Start for Any Agent
-
-```
-1. Read this file (CLAUDE.md) ✓ — you're doing it now
-2. Read LESSONS.md            → know what bugs/mistakes have already happened
-3. Read docs/AGENTS.md        → find your role, owned files, instruction template
-4. Read docs/SPRINT.md        → find your assigned task + Security Checklist
-5. Read docs/SECURITY_FINDINGS.md → know what's open and what to avoid
-6. Do your task in YOUR worktree (see table above)
-7. Checkpoint commit after every cargo test pass
-8. Report complete → R6 will audit before merge
-```
+- CPU budget on the owner's laptop: prefix every cargo command with `CARGO_BUILD_JOBS=4 taskpolicy -b`; run at most one cargo build or test at a time across all agents; research and review agents never compile. Keep the flags above so the build cache is reused (switching to `-p` rebuilds about 160 crates). Never delete a shared build target directory.
+- Test-only code reached from library code is gated with `#[cfg(any(test, feature = "local-transport"))]`, not bare `#[cfg(test)]`: integration tests compile the library without `cfg(test)`.
+- Distributed E2E tests (`--ignored`) need the running infrastructure that the CI E2E job starts (NATS, Redis, Vault) and run with `--test-threads=1`.
+
+## Commits
+
+- Checkpoint commit after every passing test run: `[R<n>][T<id>] <what> — tests pass` (`— docs/ci only` when no Rust changed), ending with the `Co-Authored-By:` trailer.
+- When Rust changed, commit only after fmt, clippy and tests pass; docs- or CI-only changes are validated with their own checks (links, YAML parse, `claims/claims.py check`). Commit only your own paths and fragments.
+
+## Never
+
+- Never merge into `dev` or `main`. Never push, tag, publish a release, open issues or PRs, or change repository settings unless the owner asks for it in the session. Agent pushes and PRs go through the dedicated machine account (write access, no merge or admin rights; ROADMAP §9.2).
+- Never read, print, copy or store secrets, keystore passwords or `.env` values, including in agent memory. Never put secret material in logs, errors or debug output. Never delete keystores.
+- Never touch production or mainnet credentials, move funds, or broadcast a mainnet transaction. Testnet broadcasts happen only in tasks marked for them, after the owner has funded the account.
+- Never contact third parties. Research uses WebSearch/WebFetch only: no browser or desktop automation, and nothing fetched from sec.or.th.
+- Never add a crate that is not already in `Cargo.lock` on your own; request it through R0 and the owner.
+- Never edit outside your workstream's paths. Never hand-edit `CLAIMS.md`, `CHANGELOG.md` or `docs/status/**`.
+- Public safety: tracked files carry no exploit mechanics, no file:line pointers to unfixed defects, no secret names or locations, no absolute home paths or private-archive paths, and no internal business details. Weaknesses appear by category and fix only.
+
+## Failure classes to avoid (digest of `LESSONS.md` and `retro/`)
+
+1. **Self-referential tests.** The chain lessons of May–June 2026 (double hashing, network selection, hex parsing, Taproot tweak, BCS shape, signing-message layout, TRON body, gas limit, address forms) all passed the full test suite; none was caught by a test. Live testnet broadcasts, or the check run just before one, caught them. Pin byte-equal vectors from canonical SDKs.
+2. **Broadcast without the ladder.** Before any testnet broadcast: balance → presign summary → decoded fields → recover/verify against the sender. Real networks add rules of their own (TRON rejects self-transfers).
+3. **Skipping instead of fixing.** Flaky distributed tests were skipped or given longer timeouts although the root cause was protocol message ordering. Fix ordering bugs at the root instead of skipping the test or extending its timeout.
+4. **Test count as the KPI.** It rewarded volume over adversarial and external validation. Measure oracle-backed evidence instead.
+5. **Crypto changed before the math was checked**, for example the inverse of a sum computed as a sum of inverses, or a modular exponent reduced mod n instead of φ(n).
+6. **Security paths bypassed in test mode** (dummy keys that skipped proofs) gave passing tests and false confidence.
+7. **Knowledge-base drift.** Colliding IDs, lost updates, documents stating checks the code does not perform, and status declared by commit message. Hence generated status, issue-number IDs and no status in this file.
+8. **Gates on paper only.** Reviews stopped, PRs merged with zero reviews, pushes to `main` with failing CI. Gates belong in CI and branch protection, not in prose.
+9. **Parallel agents defining the same types** caused merge conflicts. Contracts go first, through R0.
+
+Older lessons are in [LESSONS.md](LESSONS.md) and [retro/](retro/) (history, not status); new lessons get a GitHub issue number.

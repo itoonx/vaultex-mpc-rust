@@ -4,7 +4,7 @@
 
 # Archive
 
-Planning, design and review documents that no longer describe the project live here, so that nobody mistakes them for current status (ROADMAP M5 #10). Each moved file keeps its original path under this folder, and git history keeps its full past.
+Planning, design and review documents that no longer describe the project live here, so that nobody mistakes them for current status (ROADMAP M5 #10). Each moved file keeps its original path under this folder, and git history keeps its full past. The one exception is the old `CLAUDE.md`, frozen as `CLAUDE-history-2026-06-01.md` so that agent tools do not load it as live instructions.
 
 Every archived file opens with one of two banners:
 
@@ -13,6 +13,7 @@ Every archived file opens with one of two banners:
 
 | Archived document | Banner | Replaced by |
 |---|---|---|
+| [CLAUDE-history-2026-06-01.md](CLAUDE-history-2026-06-01.md) | Superseded | [CLAUDE.md](../../CLAUDE.md) (stable agent rules only); status in [CLAIMS.md](../../CLAIMS.md) and [SECURITY_STATUS.md](../../SECURITY_STATUS.md) |
 | [MILESTONES_M1-M4_REBASELINE.md](MILESTONES_M1-M4_REBASELINE.md) | Superseded | The record itself: what milestones M1–M4 (March 2026) delivered |
 | [docs/API_REGRESSION_TEST_GUIDE.md](docs/API_REGRESSION_TEST_GUIDE.md) | Superseded | Nothing yet (legacy gateway) |
 | [docs/AUDIT_SCOPE.md](docs/AUDIT_SCOPE.md) | Conclusions withdrawn | Audit-scope manifest v0 (not yet written) |
