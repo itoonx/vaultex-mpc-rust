@@ -220,8 +220,26 @@ impl NodeConfig {
     }
 }
 
+/// Shipped-build guard (ROADMAP M5 #8): a release build that links the test-parameter swap
+/// (`mpc-wallet-core/local-transport`) refuses to start. That build is the only one in which an
+/// undersized Paillier modulus validates, so the probe needs no new API in the core crate.
+/// CI also checks the feature set of the shipped build (`scripts/ci/shipped_build.py`).
+// ponytail: same guard as the gateway's main.rs; one copy once WS-03 lands a shared home.
+fn refuse_test_parameters_in_release() {
+    let test_parameters = mpc_wallet_core::paillier::keygen::validate_paillier_bits(512).is_ok();
+    if test_parameters && !cfg!(debug_assertions) {
+        eprintln!(
+            "shipped-build guard: refusing to start: this release build links test parameters \
+             (mpc-wallet-core/local-transport). Build as shipped: \
+             cargo build --release -p mpc-wallet-api -p mpc-wallet-node"
+        );
+        std::process::exit(1);
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    refuse_test_parameters_in_release();
     init_tracing();
 
     let config = NodeConfig::from_env();
