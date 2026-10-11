@@ -7,12 +7,9 @@
           ╚██╗ ██╔╝██╔══██║██║   ██║██║     ██║   ██╔══╝   ██╔██╗
            ╚████╔╝ ██║  ██║╚██████╔╝███████╗██║   ███████╗██╔╝ ██╗
             ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚══════╝╚═╝  ╚═╝
-                   你的密钥。分布式。不可阻挡。
 ```
 
-**门限 MPC 钱包 SDK** — 没有任何一方持有完整的私钥。
-
-EVM（26）| Bitcoin | Polkadot | Solana | Sui | Aptos | TON | TRON | Cosmos | Starknet | 共 50 条链
+**用 Rust 编写的门限 MPC 钱包研究原型**
 
 [![CI](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml)
 
@@ -20,576 +17,126 @@ EVM（26）| Bitcoin | Polkadot | Solana | Sui | Aptos | TON | TRON | Cosmos | S
 
 </div>
 
+> [!CAUTION]
+> 未经审计的 Pre-Alpha 研究软件 · 仅限测试网 · 请勿用于真实资金。已知的严重限制（按类别）：(1) 受影响的签名方案类别 — 自行实现的门限 ECDSA 引擎不安全（unsound），且 Sr25519/BLS 签名并非门限签名；(2) 密钥生成期间的传输机密性；(3) 控制平面消息的新鲜性；(4) 签名策略未被强制执行 — 签名节点不会独立验证其所签署的内容；(5) 不安全的充值地址：代码裁剪（pre-cut）之前的版本为尚未实现的链导出的地址，以及为 FROST-TR 钱包显示的 P2WPKH 地址，可能无法花费；请勿向这些地址转入资金。
+>
+> 本警示以 [README.md](README.md) 中的英文原文为准。
+
 ---
 
 ## Vaultex 是什么？
 
-Vaultex 是一个用 **Rust** 构建的企业级**门限多方计算 (MPC) 钱包 SDK**。完整的私钥**永远不会**在内存中被还原 — 无论是密钥生成、签名还是任何时候。
+Vaultex 是一个 Rust 工作区，用于探索可自托管的门限多方计算（MPC）钱包。每个签名节点持有一个密钥份额，网关通过 NATS 协调各节点，链相关的 crate 负责构建和编码交易。
 
-```
-                    ┌─────────┐
-                    │  参与方 1 │ ← 持有份额 s₁
-                    └────┬────┘
-                         │
-   ┌─────────┐      ┌───┴───┐      ┌─────────┐
-   │  参与方 2 │──────│  NATS  │──────│  参与方 3 │
-   │  份额 s₂  │      │  mTLS  │      │  份额 s₃  │
-   └─────────┘      └───┬───┘      └─────────┘
-                         │
-                    ┌────┴────┐
-                    │  签名    │ ← 有效的 ECDSA/Schnorr/EdDSA
-                    │  (r, s)  │   完整密钥 x 从未被计算
-                    └─────────┘
-```
+设计目标是任何一方都不持有完整私钥。**当前 HEAD 的代码并非对所有签名方案都达到这一目标，也无法安全地托管资产。** 使用本仓库中的任何内容之前，请先阅读上方警示和下方的支持矩阵。
 
-**为什么选择 Vaultex？**
-
-- **零单点故障** — 网关持有 0 个份额，每个节点仅持有 1 个。攻破任何单台服务器 = 攻击者得不到可用信息
-- **多链支持** — 50 条区块链，涵盖 8 大生态：EVM、Bitcoin、Substrate、Move、Cosmos、UTXO、TON/TRON、Starknet
-- **企业级管控** — RBAC、ABAC、MFA、策略引擎、审批流程、审计追踪
-- **主动安全** — 密钥刷新可在不更改链上地址的情况下轮换份额
-- **生产就绪基础设施** — HashiCorp Vault 密钥管理、Redis 会话、NATS 传输、Docker + K8s 部署
+- **可用的部分：** 链交易编码器。对于六条链，编码结果在有官方参考实现的情况下与官方 SDK 输出逐字节一致，并已在公共测试网上产生经确认的交易。
+- **不可用的部分：** 整体托管系统。其已知限制已在上方警示中按类别列出。本项目尚未经过任何独立安全审计或外部评审。
+- **后续方向：** 参见 [docs/ROADMAP.md](docs/ROADMAP.md)（提议稿，等待所有者决策）和 [docs/TASKS.md](docs/TASKS.md)。提议中的首个支持范围是：基于一个经采用并锁定版本的门限 ECDSA 库的 TRON（TRX + TRC-20）签名器，其中每个节点都会验证自己所签署的内容。只有当路线图中的某个里程碑凭公开证据完成时，上方警示才会更改。
 
 ---
 
-## 文档
+## 支持矩阵
 
-| 文档 | 说明 |
-|------|------|
-| **[CLI 指南](docs/CLI_GUIDE.md)** | 完整命令参考，含示例和输出样例 |
-| **[架构](specs/ARCHITECTURE.md)** | 系统设计、Trait 边界、模块导图 |
-| **[安全](specs/SECURITY.md)** | 威胁模型、已修复漏洞、漏洞披露政策 |
-| **[贡献指南](docs/CONTRIBUTING.md)** | 面向开发者和 LLM/AI Agent 的贡献指南 |
-| **[更新日志](CHANGELOG.md)** | 版本历史和发布说明 |
-| **[链支持路线图](specs/CHAIN_ROADMAP.md)** | 54 条链扩展计划：EVM L2、Move、Substrate、TON、Cosmos |
-| **[标准与参考](specs/STANDARDS.md)** | 所有密码学标准、RFC、EIP、BIP 参考文献 |
-| **[API 参考](docs/API_REFERENCE.md)** | REST API 端点、认证方式 |
-| **[认证规范](specs/AUTH_SPEC.md)** | 密钥交换握手协议（28 个章节） |
-| **[安全审计报告](docs/SECURITY_AUDIT_AUTH.md)** | 认证安全审计（57 项测试，所有问题已修复） |
-| **[安全审计](docs/SECURITY_FINDINGS.md)** | 完整审计追踪（0 个 CRITICAL/HIGH 未解决） |
+本矩阵描述的是 HEAD 中的代码。
+
+| 状态 | 含义 |
+|---|---|
+| **已支持（Supported）** | 在已发布的支持政策下可用于真实资金。**目前没有任何内容处于已支持状态。** |
+| **预备（Staged）** | 已实现，并已在公共测试网上端到端运行过。仅限测试网。待影响它的限制修复后，可作为支持候选。 |
+| **实验性（Experimental）** | 代码中存在，但未经验证、不安全或不完整。请勿依赖，也不要向它显示的任何地址转入资金。 |
+
+### 链
+
+任何链的主网均不受支持。
+
+| 链 | 测试网络 | 资产 | 编码器证据 | 该证据所用的签名方案 | 状态 |
+|---|---|---|---|---|---|
+| TRON | Shasta 测试网 | TRX、TRC-20 | tronweb 参考向量；已确认的测试网交易 | 自行实现的 ECDSA（实验性，限制 1） | 预备 |
+| Ethereum | Sepolia 测试网 | ETH、ERC-20 | viem 参考向量；已确认的测试网交易 | 自行实现的 ECDSA（实验性，限制 1） | 预备 |
+| Bitcoin | 测试网，P2WPKH | BTC | 已确认的测试网交易 | 自行实现的 ECDSA（实验性，限制 1） | 预备。⚠ 不安全的充值地址（5）：为 FROST-TR 钱包显示的 P2WPKH 地址可能无法花费；请勿向这些地址转入资金 |
+| Solana | Devnet | SOL、SPL 代币 | `@solana/spl-token` 参考向量；已确认的 devnet 交易 | FROST Ed25519 | 预备 |
+| Sui | 测试网 | SUI、`Coin<T>` | `@mysten/sui` 参考向量；已确认的测试网交易 | FROST Ed25519 | 预备 |
+| Aptos | 测试网 | APT、Coin、Fungible Asset | `@aptos-labs/ts-sdk` 参考向量；已确认的测试网交易 | FROST Ed25519 | 预备 |
+
+代码中还列出了另外 44 条链，它们都没有端到端证据。
+
+| 链 | 状态 |
+|---|---|
+| Ethereum 以外的 EVM 网络（25 条）：Polygon、BSC、Arbitrum、Optimism、Base、Avalanche、Linea、zkSync Era、Scroll、Mantle、Blast、Zora、Fantom、Gnosis、Cronos、Celo、Moonbeam、Ronin、opBNB、Immutable、Manta Pacific、Hyperliquid、Berachain、MegaETH、Monad | 实验性。⚠ 不安全的充值地址（5）：为这些链导出的地址可能无法花费；请勿向这些地址转入资金 |
+| Bitcoin 主网、Litecoin、Dogecoin、Zcash | 实验性。⚠ 不安全的充值地址（5）：为这些链导出的地址可能无法花费；请勿向这些地址转入资金 |
+| Polkadot、Kusama、Astar、Acala、Phala、Interlay | 实验性。⚠ 不安全的充值地址（5）：为这些链导出的地址可能无法花费；请勿向这些地址转入资金 |
+| Cosmos Hub、Osmosis、Celestia、Injective、Sei | 实验性。⚠ 不安全的充值地址（5）：为这些链导出的地址可能无法花费；请勿向这些地址转入资金 |
+| Movement、TON、Monero、Starknet | 实验性。⚠ 不安全的充值地址（5）：为这些链导出的地址可能无法花费；请勿向这些地址转入资金 |
+
+### 签名方案
+
+| 方案 | 来源 | 状态 | 说明 |
+|---|---|---|---|
+| GG20 门限 ECDSA（secp256k1） | 本仓库自行实现 | 实验性 | 不安全（限制 1）。将被删除或隔离（[ROADMAP §3.5](docs/ROADMAP.md#35-scope-cuts)） |
+| CGGMP21 门限 ECDSA（secp256k1） | 本仓库自行实现 | 实验性 | 不安全（限制 1）。将被删除或隔离 |
+| Stark 曲线门限 ECDSA | 本仓库自行实现 | 实验性 | 不安全（限制 1）。将被删除或隔离 |
+| Sr25519 | 使用 `schnorrkel` | 实验性 | **并非门限签名**（限制 1）。将被删除或隔离 |
+| BLS12-381 | 使用 `blst` | 实验性 | **并非门限签名**（限制 1）。将被删除或隔离 |
+| FROST Ed25519 | 封装 ZF 的 `frost-ed25519` crate | 预备 | 受限制 2–4 影响 |
+| FROST secp256k1 Taproot | 封装 ZF 的 `frost-secp256k1-tr` crate | 实验性 | ⚠ 不安全的充值地址（5）：为 FROST-TR 钱包显示的 P2WPKH 地址可能无法花费；请勿向这些地址转入资金 |
+| `cggmp24`（LFDT-Lockness，锁定版本） | 上游库 | 尚未集成 | 提议用于替换自行实现的 ECDSA 引擎；决策待定（ROADMAP ADR-07） |
+
+### 组件
+
+| 组件 | 状态 | 说明 |
+|---|---|---|
+| 链交易编码器（上述六条预备链） | 预备 | 证据见链表格 |
+| MPC 节点与网关（`services/`） | 实验性 | 受限制 2–4 影响。没有可用的多主机部署；网关的钱包注册表仅保存在内存中 |
+| 策略引擎、审批、限速、RBAC/ABAC/MFA、审计账本 | 实验性（仅库代码） | 签名节点并不执行这些检查（限制 4） |
+| 网关认证（密钥交换握手、会话 JWT、经 TLS 终止器的 mTLS、Bearer JWT） | 实验性 | 正在评估替换方案（ROADMAP ADR-09） |
+| 加密密钥存储（Argon2id + AES-256-GCM） | 实验性 | 尚无备份或恢复工具 |
+| 密钥刷新与重分享 | 实验性 | 基于自行实现的引擎（限制 1） |
+| KMS、HSM、SGX/TEE | 未实现 | 仅有接口、桩代码和一个模拟实现 |
+| 交易模拟与风险评分 | 实验性 | — |
+| CLI（`mpc-wallet-cli`） | 实验性 | 单进程演示，所有参与方都在同一进程中运行。切勿用于真实资金 |
+| 部署：Docker Compose、Kubernetes 清单、Helm、Terraform | 实验性 | 均无法启动可用的多主机集群 |
 
 ---
 
-## 快速开始
+## 快速开始（仅限开发与测试网）
 
 ```bash
 git clone https://github.com/itoonx/vaultex-mpc-rust.git
 cd vaultex-mpc-rust
 
-# 运行单元 + 集成测试（无需基础设施）
-cargo test --workspace              # 970 个测试
+# 单元测试与集成测试（单进程，无需基础设施）
+cargo test --workspace --features local-transport
 
-# 在本地启动完整生产栈（Vault + Redis + NATS + 3 个 MPC 节点 + 网关）
-./scripts/local-infra.sh up         # 一键：构建、配置、启动全部
+# 单主机开发环境：Vault、Redis、NATS、三个 MPC 节点和网关
+./scripts/local-infra.sh up
+./scripts/local-infra.sh test    # 通过 NATS 进行端到端密钥生成与签名
+./scripts/local-infra.sh down
 
-# 对实时基础设施运行 E2E 测试
-./scripts/local-infra.sh test       # 通过 NATS 进行分布式密钥生成 + 签名
-
-# 交互式 CLI 演示（单进程，无需基础设施）
+# 单进程 CLI 演示
 ./scripts/demo.sh
 ```
 
----
-
-## 功能特性
-
-| 类别 | 亮点 |
-|------|------|
-| **MPC 协议** | GG20 ECDSA、FROST Ed25519、FROST Schnorr、Sr25519、STARK、BLS12-381 |
-| **密钥生命周期** | 生成、刷新、重分享（修改阈值/增删参与方）、冻结 |
-| **50 条链** | EVM L1/L2、Bitcoin、Solana、Sui、Aptos、Movement、TON、TRON、LTC、DOGE、ZEC、XMR |
-| **RPC 注册表** | 多提供商（Dwellir、Alchemy、Infura、Blockstream、Mempool）、故障切换、健康追踪 |
-| **广播** | `eth_sendRawTransaction`、REST `/tx`、`sendTransaction`、`sui_executeTransactionBlock` |
-| **传输层** | NATS mTLS + 会话级 ECDH + SignedEnvelope 防重放 |
-| **企业功能** | RBAC、ABAC、MFA、策略引擎、审批流程、审计账本 |
-| **交易模拟** | 签名前风险评分，支持所有链 |
-| **运维** | 多云约束、RPC 故障切换、混沌测试框架、灾难恢复 |
-| **MPC 节点** | 分布式架构 — 每个节点持有 1 个份额，网关负责协调 |
+测试使用的是测试规模的密码学参数。测试通过并不表明任何功能能在生产参数下或跨主机正常工作。
 
 ---
 
-## 认证与 API 网关
-
-三种认证方式 — 各自服务于不同层级的不同目的：
-
-```
-mTLS          =  机器 → 机器    ("我是你信任的服务")
-Session JWT   =  应用 → 服务器  ("我已完成密钥交换握手")
-Bearer JWT    =  人 → 系统      ("我是经 IdP 验证的用户")
-```
-
-```
-服务（mTLS）               SDK 客户端（Session JWT）        用户（Bearer JWT）
-┌──────────┐               ┌──────────┐                    ┌──────────┐
-│ CA 签发  │               │ Ed25519 + │                    │ Auth0 /  │
-│ TLS 证书 │               │ X25519   │                    │ Okta     │
-│          │               │ 密钥交换  │                    │ 签发 JWT │
-└────┬─────┘               └────┬─────┘                    └────┬─────┘
-     │                          │                               │
-     │  X-Client-Cert-CN       │  X-Session-Token: <jwt>      │  Authorization: Bearer <jwt>
-     ▼                          ▼                               ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                           API 网关                                    │
-│  优先级：mTLS (0) → Session JWT (1) → Bearer JWT (2) → 401           │
-│                                                                       │
-│  请求头存在但无效 → 立即失败（不降级到下一种方式）                         │
-└──────────────────────────────────────┬───────────────────────────────┘
-                                       │
-                                       ▼
-                              ┌─────────────────┐
-                              │    MPC 节点       │
-                              │   （签名前独立     │
-                              │   验证 SignAuth） │
-                              └─────────────────┘
-```
-
-三种方式可以在同一部署中同时使用 — 例如，mTLS 用于内部服务间通信，Session JWT 用于 SDK 客户端，Bearer JWT 用于管理后台 Web UI。
-
-### 三种认证方式（按优先级排列）
-
-#### 1. 会话 JWT (`X-Session-Token`) — 应用与服务器通信
-
-**使用者：** SDK 客户端、原生应用、移动应用、桌面钱包。
-**目的：** 应用层身份验证 — "这个客户端已完成密钥交换握手，这个请求确实来自它。"
-
-**工作原理：**
-
-```
-步骤 1：密钥交换（每个会话仅一次）
-  客户端                                服务端
-  ──────                                ──────
-  生成临时 X25519 密钥对          ───►   验证，生成服务端临时密钥
-  Ed25519 密钥 ID                       使用 Ed25519 签名会话摘要
-                                 ◄───   ServerHello（挑战 + 签名）
-  使用 Ed25519 签名会话摘要       ───►   验证客户端签名
-  ClientAuth                            通过 ECDH + HKDF 派生共享密钥
-                                 ◄───   SessionEstablished（session_id）
-  双方现在拥有：
-    client_write_key（32字节）← 用于签名 JWT
-    server_write_key（32字节）← 用于未来的加密响应
-
-步骤 2：每请求 JWT（每次 API 调用）
-  客户端构建 JWT：
-    { "sid": "session_id",
-      "ip": "203.0.113.42",       ← 请求上下文（用于审计）
-      "fp": "设备指纹",
-      "ua": "SDK/1.0",
-      "rid": "唯一请求ID",
-      "iat": 1710768000,
-      "exp": 1710768120 }         ← 短期有效（2分钟）
-  使用 HS256(client_write_key) 签名
-  发送：X-Session-Token: eyJhbG...
-
-  服务端：
-    1. 解码 JWT → 提取 session_id（此时不验证签名）
-    2. 查找会话 → 获取存储的 client_write_key
-    3. 使用该密钥验证 HS256 签名
-       → 密钥不匹配？401。载荷被篡改？401。已过期？401。
-    4. 提取请求上下文用于审计追踪
-```
-
-```bash
-# 握手
-POST /v1/auth/hello   # → ServerHello
-POST /v1/auth/verify  # → { session_id, session_token }
-
-# 认证请求
-curl -H "X-Session-Token: eyJhbGciOiJIUzI1NiJ9.eyJzaWQiOi..." \
-     https://api.example.com/v1/wallets
-```
-
-**安全性：** 前向保密（临时密钥）、双向认证（双方签名）、防重放（短期JWT + 随机数）、请求上下文绑定（IP/设备信息在签名声明中）。
-
----
-
-#### 2. mTLS (双向 TLS) — 机器与机器通信
-
-**使用者：** 后端服务、微服务、MPC 节点。
-**目的：** 基础设施层身份验证 — "这台机器是我们信任的服务。" 代码和请求头中没有任何密钥 — 身份来自组织 CA 签发的 TLS 证书。Kubernetes/Istio 自动管理证书。
-
-**工作原理：**
-
-```
-服务 A                    TLS 终端（nginx/envoy）           网关
-┌──────────┐  提交证书   ┌──────────────────────────┐     ┌─────────┐
-│ 客户端   │────────────│ 1. 验证证书（对比 CA）     │────│ 提取    │
-│ 证书 +   │  TLS 握手  │ 2. 提取 CN + 指纹         │    │ 身份    │
-│ 密钥     │           │ 3. 设置 X-Client-Cert-* 头 │    │ 映射角色│
-└──────────┘           └──────────────────────────┘     └─────────┘
-```
-
-**无共享密钥，请求头中无令牌。** TLS 终端处理证书验证并通过请求头传递身份：
-
-- `X-Client-Cert-Verified: SUCCESS` — 证书已通过 CA 验证
-- `X-Client-Cert-CN: trading-service.internal` — 通用名称
-- `X-Client-Cert-Fingerprint: sha256:abcdef...` — 证书指纹
-
-网关通过 `MTLS_SERVICES_FILE` 将 CN 映射到服务身份 + RBAC 角色：
-
-```json
-[
-  {
-    "cn": "trading-service.internal",
-    "fingerprint": "sha256:abcdef1234567890",
-    "role": "initiator",
-    "label": "交易服务"
-  }
-]
-```
-
-**安全性：** 无需轮换密钥（只需更新证书）。传输层身份验证。支持证书指纹绑定。Kubernetes、Istio、Consul 原生支持。
-
----
-
-#### 3. Bearer JWT (`Authorization: Bearer`) — 人与系统通信
-
-**使用者：** 终端用户通过 Web 应用、管理后台。
-**目的：** 用户层身份验证 — "这个人是谁，拥有什么权限。" JWT 由身份提供商（Auth0、Okta、Firebase）签发 — 网关不管理密码。
-
-**工作原理：**
-
-```
-身份提供商（Auth0、Okta 等）
-  ↓ 颁发包含声明的 JWT：
-  { "sub": "user_123", "roles": ["initiator"], "iss": "mpc-wallet",
-    "aud": "mpc-wallet-api", "exp": 1710771600,
-    "dept": "交易部", "risk_tier": "standard", "mfa_verified": true }
-  ↓
-客户端发送：Authorization: Bearer eyJhbGciOiJSUzI1NiJ9...
-  ↓
-服务端验证：
-  1. 签名（RS256/ES256/HS256）是否与配置的密钥匹配
-  2. 签发者（iss）是否与 JWT_ISSUER 配置匹配
-  3. 受众（aud）是否与 JWT_AUDIENCE 配置匹配
-  4. 是否未过期（exp > 当前时间）
-  5. 提取角色 → 映射到 RBAC 权限
-  6. 提取 ABAC 属性（部门、风险等级、MFA 状态）
-```
-
-```bash
-curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOi..." \
-     https://api.example.com/v1/wallets
-```
-
-**无需 HMAC 签名** — JWT 本身通过其签名提供完整性保证。
-
----
-
-#### 实际部署示例
-
-典型的企业部署同时使用三种认证方式：
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        生产环境                                   │
-│                                                                  │
-│  ┌──────────────┐  mTLS    ┌──────────┐  mTLS   ┌────────────┐ │
-│  │ 交易服务      │─────────│          │────────│ MPC 节点 1  │ │
-│  │ (内部微服务)  │  证书    │   API    │  证书   │ (参与方 1)  │ │
-│  └──────────────┘         │   网关   │        ├────────────┤ │
-│                            │          │        │ MPC 节点 2  │ │
-│  ┌──────────────┐ Session │          │        │ (参与方 2)  │ │
-│  │ 移动端 App   │──JWT───│          │        ├────────────┤ │
-│  │ (Vaultex SDK)│ (HS256) │          │        │ MPC 节点 3  │ │
-│  └──────────────┘         │          │        │ (参与方 3)  │ │
-│                            │          │        └────────────┘ │
-│  ┌──────────────┐ Bearer  │          │                        │
-│  │ 管理后台     │──JWT───│          │                        │
-│  │ (Auth0 SSO)  │ (RS256) │          │                        │
-│  └──────────────┘         └──────────┘                        │
-│                                                                  │
-│  每层各有不同目的：                                                │
-│  • mTLS：  "这是受信任的服务吗？"                                  │
-│  • Session JWT："这个客户端通过握手了吗？"                          │
-│  • Bearer JWT："这是哪个用户，有什么权限？"                         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-#### 如何选择认证方式？
-
-| 场景 | 推荐方式 | 原因 |
-|------|---------|------|
-| 后端微服务 | **mTLS** | 最佳实践：无共享密钥，传输层身份验证，证书轮换 |
-| Kubernetes / 服务网格 | **mTLS** | Istio、Linkerd、Consul Connect 原生支持 |
-| SDK / 原生应用 | **会话 JWT** | 前向保密、双向认证、每请求上下文绑定 |
-| 移动应用 | **会话 JWT** | JWT 声明中包含设备指纹用于审计 |
-| 使用 IdP 的 Web 应用 | **Bearer JWT** | 用户通过 Auth0/Okta 认证，无需密钥管理 |
-| 管理后台 | **Bearer JWT + MFA** | 用户身份 + 敏感操作需 MFA 二次验证 |
-
-### 安全特性
-
-| 特性 | 实现方式 |
-|------|---------|
-| **前向保密** | 每会话临时 X25519 密钥 |
-| **双向认证** | Ed25519 会话摘要签名（双方） |
-| **速率限制** | 握手端点每 client_key_id 10 次/秒 |
-| **会话存储** | 10万上限 + 后台清理（60秒间隔） |
-| **密钥清零** | 所有会话密钥 `Zeroize + ZeroizeOnDrop` |
-| **动态吊销** | `POST /v1/auth/revoke-key`（管理员，无需重启） |
-| **签名授权** | MPC 节点在签名前独立验证网关证明 |
-| **审计追踪** | 加密请求上下文 (ChaCha20-Poly1305) + 毫秒级时间线 |
-| **主网安全** | 主网强制要求 `SERVER_SIGNING_KEY` + `CLIENT_KEYS_FILE` |
-| **密钥管理** | 推荐 KMS/HSM — `KmsSigner` + `KeyEncryptionProvider` trait 已就绪 |
-
-> **生产环境：** 切勿将密钥（`JWT_SECRET`、`SERVER_SIGNING_KEY`、`SESSION_ENCRYPTION_KEY`）以明文环境变量或配置文件存储。请使用 AWS Secrets Manager、GCP Secret Manager、HashiCorp Vault 或 Kubernetes External Secrets。最高安全级别请使用 KMS/HSM，确保签名密钥永不离开硬件边界 — 详见 [`docs/API_REFERENCE.md#secrets-management`](docs/API_REFERENCE.md#secrets-management)。
-
-> 完整 API 参考：[`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | 协议规范：[`specs/AUTH_SPEC.md`](specs/AUTH_SPEC.md)
-
-### 错误响应
-
-所有 API 错误返回结构化 JSON，包含机器可读的 `code` 用于程序化处理：
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "wallet 550e8400 not found"
-  }
-}
-```
-
-| 错误码 | HTTP | 触发条件 |
-|--------|------|---------|
-| `AUTH_FAILED` | 401 | 令牌无效/过期、密钥已吊销 |
-| `AUTH_RATE_LIMITED` | 429 | 超出速率限制 |
-| `PERMISSION_DENIED` | 403 | RBAC 角色不足 |
-| `MFA_REQUIRED` | 403 | 管理员+MFA 操作缺少 MFA 验证 |
-| `INVALID_INPUT` | 400 | 请求参数错误（十六进制、格式） |
-| `NOT_FOUND` | 404 | 钱包/资源未找到 |
-| `KEY_FROZEN` | 422 | 钱包已冻结，签名被阻止 |
-| `POLICY_DENIED` | 422 | 策略检查失败 |
-| `INTERNAL_ERROR` | 500 | 服务器错误 |
-
-> 完整错误码参考：[`docs/API_REFERENCE.md#error-codes`](docs/API_REFERENCE.md#error-codes)
-
-### MPC 节点架构（生产环境 — DEC-015）
-
-生产环境中，网关持有**零密钥份额**。每个 MPC 节点是独立进程，仅持有 1 个份额，存储在加密文件存储中（AES-256-GCM + Argon2id）。所有协调通过 NATS 进行。
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                           生产环境部署                                   │
-│                                                                        │
-│   ┌─────────────┐        ┌──────────┐        ┌──────────┐            │
-│   │  客户端      │ ──────│   API     │ ──────│  Vault    │            │
-│   │(SDK/Web/App)│  HTTPS │   网关    │ Vault  │ （密钥）   │            │
-│   └─────────────┘        │(0 个份额  │        └──────────┘            │
-│                           │ RBAC +   │                                 │
-│                           │ 策略引擎) │        ┌──────────┐            │
-│                           └────┬─────┘ ──────│  Redis    │            │
-│                                │       Redis  │ （会话）   │            │
-│                     NATS 控制通道               └──────────┘            │
-│                    ┌───────────┼───────────┐                           │
-│                    │           │           │                            │
-│              ┌─────▼────┐ ┌───▼─────┐ ┌───▼─────┐                    │
-│              │  MPC      │ │  MPC    │ │  MPC    │                    │
-│              │  节点 1    │ │  节点 2  │ │  节点 3  │                    │
-│              │           │ │         │ │         │                    │
-│              │ 份额 s₁   │ │ 份额 s₂ │ │ 份额 s₃ │  ← 磁盘加密       │
-│              │ KeyStore  │ │ KeyStore│ │ KeyStore│                    │
-│              │ (AES-GCM) │ │ (AES)  │ │ (AES)  │                    │
-│              └─────┬─────┘ └───┬─────┘ └───┬─────┘                    │
-│                    │           │           │                            │
-│                    └───────────┼───────────┘                           │
-│                     NATS 协议通道                                       │
-│                    (SignedEnvelope + seq_no)                            │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-**安全保证：**
-- 没有任何单一进程可以还原私钥
-- 攻击者必须同时攻破 >= 阈值数量的节点
-- 网关被攻破 = 泄露 0 个份额（仅元数据）
-- 每个节点在签名前验证 `SignAuthorization`（DEC-012）
-
-**签名流程（DEC-012）：**
-
-```
-1. 客户端 → 网关:     POST /v1/wallets/:id/sign { message: "0xdead..." }
-2. 网关:              认证 (mTLS/JWT) → RBAC → 策略检查 → 审批
-3. 网关:              创建 SignAuthorization（Ed25519 签名证明）
-4. 网关 → NATS:       发布 SignRequest + SignAuthorization 给签名节点
-5. 各节点:            验证 SignAuthorization → 从 KeyStore 加载份额
-6. 节点 ↔ 节点:       通过 NATS 执行 MPC 签名协议（SignedEnvelope）
-7. 协调者:            组装最终签名 → 回复网关
-8. 网关 → 客户端:     返回 { signature: { r, s, recovery_id } }
-```
-
-### 密钥管理（HashiCorp Vault）
-
-生产环境密钥在网关启动时从 **HashiCorp Vault** 加载。环境变量或配置文件中无明文密钥。
-
-```bash
-# 生产环境：密钥来自 Vault（推荐）
-export SECRETS_BACKEND=vault
-export VAULT_ADDR=https://vault.internal:8200
-export VAULT_ROLE_ID=<approle-role-id>
-export VAULT_SECRET_ID=<approle-secret-id>
-```
-
-> 完整 Vault 配置：[`docs/API_REFERENCE.md#secrets-management`](docs/API_REFERENCE.md#secrets-management)
-
-### 基础设施与部署
-
-```bash
-# 本地开发（一键启动）
-./scripts/local-infra.sh up    # Vault + Redis + NATS + 3 MPC 节点 + 网关
-./scripts/local-infra.sh test  # 运行 E2E 测试
-./scripts/local-infra.sh down  # 关闭所有
-
-# Docker（生产环境）
-docker compose -f infra/docker/docker-compose.yml up -d
-```
-
-### 测试
-
-| 层级 | 测试数 | 验证内容 |
-|------|-------|---------|
-| **单元测试** (970) | `cargo test --workspace` | 协议正确性、链提供器、认证、策略 |
-| **签名验证** (14) | 全部 50 条链 | MPC 签名的密码学正确性 |
-| **E2E — 网关** (7) | Vault、Redis、认证、链端点 | 基础设施集成 |
-| **E2E — 分布式** (2) | 3 节点 keygen + 2 节点 sign | **真正的 MPC：每节点 1 份额，网关 0 份额** |
-| **基准测试** (~35) | `cargo bench --workspace` | 所有操作的性能基线 |
-
----
-
-## 支持的区块链（50 条）
-
-### EVM 链（26 条）
-
-| 链 | Chain ID | 类型 | Dwellir | Alchemy | Infura |
-|----|----------|------|:-------:|:-------:|:------:|
-| Ethereum | `1` | L1 | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| Polygon | `137` | L1 | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| BSC | `56` | L1 | :white_check_mark: | | |
-| Arbitrum | `42161` | L2（Optimistic） | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| Optimism | `10` | L2（OP Stack） | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| Base | `8453` | L2（OP Stack） | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| Avalanche | `43114` | L1（C-Chain） | :white_check_mark: | | :white_check_mark: |
-| Linea | `59144` | L2（zkEVM） | :white_check_mark: | | :white_check_mark: |
-| zkSync Era | `324` | L2（ZK Rollup） | :white_check_mark: | | |
-| Scroll | `534352` | L2（zkEVM） | :white_check_mark: | | |
-| Mantle | `5000` | L2（模块化） | :white_check_mark: | | |
-| Blast | `81457` | L2（收益） | :white_check_mark: | | |
-| Zora | `7777777` | L2（OP Stack） | :white_check_mark: | | |
-| Fantom | `250` | L1（DAG） | :white_check_mark: | | |
-| Gnosis | `100` | L1（xDai） | :white_check_mark: | | |
-| Cronos | `25` | L1 | :white_check_mark: | | |
-| Celo | `42220` | L1（移动优先） | :white_check_mark: | | |
-| Moonbeam | `1284` | 平行链（EVM） | :white_check_mark: | | |
-| Ronin | `2020` | L1（游戏） | :white_check_mark: | | |
-| opBNB | `204` | L2（BNB） | :white_check_mark: | | |
-| Immutable | `13371` | L2（zkEVM） | :white_check_mark: | | |
-| Manta Pacific | `169` | L2（隐私） | :white_check_mark: | | |
-| Hyperliquid | `999` | L1（永续 DEX） | :white_check_mark: | | |
-| Berachain | `80094` | L1（PoL） | :white_check_mark: | | |
-| MegaETH | `6342` | L2（实时） | :white_check_mark: | | |
-| Monad | `143` | L1（并行 EVM） | :white_check_mark: | | |
-
-> 所有 EVM 链使用 **GG20 ECDSA (secp256k1)** 签名协议和 **EIP-1559** 交易格式。
-
-### UTXO 链（5 条）
-
-| 链 | 地址格式 | 签名协议 | Dwellir | Blockstream | Mempool |
-|----|---------|---------|:-------:|:-----------:|:-------:|
-| Bitcoin（主网） | Taproot P2TR (`bc1p...`) | FROST Schnorr (BIP-340) | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| Bitcoin（测试网） | Taproot P2TR (`tb1p...`) | FROST Schnorr (BIP-340) | | :white_check_mark: | :white_check_mark: |
-| Litecoin | P2PKH (`L...`) / bech32 (`ltc1...`) | GG20 ECDSA | :white_check_mark: | | |
-| Dogecoin | P2PKH (`D...`) | GG20 ECDSA | :white_check_mark: | | |
-| Zcash | 透明地址 (`t1...`) | GG20 ECDSA | :white_check_mark: | | |
-
-### Move 链（2 条）
-
-| 链 | 地址格式 | 签名协议 | Dwellir |
-|----|---------|---------|:-------:|
-| Aptos | `0x` + 64 hex (SHA3-256) | FROST Ed25519 | :white_check_mark: |
-| Movement | `0x` + 64 hex (SHA3-256) | FROST Ed25519 | :white_check_mark: |
-
-### Substrate / Polkadot（6 条）
-
-| 链 | 地址（SS58） | 签名协议 | Dwellir |
-|----|-------------|---------|:-------:|
-| Polkadot | SS58 前缀 0 | FROST Ed25519 | :white_check_mark: |
-| Kusama | SS58 前缀 2 | FROST Ed25519 | :white_check_mark: |
-| Astar | SS58 前缀 5 | FROST Ed25519 | :white_check_mark: |
-| Acala | SS58 前缀 10 | FROST Ed25519 | :white_check_mark: |
-| Phala | SS58 前缀 30 | FROST Ed25519 | :white_check_mark: |
-| Interlay | SS58 前缀 2032 | FROST Ed25519 | :white_check_mark: |
-
-> 支持 FROST Ed25519 和 **Sr25519 门限 MPC**（基于 Ristretto255 的 Schnorrkel）。
-
-### Cosmos / IBC（5 条）
-
-| 链 | 地址（bech32） | 签名协议 | Dwellir |
-|----|---------------|---------|:-------:|
-| Cosmos Hub | `cosmos1...` | GG20 ECDSA (secp256k1) | :white_check_mark: |
-| Osmosis | `osmo1...` | GG20 ECDSA (secp256k1) | :white_check_mark: |
-| Celestia | `celestia1...` | GG20 ECDSA / Ed25519 | :white_check_mark: |
-| Injective | `inj1...` | GG20 ECDSA (secp256k1) | :white_check_mark: |
-| Sei | `sei1...` | GG20 ECDSA (secp256k1) | :white_check_mark: |
-
-### 替代 L1（2 条）
-
-| 链 | 地址格式 | 签名协议 | Dwellir |
-|----|---------|---------|:-------:|
-| TON | `0:` + 64 hex (SHA-256) | FROST Ed25519 | :white_check_mark: |
-| TRON | Base58Check (`T...`, 0x41 前缀) | GG20 ECDSA (secp256k1) | :white_check_mark: |
-
-### 专用链（1 条）
-
-| 链 | 地址格式 | 签名协议 | Dwellir |
-|----|---------|---------|:-------:|
-| Starknet | `0x` + 64 hex（251位域） | STARK 门限 MPC | :white_check_mark: |
-
-> STARK 曲线门限 MPC 签名正在计划中。目前使用 ECDSA 兼容占位符。
-
-### 其他链（3 条）
-
-| 链 | 地址格式 | 签名协议 | Dwellir |
-|----|---------|---------|:-------:|
-| Solana | Base58 (Ed25519) | FROST Ed25519 | :white_check_mark: |
-| Sui | `0x` + 64 hex (Blake2b-256) | FROST Ed25519 | :white_check_mark: |
-| Monero | Base58（消费密钥 + 查看密钥） | FROST Ed25519 | :white_check_mark: |
-
-> RPC 注册表支持**故障切换**（自动切换不健康节点）、**健康追踪**、**链级配置**（超时、重试次数）和**自定义提供商**。
-
----
-
-## MPC 签名协议（6 种）
-
-| 协议 | 曲线 | 支持链 | 依赖库 |
-|------|------|--------|--------|
-| **GG20 ECDSA** | secp256k1 | EVM（26）、TRON、Cosmos（5）、UTXO（3） | `k256` |
-| **FROST Schnorr** | secp256k1 | Bitcoin（Taproot P2TR） | `frost-secp256k1-tr` |
-| **FROST Ed25519** | Ed25519 | Solana、Sui、Aptos、Movement、TON、Monero | `frost-ed25519` |
-| **Sr25519 门限** | Ristretto255 | Polkadot、Kusama、Astar、Acala、Phala、Interlay | `schnorrkel` |
-| **STARK 门限** | Stark 曲线 | Starknet | 自定义实现 |
-| **BLS12-381 门限** | BLS12-381 | Filecoin、以太坊验证者 | `blst` |
-
-> 所有协议支持门限密钥生成和分布式签名 — 完整私钥**永远不会**被组装。
-
----
-
-## 性能
-
-| 类别 | 操作 | 延迟 | 配置 |
-|------|------|------|------|
-| **协议** | GG20 密钥生成 | **44 µs** | 2-of-3 |
-| | GG20 签名 | **188 µs** | 2 个签名方 |
-| **认证** | Ed25519 签名 | **~9 µs** | 握手摘要 |
-| | X25519 ECDH | **< 1 µs** | 密钥交换 |
-| | SignAuthorization 创建+验证 | **~20 µs** | Ed25519 |
-| **链操作** | EVM 地址派生 | **~4 µs** | Keccak256 |
-| | Solana 地址 (Base58) | **~2 µs** | Ed25519 公钥 |
-| **加密** | ChaCha20-Poly1305 1KB | **~4 µs** | 消息加密 |
-| | AES-256-GCM 1KB | **~5 µs** | 密钥存储 |
-| | Argon2id 推导 | **72 ms** | 64MiB 内存硬化 |
-
-```bash
-cargo bench -p mpc-wallet-core --bench mpc_benchmarks   # 协议 + 认证 + 加密
-cargo bench -p mpc-wallet-chains --bench chain_benchmarks # 链操作
-```
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [路线图](docs/ROADMAP.md) | 生产路线图（提议稿），以及对当前状态的如实说明 |
+| [任务清单](docs/TASKS.md) | 执行路线图的任务 |
+| [安全政策](SECURITY.md) | 如何报告漏洞 |
+| [CLI 指南](docs/CLI_GUIDE.md) | 单进程演示 CLI 的命令 |
+| [API 参考](docs/API_REFERENCE.md) | 网关 REST API（实验性） |
+| [架构](specs/ARCHITECTURE.md) | 架构说明。早于路线图编写，可能夸大成熟度 |
+| [认证规范](specs/AUTH_SPEC.md) | 网关密钥交换握手（实验性） |
+| [标准](specs/STANDARDS.md) | 代码引用的标准与参考文献 |
+| [贡献指南](docs/CONTRIBUTING.md) | 贡献说明 |
+| [更新日志](CHANGELOG.md) | 变更历史 |
+
+较早的文档早于路线图，其中包括 [docs/SECURITY_FINDINGS.md](docs/SECURITY_FINDINGS.md) 和 [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md) 中的内部安全记录，以及 [specs/CHAIN_ROADMAP.md](specs/CHAIN_ROADMAP.md) 中的链计划。这些安全记录由 AI Agent 在开发过程中编写，并非独立审计，其中的“已解决”状态并不涵盖上方警示中的限制。过时文档正在归档（ROADMAP M5 #10）。
 
 ---
 
@@ -598,47 +145,32 @@ cargo bench -p mpc-wallet-chains --bench chain_benchmarks # 链操作
 ```
 crates/
   mpc-wallet-core/     ← MPC 协议、传输层、密钥存储、策略、身份认证、RPC 消息
-  mpc-wallet-chains/   ← 链提供器：50 条链，涵盖 8 大生态
-  mpc-wallet-cli/      ← CLI 命令行工具（keygen、sign、simulate、audit-verify）
+  mpc-wallet-chains/   ← 链提供器与交易编码器（见支持矩阵）
+  mpc-wallet-cli/      ← 单进程演示 CLI
 services/
-  api-gateway/         ← REST API 服务器、认证、MpcOrchestrator（零份额）
-  mpc-node/            ← 独立 MPC 节点（1 个参与方、1 个份额、NATS + 加密文件存储）
-infra/
-  docker/              ← Dockerfile（多目标：网关 + 节点）、docker-compose.yml
-  local/               ← 本地开发 .env + docker-compose（Vault + Redis + NATS）
-  k8s/                 ← Kubernetes 清单（StatefulSet、Ingress、Secrets）
-  terraform/           ← 多云配置（AWS、GCP、Azure）
-scripts/
-  local-infra.sh       ← 一键启动：Vault + Redis + NATS + 3 节点 + 网关
-  demo.sh              ← 交互式 CLI 演示（单进程，无需基础设施）
-specs/                 ← AUTH_SPEC.md、SIGN_AUTHORIZATION_SPEC.md
-retro/                 ← 决策记录（DEC-001..015）、经验教训、安全审计
-docs/                  ← 架构、API 参考、CLI 指南、部署
+  api-gateway/         ← REST 网关与协调器（不持有密钥份额）
+  mpc-node/            ← 独立 MPC 节点（一个参与方，一个份额）
+infra/                 ← Docker、本地开发环境、Kubernetes、Helm、Terraform（实验性）
+scripts/               ← local-infra.sh、demo.sh 及辅助脚本
+specs/、docs/、retro/  ← 规范、文档、决策记录与经验教训
 ```
 
 ---
 
-## 指标
+## 安全
 
-```
-  链:       50           测试:      970 + 16 E2E
-  协议:     7            CI:        fmt + clippy + test + audit + E2E
-  Sprint:   37           漏洞:      0 CRITICAL | 0 HIGH 未解决
-  决策:     17           基准测试:   ~35
-```
+请按照 [SECURITY.md](SECURITY.md) 中的说明私下报告漏洞。请勿为安全问题创建公开 issue。
 
 ---
 
 ## 许可证
 
-MIT
+本仓库目前尚未包含许可证文件，因此本 README 不授予任何许可。许可证正在确定中（ROADMAP M5 #2）。Cargo 清单中的 `license` 字段早于此说明，将与许可证文件一并更正。
 
 ---
 
 <p align="center">
   <sub>
     由 <a href="https://claude.com/claude-code">Claude Code</a> AI Agent 团队构建。
-    <br/>
-    在制作此 SDK 的过程中，没有任何密钥受到伤害。
   </sub>
 </p>
