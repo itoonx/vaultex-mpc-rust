@@ -1,6 +1,6 @@
 {
  "rfc": "RECEIPT_V1",
- "rfc_version": "DRAFT 2026-10-11 (pre-RFC; the RFC text lands with T05-7a)",
+ "rfc_version": "DRAFT 2026-10-11",
  "kind": "cross-implementation",
  "generated_by": [
   {
