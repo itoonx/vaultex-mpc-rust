@@ -10,3 +10,9 @@ publish = false # working name until ADR-12
 # transitively. kernel.yml asserts it with `cargo tree`; clippy.toml bans clock, env and sockets.
 [dependencies]
 vaultex-types = { path = "../vaultex-types" }
+# Receipt signatures (M6 #6). Already in Cargo.lock through vaultex-types' tests and the legacy crates.
+ed25519-dalek = { workspace = true }
+
+[dev-dependencies]
+# Reads the JSON vector files shared with the independent oracle (KAT plan R8).
+serde_json = { workspace = true }
