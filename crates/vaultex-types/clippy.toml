@@ -1,0 +1,13 @@
+# Contract rule 12: no clock, environment or network access in this crate. "Now", configuration
+# and storage are parameters. (The dependency side is checked by .github/workflows/kernel.yml.)
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "take `now` as a parameter (contract rule 12)" },
+    { path = "std::time::Instant::now", reason = "take `now` as a parameter (contract rule 12)" },
+    { path = "std::env::var", reason = "take configuration as a parameter (contract rule 12)" },
+    { path = "std::env::var_os", reason = "take configuration as a parameter (contract rule 12)" },
+]
+disallowed-types = [
+    { path = "std::net::TcpStream", reason = "no network I/O in kernel crates (ROADMAP M6 #1)" },
+    { path = "std::net::TcpListener", reason = "no network I/O in kernel crates (ROADMAP M6 #1)" },
+    { path = "std::net::UdpSocket", reason = "no network I/O in kernel crates (ROADMAP M6 #1)" },
+]

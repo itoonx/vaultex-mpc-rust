@@ -6,6 +6,14 @@ members = [
     "crates/mpc-wallet-cli",
     "services/api-gateway",
     "services/mpc-node",
+    # Phase-1 crates (ROADMAP M5 #11). Working names until ADR-12; owners in ROADMAP §5.2.
+    "crates/vaultex-types",
+    "crates/vaultex-verify",
+    "crates/vaultex-cli-admin",
+    "crates/vaultex-redteam",
+    "services/vaultex-guard",
+    "services/vaultex-monitor",
+    "tools/retro-shadow",
 ]
 
 [workspace.package]

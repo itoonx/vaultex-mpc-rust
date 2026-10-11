@@ -1,0 +1,7 @@
+[package]
+name = "vaultex-redteam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vaultex adversarial verification harness (skeleton)"
+publish = false # test harness; never published
