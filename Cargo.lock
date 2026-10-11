@@ -5406,6 +5406,9 @@ dependencies = [
 [[package]]
 name = "vaultex-redteam"
 version = "0.1.0"
+dependencies = [
+ "vaultex-types",
+]
 
 [[package]]
 name = "vaultex-types"
