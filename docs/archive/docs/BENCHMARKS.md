@@ -1,3 +1,7 @@
+> **ARCHIVED — CONCLUSIONS WITHDRAWN (2026-10-11).** Written by the project's internal AI-agent process, not by an independent reviewer. Its conclusions are unreliable and must not be cited.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing yet.
+
 # MPC Wallet SDK — Performance Benchmarks
 
 > Baseline: 2026-04-01 | Machine: macOS Darwin 24.5.0 | Rust: 1.93.1

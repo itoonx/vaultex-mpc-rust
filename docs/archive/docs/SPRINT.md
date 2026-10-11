@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: [docs/TASKS.md](../../TASKS.md) and [docs/ROADMAP.md](../../ROADMAP.md). The milestone re-baseline is in [MILESTONES_M1-M4_REBASELINE.md](../MILESTONES_M1-M4_REBASELINE.md).
+
 # Sprint Log
 
 > **Current state (as of 2026-05-10):** Sprint 49 COMPLETE — merged to `dev` and `main`. 967 tests passing.

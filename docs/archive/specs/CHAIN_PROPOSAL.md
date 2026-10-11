@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing yet. New chains wait for the chain-completeness standard in [ROADMAP §3.6](../../ROADMAP.md#36-what-we-will-not-do).
+
 # Chain Integration Proposal & Checklist
 
 > Use this document when adding a new blockchain to Vaultex MPC Wallet.

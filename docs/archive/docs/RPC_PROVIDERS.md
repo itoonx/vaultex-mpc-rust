@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing. In the proposed v1 scope the caller builds and broadcasts transactions ([ROADMAP §2.1](../../ROADMAP.md#21-declared-v1-scope-and-boundary)).
+
 # RPC Providers
 
 The MPC wallet broadcasts transactions through public RPC endpoints. Both the

@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: [docs/adr/](../../adr/README.md). New decisions are recorded as ADRs; the `DEC-` numbers here are not renumbered.
+
 # MPC Wallet SDK — Decision Log
 
 **Maintained by:** R7 PM Agent  
