@@ -99,7 +99,7 @@ cargo test --workspace --features local-transport -- --test-threads=4
 
 ## Failure classes to avoid (digest of `LESSONS.md` and `retro/`)
 
-1. **Self-referential tests.** Every lesson of May–June 2026 (double hashing, network selection, hex parsing, Taproot tweak, BCS shape, signing-message layout, TRON body, gas limit, address forms) passed hundreds of tests and was caught only on a public testnet. Pin byte-equal vectors from canonical SDKs.
+1. **Self-referential tests.** The chain lessons of May–June 2026 (double hashing, network selection, hex parsing, Taproot tweak, BCS shape, signing-message layout, TRON body, gas limit, address forms) all passed the full test suite; none was caught by a test. Live testnet broadcasts, or the check run just before one, caught them. Pin byte-equal vectors from canonical SDKs.
 2. **Broadcast without the ladder.** Before any testnet broadcast: balance → presign summary → decoded fields → recover/verify against the sender. Real networks add rules of their own (TRON rejects self-transfers).
 3. **Skipping instead of fixing.** Flaky distributed tests were skipped or given longer timeouts although the root cause was protocol message ordering. Fix ordering bugs at the root instead of skipping the test or extending its timeout.
 4. **Test count as the KPI.** It rewarded volume over adversarial and external validation. Measure oracle-backed evidence instead.
