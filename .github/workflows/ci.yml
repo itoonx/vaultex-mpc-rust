@@ -84,6 +84,26 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --features local-transport -- --test-threads=4
 
+  # Shipped-build guard (ROADMAP M5 #8): builds the node and gateway in release exactly as
+  # infra/docker/Dockerfile ships them (only those two packages, so no workspace feature
+  # unification) and fails if test parameters or experimental features are linked. A canary rebuild
+  # with test parameters must be flagged and refused at startup first. No rust-cache step: every run
+  # builds in a fresh target dir.
+  shipped-build:
+    name: Shipped-build guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - name: Test the checker
+        run: python3 -B -m unittest discover -s scripts/ci -p test_shipped_build.py
+      - name: Build as shipped and check linked features
+        run: python3 -B scripts/ci/shipped_build.py
+
   audit:
     name: Security audit
     runs-on: ubuntu-latest
