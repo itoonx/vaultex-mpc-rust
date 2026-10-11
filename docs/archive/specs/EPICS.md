@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: the milestones M5–M13 in [ROADMAP §4](../../ROADMAP.md#4-milestones-m5).
+
 # MPC Wallet SDK — Epic & Story Breakdown
 
 **Version:** 1.0.0

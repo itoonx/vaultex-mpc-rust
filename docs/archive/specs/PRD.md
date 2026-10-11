@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: [ROADMAP §2](../../ROADMAP.md#2-what-production-means-for-vaultex) (v1 scope) and [§3](../../ROADMAP.md#3-strategy) (strategy).
+
 # MPC Wallet SDK — Product Requirements Document
 
 **Version:** 0.1.0-draft  

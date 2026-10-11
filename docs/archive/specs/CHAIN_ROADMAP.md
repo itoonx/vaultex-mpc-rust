@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: the support matrix in the [README](../../../README.md) and the scope cuts in [ROADMAP §3.5](../../ROADMAP.md#35-scope-cuts).
+
 # Chain Support Roadmap
 
 Blockchain networks to support for RPC broadcast via [Dwellir](https://www.dwellir.com/docs/getting-started/supported-chains).

@@ -1,3 +1,7 @@
+> **ARCHIVED — CONCLUSIONS WITHDRAWN (2026-10-11).** Written by the project's internal AI-agent process, not by an independent reviewer. Its conclusions are unreliable and must not be cited.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: the audit-scope manifest v0 ([ROADMAP M5](../../ROADMAP.md#m5-contain-cut-and-licence-phase-1) #9), not yet written.
+
 # MPC Wallet SDK -- Audit Scope
 
 > Maintained by R6 Security | Last updated: 2026-04-01

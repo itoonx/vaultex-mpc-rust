@@ -1,3 +1,7 @@
+> **ARCHIVED — CONCLUSIONS WITHDRAWN (2026-10-11).** Written by the project's internal AI-agent process, not by an independent reviewer. Its conclusions are unreliable and must not be cited.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: [SECURITY_STATUS.md](../../../SECURITY_STATUS.md).
+
 # Auth System Security Audit Report
 
 **Scope:** `services/api-gateway/src/auth/`, routes, middleware

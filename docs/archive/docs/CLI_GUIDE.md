@@ -1,3 +1,8 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing. The single-process demo CLI is a legacy component, to be quarantined ([ROADMAP §3.5](../../ROADMAP.md#35-scope-cuts)). Do not use it with real funds.
+> Example credentials in this copy were replaced with placeholders.
+
 # Vaultex CLI Guide
 
 ```
@@ -592,7 +597,7 @@ Human-friendly, one status line + pretty-printed data:
 Machine-parseable, single JSON object:
 
 ```bash
-$ mpc-wallet list-keys --format json --password mypass
+$ mpc-wallet list-keys --format json --password <PASSWORD>
 ```
 
 ```json
@@ -619,7 +624,7 @@ Use `--format json` for scripting and automation:
 GROUP_ID=$(mpc-wallet keygen \
   --threshold 2 --parties 3 \
   --scheme gg20-ecdsa --label test \
-  --password mypass --format json \
+  --password <PASSWORD> --format json \
   | jq -r '.data.group_id')
 
 echo "Created key group: $GROUP_ID"

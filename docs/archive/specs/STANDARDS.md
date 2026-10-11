@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing yet. Normative references will live in the M6 RFCs ([ROADMAP M6](../../ROADMAP.md#m6-verifier-kernel-v0-standalone-and-tron-first-plus-rung-0-phase-1) #7).
+
 # Standards & References
 
 Cryptographic standards, protocols, and specifications implemented in Vaultex.

@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing yet. The gateway it exercises is a legacy component, to be replaced by the gateway relay ([ROADMAP §4.3](../../ROADMAP.md#43-milestone-definitions), M9).
+
 # API Regression Test Guide
 
 19 tests that hit the **real running gateway** over HTTP (not in-process Router).
