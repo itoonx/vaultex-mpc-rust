@@ -25,8 +25,8 @@
 //! evidence comes from the signed, hash-chained receipt log, which is also meant to become the
 //! source this index is rebuilt from.
 
-use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{self, Read, Write};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 use vaultex_types::{
@@ -35,6 +35,7 @@ use vaultex_types::{
 
 use super::{Charge, Index, Record, StoreError, Usage, VelocityKey, VelocityStore};
 use crate::breaker::{Pause, PauseCause};
+use crate::durable::{self, io_err};
 
 /// Domain tag of the per-frame check.
 const FRAME_TAG: &str = "VAULTEX/VELOCITY-FRAME/v1";
@@ -62,26 +63,7 @@ impl FileStore {
     /// Opens the log at `path`, creating it if absent; takes its exclusive lock; truncates a torn
     /// last frame; and rebuilds the in-memory view.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let path = path.as_ref();
-        let mut opts = OpenOptions::new();
-        opts.read(true).append(true);
-        let (mut file, created) = match opts.clone().create_new(true).open(path) {
-            Ok(file) => (file, true),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                (opts.open(path).map_err(io_err)?, false)
-            }
-            Err(e) => return Err(io_err(e)),
-        };
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Err(StoreError::Locked),
-            Err(TryLockError::Error(e)) => return Err(io_err(e)),
-        }
-        if created {
-            file.sync_all().map_err(io_err)?;
-            sync_parent_dir(path).map_err(io_err)?;
-        }
-
+        let mut file = durable::open_locked(path.as_ref())?;
         let mut log = Vec::new();
         file.read_to_end(&mut log).map_err(io_err)?;
         let mut index = Index::default();
@@ -104,8 +86,7 @@ impl FileStore {
                     offset: offset as u64,
                 });
             }
-            file.set_len(offset as u64).map_err(io_err)?;
-            file.sync_all().map_err(io_err)?;
+            durable::truncate(&file, offset as u64)?;
             break;
         }
         Ok(Self {
@@ -138,11 +119,7 @@ impl VelocityStore for FileStore {
             return Err(StoreError::Failed);
         }
         let frame = encode_frame(record)?;
-        if let Err(e) = self
-            .file
-            .write_all(&frame)
-            .and_then(|()| self.file.sync_data())
-        {
+        if let Err(e) = durable::append_synced(&mut self.file, &frame) {
             // The end of the file is now unknown: refuse writes until a reopen repairs it.
             self.failed = true;
             return Err(io_err(e));
@@ -150,25 +127,6 @@ impl VelocityStore for FileStore {
         self.index.apply(record);
         Ok(())
     }
-}
-
-fn io_err(e: io::Error) -> StoreError {
-    StoreError::Io(e.kind())
-}
-
-#[cfg(unix)]
-fn sync_parent_dir(path: &Path) -> io::Result<()> {
-    let dir = match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => dir,
-        _ => Path::new("."),
-    };
-    File::open(dir)?.sync_all()
-}
-
-// ponytail: signer hosts are Linux or macOS; elsewhere the directory entry is not synced.
-#[cfg(not(unix))]
-fn sync_parent_dir(_: &Path) -> io::Result<()> {
-    Ok(())
 }
 
 fn cause_byte(cause: PauseCause) -> u8 {
@@ -285,7 +243,8 @@ fn decode_body(body: &[u8]) -> Option<Record> {
     clippy::arithmetic_side_effects
 )]
 mod tests {
-    use std::fs;
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
     use std::path::PathBuf;
 
     use super::*;
