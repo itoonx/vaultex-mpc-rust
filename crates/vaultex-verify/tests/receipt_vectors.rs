@@ -483,13 +483,24 @@ fn binary_verifies_valid_logs_and_names_the_failed_check() {
     assert_eq!(status, 1, "{out}");
     assert!(out.contains("receipt 2") && out.contains("PREV"), "{out}");
 
+    // Only a request for help, alone, exits 0 without verifying anything.
+    for help in ["-h", "--help", "help"] {
+        let (status, out) = run_bin(&[help]);
+        assert_eq!(status, 0, "{help}: {out}");
+        assert!(out.contains("usage:") && !out.contains("VALID"), "{out}");
+    }
     for usage in [
         &["verify"][..],
+        &[],
+        &["verify", path, "--help"],
+        &["verify", path, "-h"],
+        &["--help", "verify", path],
         &["verify", path, "--key", "zz"],
         &["frobnicate"],
     ] {
         let (status, out) = run_bin(usage);
         assert_eq!(status, 2, "{usage:?}: {out}");
+        assert!(out.contains("usage:"), "{usage:?}: {out}");
     }
     let (status, _) = run_bin(&["verify", "/nonexistent/vaultex-receipts.log"]);
     assert_eq!(status, 2);

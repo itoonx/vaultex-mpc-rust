@@ -9,8 +9,9 @@
 //! key (recommended; without it the first receipt's key is adopted and the output says so).
 //! `--after` verifies a segment that starts right after an anchored checkpoint.
 //!
-//! Exit status: 0 the log is valid, 1 it is not, 2 usage or I/O error. It reads only the file
-//! named, and never touches the network.
+//! Exit status: 0 the log is valid, 1 it is not, 2 usage or I/O error. `-h`, `--help` or `help`
+//! as the only argument prints this usage and exits 0; anything else that verifies nothing,
+//! including no arguments, exits 2. It reads only the file named, and never touches the network.
 
 #![forbid(unsafe_code)]
 
@@ -44,9 +45,11 @@ type Args = (String, Option<Ed25519Pub>, Option<Checkpoint>);
 fn parse(args: &[String]) -> Result<Option<Args>, String> {
     let mut it = args.iter();
     match it.next().map(String::as_str) {
-        None | Some("-h" | "--help" | "help") => return Ok(None),
+        // Exit 0 must mean "verified": help exits 0 only when it is the whole request.
+        Some("-h" | "--help" | "help") if args.len() == 1 => return Ok(None),
         Some("verify") => {}
         Some(other) => return Err(format!("unknown command {other:?}")),
+        None => return Err("no command given".into()),
     }
     let (mut path, mut key, mut after) = (None, None, None);
     while let Some(arg) = it.next() {
@@ -65,7 +68,6 @@ fn parse(args: &[String]) -> Result<Option<Args>, String> {
                     digest: ReceiptDigest(hex32(digest)?),
                 });
             }
-            "-h" | "--help" => return Ok(None),
             flag if flag.starts_with('-') => return Err(format!("unknown option {flag:?}")),
             _ if path.is_none() => path = Some(arg.clone()),
             _ => return Err("more than one log file".into()),
