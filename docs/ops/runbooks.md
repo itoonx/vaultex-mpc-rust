@@ -28,7 +28,7 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 | ID | Detects | Severity | Freezes | Runbook |
 |---|---|---|---|---|
 | MR-01 | A float-signed transaction of a contract type other than a TRX transfer or a smart-contract call. **Fires during ceremonies:** an owner-signed permission update (type 46) raises it; expected there ([ceremony](../ceremonies/guard.md#1-rules-for-every-ceremony) rule 2) | 1 | Yes | RB-1, then RB-3 or RB-4. Not for a transaction in a declared ceremony's plan |
-| MR-02 | A float-signed transaction under a permission other than the configured active one, including the owner permission. **Fires during ceremonies:** every owner-signed ceremony or recovery transaction raises it; there the Guard is already frozen, and the alert is expected and closed in the transcript or incident record (ceremony rule 2) | 1 | Yes | RB-1; RB-8 if owner keys are suspect |
+| MR-02 | A float-signed transaction under a permission other than the configured active one, including the owner permission. **Fires during ceremonies:** every owner-signed ceremony or recovery transaction raises it; there the Guard is already frozen, and the alert is expected and closed in the transcript, incident record or drill log (ceremony rule 2) | 1 | Yes | RB-1; RB-8 if owner keys are suspect |
 | MR-03 | A float-signed contract call to a token outside the allowlist, or anything but the plain token transfer (selector, call value, call-data length). **Fires during recovery:** RB-2's owner-signed `approve(spender, 0)` raises it; expected there (ceremony rule 2) | 1 | Yes | RB-1; RB-2 if it changed an allowance |
 | MR-04 | A float-signed transaction with no matching co-sign accept receipt after the grace period (10 s, ESTIMATE; it covers receipt-export lag, since the Guard records a receipt before it releases a signature). **Fires during ceremonies:** no owner-signed transaction has a co-sign receipt, so each one in a ceremony or recovery raises it; expected there (ceremony rule 2) | 1 | Yes | RB-1, then RB-3 or RB-4. Not for a transaction in a declared ceremony's plan |
 | MR-05 | A matched transaction whose executed effects (recipient, asset, amount, fee) differ from its receipt or from the monitor's own derivation of the intent | 1 | Yes | RB-1; a kernel defect is suspected (stay frozen; report it under `SECURITY.md`) |
@@ -162,8 +162,8 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 
 1. Run the refill check on the monitor host: `vaultex-monitor refill-check` *(planned, T07-3)*. It prints PASS only if:
    - no Sev-1 alert is open, and the Guard is RUNNING or deliberately FROZEN;
-   - every allowance-raising transaction has been followed by a revocation and has a closed incident record; every allowance in the watched set reads 0 at solidified height on both providers;
-   - every outflow up to the solidified height is matched to a receipt, or (owner-signed) to a closed ceremony or incident record, and the balances reconcile (MR-13 clean);
+   - every allowance-raising transaction has been followed by a revocation and has a closed ceremony, incident or drill record; every allowance in the watched set reads 0 at solidified height on both providers;
+   - every outflow up to the solidified height is matched to a receipt, or (owner-signed) to a closed ceremony, incident or drill record, and the balances reconcile (MR-13 clean);
    - the balance plus the refill amount stays at or under **the ceiling minus the headroom** (MR-12), for the asset and for TRX;
    - the permissions equal the expected set.
 2. The owner signs the transfer from the cold treasury **only with a PASS report less than 10 minutes old**, and for an amount within that bound.
@@ -175,9 +175,9 @@ A refill that arrives without a matching PASS report pages Sev-2. **Evidence:** 
 
 ### RB-10. Unfreeze
 
-1. Preconditions, all written in the incident record:
+1. Preconditions, all written in the incident record (in a drill, the drill log):
    - the cause is known and fixed (RB-1);
-   - every outflow is matched to a receipt or to a closed ceremony or incident record, every allowance is 0, and the permissions equal the expected set;
+   - every outflow is matched to a receipt or to a closed ceremony, incident or drill record, every allowance is 0, and the permissions equal the expected set;
    - for a host rebuild, head continuity is confirmed.
 2. M admins each sign the unfreeze order on their own admin devices.
 3. The order is submitted **locally on the Guard host**, through its admin socket. The network API refuses unfreeze orders.

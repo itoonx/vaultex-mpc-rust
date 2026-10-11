@@ -15,7 +15,7 @@ Vocabulary is in the [ops README](README.md) §1.
 
 A pack lets anyone with the pack, the trusted public keys from the ceremony transcript, and access to a chain-data source the monitor did not use, check **months later and offline** that for one network and one calendar month:
 
-1. every outflow from the float matched a Guard receipt (or, if owner-signed, a ceremony or incident record), and the Guard's receipt log is unbroken: one signed chain per receipt key, each continuing from the previous pack or introduced by a recorded rotation or ceremony;
+1. every outflow from the float matched a Guard receipt (or, if owner-signed, a closed ceremony, incident or drill record), and the Guard's receipt log is unbroken: one signed chain per receipt key, each continuing from the previous pack or introduced by a recorded rotation or ceremony;
 2. every decision can be re-derived from the archived request and the policy bundle in force;
 3. balances reconcile to zero residual every day, and every allowance from the float is zero (or an alert explains it);
 4. every alert, freeze, drill, incident, key change, configuration change and release change in the month is recorded;
@@ -161,7 +161,7 @@ Example (values shortened to placeholders; a month with a scheduled receipt-key 
 | `chain/inflows.csv` | `txid,height,block_time_ms,from,token,amount,class` | `class` is `refill`, `dust` or `other`. A `refill` row names its refill-check report in `monitor/refill-checks/` |
 | `chain/balances.csv` | `date,height,asset,balance,inflows,outflows,fees,residual` | Daily at solidified height. `residual = previous balance + inflows − outflows − fees − balance` and **must be 0** |
 | `chain/allowances.csv` | `date,height,token,spender_set_sha256,spender,value` | Daily reading of every spender in the watched set. Any non-zero value must have an alert |
-| `chain/permissions.json` | `{expected_sha256, snapshots:[{date,height,sha256}], diffs:[{height,before,after,record}]}` | Daily digests of the account's permissions; any diff names its ceremony or incident |
+| `chain/permissions.json` | `{expected_sha256, snapshots:[{date,height,sha256}], diffs:[{height,before,after,record}]}` | Daily digests of the account's permissions; any diff names its ceremony, incident or drill record |
 
 ### 5.4 Monitor tables
 

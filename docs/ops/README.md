@@ -34,7 +34,7 @@ The same names as [threat model v2](../assurance/THREAT_MODEL_V2.md) §3.2.
 | **D-OP** operator | The operator key; the submitter that builds, signs and broadcasts; its own chain-RPC accounts | Operator's provider |
 | **D-G** Guard | The Guard key (one per network); the receipt key; the kernel state | A second provider and account |
 | **D-M** monitor | The monitor's freeze, evidence and (optional) ack keys; its own chain-RPC accounts; alerting | A third provider and account |
-| **D-C** cold | Owner keys (the float's owner permission, cold 2-of-3); policy admin keys (M-of-N) | Offline devices |
+| **D-C** cold | Owner keys (the float's owner permission, cold 2-of-3); policy admin keys (M-of-N); at genesis only, the float account key (§1.2) | Offline devices |
 | **D-R** build and release | The release-signing identity; CI | Code host |
 
 ### 1.2 Keys
@@ -44,7 +44,8 @@ The same names as [threat model v2](../assurance/THREAT_MODEL_V2.md) §3.2.
 | Operator key | secp256k1 | D-OP | One of the two signatures the active permission needs | Not alone |
 | Guard key, one per network | secp256k1 | D-G | The Guard's co-signature. Custody: ADR-17 | Not alone |
 | Receipt key | Ed25519 | D-G | Signs every decision receipt | No |
-| Owner keys (3) | secp256k1 | D-C | The float's owner permission, 2-of-3: permission updates, hard freeze, recovery | **Yes, any two of them.** The float cap bounds the loss |
+| Owner keys (3) | secp256k1 | D-C | The float's owner permission, 2-of-3: permission updates after genesis, hard freeze, recovery | **Yes, any two of them.** The float cap bounds the loss |
+| Float account key (genesis only; destroyed after CER-6) | secp256k1 | D-C (air-gapped machine, RAM only) | The float account's own key ([CER-F](../ceremonies/guard.md#cer-f-float-account-genesis-only)). It is the account's only owner key until it alone signs the genesis permission update (CER-5); CER-6 checks it is in no permission, then destroys it | **Yes, until CER-5 lands.** Only the fee TRX is on the float then |
 | Policy admin keys (M-of-N) | Ed25519 | D-C | Sign policy bundles and unfreeze orders. Any one can freeze | No |
 | Monitor freeze key | Ed25519 | D-M | Freeze orders only. It can never unfreeze | No |
 | Monitor ack key (only if OD-1 is adopted) | Ed25519 | D-M | The liveness lease (§4) | No |

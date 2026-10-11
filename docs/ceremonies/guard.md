@@ -4,7 +4,7 @@
 |---|---|
 | **Version** | 0.1-draft, 2026-10-11 |
 | **Status** | **PROPOSED.** No ceremony has been held. The first real ceremonies are owner work (T07-6), gated by M7 and blocked on ADR-17. Several tools they use are not built yet; they are marked *(planned)*. |
-| **Covers** | Setting up the Guard line for one network (genesis, CER-0…CER-7), and the rotation and recovery ceremonies CER-R1…CER-R6 ([ROADMAP](../ROADMAP.md) M7 #4: "recorded key ceremony; encrypted Guard-key backup in 2 offline locations; restore drill; chain-native recovery drill"). |
+| **Covers** | Setting up the Guard line for one network (genesis: CER-0…CER-3, CER-F for the float account, then CER-4…CER-7), and the rotation and recovery ceremonies CER-R1…CER-R6 ([ROADMAP](../ROADMAP.md) M7 #4: "recorded key ceremony; encrypted Guard-key backup in 2 offline locations; restore drill; chain-native recovery drill"). |
 | **Public safety** | This file is public. Transcripts are private (§5) and hold public values only. |
 | **Owner** | WS-07 (R9, R2) maintains the procedure; the owner runs it. |
 
@@ -28,11 +28,11 @@ Vocabulary (domains, keys, float, soft and hard freeze) is in the [ops README](.
 ## 1. Rules for every ceremony
 
 1. **Nile first.** Every ceremony runs on Nile, then on mainnet with the same steps and the same transaction shapes. The mainnet run starts only after the Nile transcript has been reviewed.
-2. **The Guard is frozen until CER-7** (if it exists yet), which unfreezes it M-of-N ([RB-10](../ops/runbooks.md#rb-10-unfreeze)) before the co-signed test. The ceremony window is declared to the monitor in advance. Owner-signed transactions carry no co-sign receipt, so they raise Sev-1 alerts by design. The alerts in the table below are expected: acknowledge each one in the transcript against its transaction id, and close it there. Any other alert, or one of these on a transaction that is not in the ceremony plan, is real: stop (rule 7) and start at [RB-0](../ops/runbooks.md#rb-0-first-response-to-any-page). In an incident (RB-2…RB-9) the incident record stands in for the transcript.
+2. **The Guard is frozen until CER-7** (if it exists yet), which unfreezes it M-of-N ([RB-10](../ops/runbooks.md#rb-10-unfreeze)) before the co-signed test. The ceremony window is declared to the monitor in advance. Owner-signed transactions carry no co-sign receipt, so they raise Sev-1 alerts by design. The alerts in the table below are expected: acknowledge each one in the transcript against its transaction id, and close it there. Any other alert, or one of these on a transaction that is not in the ceremony plan, is real: stop (rule 7) and start at [RB-0](../ops/runbooks.md#rb-0-first-response-to-any-page). In an incident or a drill, the incident record or drill log stands in for the transcript.
 
    | Ceremony action | Used in | Expected alerts ([runbooks](../ops/runbooks.md) §1) |
    |---|---|---|
-   | Owner-signed permission update (contract type 46) | CER-5, CER-R1, CER-R4; RB-3, RB-4, RB-8 | MR-01 (contract type), MR-02 (owner permission), MR-04 (no co-sign receipt), MR-14 (until the account's permissions and the expected set in `monitor.toml` agree again) |
+   | Owner-signed permission update (contract type 46; at CER-5, signed by the float's original key) | CER-5, CER-R1, CER-R4; RB-3, RB-4, RB-8 | MR-01 (contract type), MR-02 (owner permission), MR-04 (no co-sign receipt), MR-14 (until the account's permissions and the expected set in `monitor.toml` agree again) |
    | Owner-signed `approve(spender, 0)` revocation | RB-2 | MR-02, MR-03 (not a plain transfer), MR-04. A zero-value `Approval` is Info, not MR-07 |
    | Owner-signed sweep to the cold treasury | RB-2, RB-3, RB-9 (excess beyond the MR-12 headroom) | MR-02, MR-04; MR-10 if it exceeds a monitor cap |
    | Guard lifecycle change the ceremony makes: bundle install or tightening, key rotation, state change | CER-4, CER-7, CER-R1…CER-R5 | MR-16 (Sev-2) |
@@ -58,7 +58,7 @@ Vocabulary (domains, keys, float, soft and hard freeze) is in the [ops README](.
 - [ ] Removable media, wiped and used only for the ceremony.
 - [ ] The Guard host and monitor host, built to the baseline, with the release digests verified on each host.
 - [ ] Printed copy of this procedure and the transcript template (§5); recording device.
-- [ ] TRX on the float for the permission update: read chain parameters #22 (permission update, documented at 100 TRX) and #23 (multi-signature fee, documented at 1 TRX) live at CER-0, and keep at least two updates' worth in reserve ([RB-3](../ops/runbooks.md#rb-3-guard-key-compromise-suspected-or-freeze-not-confirmed)).
+- [ ] TRX in the cold treasury to fund the float at CER-F: read chain parameters #22 (permission update, documented at 100 TRX) and #23 (multi-signature fee, documented at 1 TRX) live at CER-0. The float needs the CER-5 update plus a reserve of two more updates ([RB-3](../ops/runbooks.md#rb-3-guard-key-compromise-suspected-or-freeze-not-confirmed)).
 
 ---
 
@@ -116,6 +116,17 @@ On the monitor host:
 
 **Record:** freeze, ack and evidence public keys; `allowed_signers` SHA-256.
 
+### CER-F. Float account (genesis only)
+
+A new TRON account's owner and active permissions each hold only the account's own key, at threshold 1, so that key controls the float until the CER-5 update lands. It is therefore made on the air-gapped machine, signs exactly one transaction (CER-5), and is destroyed after the CER-6 read-back. CER-4 needs the float's address, so this step comes first.
+
+1. On the air-gapped machine, generate the float account key (secp256k1) in a RAM-backed directory, and keep that machine powered on until CER-6. The key is never written to disk or to removable media and has no backup. If the session breaks before CER-5 lands, the key is gone: abandon that account (the loss is its fee TRX) and repeat genesis from this step.
+2. Derive the float address from the public key with two independent tools, on two machines (rule 4), and compare. Only the public key and the address leave the air-gapped machine.
+3. Activate and fund the float with one TRX transfer from the cold treasury, after checking the destination on the networked machine against step 2. Send enough for the CER-5 update (#22; it carries one signature) plus the two-update reserve that must remain after it (#22 + #23 each; [RB-3](../ops/runbooks.md#rb-3-guard-key-compromise-suspected-or-freeze-not-confirmed) step 1): at the documented values, 302 TRX plus a margin for bandwidth. This is genesis funding, not a refill: the float is not yet in `monitor.toml` (CER-4). Nothing else goes to the float until the original key is destroyed (CER-6); its working balance comes later by refill ([RB-9](../ops/runbooks.md#rb-9-refill)).
+4. Read the account back on both monitor providers: it exists, its balance is what was sent, and its permissions name only the float's own key.
+
+**Record:** the float address and both tools' outputs; the funding transaction id; the read-back; the original key's label (never the key).
+
 ### CER-4. Genesis policy bundle and configuration
 
 1. Build the genesis bundle with `vaultex-policy` *(planned, T05-8)*:
@@ -125,7 +136,7 @@ On the monitor host:
    - tokens: each one through the token onboarding checklist ([runbooks](../ops/runbooks.md) §5);
    - the Guard key's address and the configured active permission id.
 2. M admins sign it. Install it **locally** on the Guard host, together with the admin-set file.
-3. Write `monitor.toml`: network and float address, token allowlist, the monitor's own caps (the written loss budget, not the bundle's), the float ceiling and its headroom per asset (MR-12), the destination allowlist, the **expected permission set** (CER-5), the Guard's receipt public key, certificate pin and endpoint, the pinned Guard release digest, the cold treasury address, the provider endpoints (never their keys), and alert routing.
+3. Write `monitor.toml`: network and float address, token allowlist, the monitor's own caps (the written loss budget, not the bundle's), the float ceiling and its headroom per asset (MR-12; for TRX, the ceiling minus its headroom covers the CER-F reserve, so refills can restore it), the destination allowlist, the **expected permission set** (CER-5), the Guard's receipt public key, certificate pin and endpoint, the pinned Guard release digest, the cold treasury address, the provider endpoints (never their keys), and alert routing.
 4. Write `guard.toml` *(planned, T06-5)*. Neither file holds a secret value.
 
 **Record:** SHA-256 of the bundle, the admin set, `monitor.toml` and `guard.toml`.
@@ -135,28 +146,32 @@ On the monitor host:
 1. On the networked machine, build the unsigned permission update for the float:
    - **owner** permission: threshold 2; the three owner keys, weight 1 each;
    - **active** permission, id 2: threshold 2; the operator key and the Guard key, weight 1 each; operations = TRX transfer (contract type 1) and smart-contract call (type 31) only. The 32-byte operations value is `0200008000000000000000000000000000000000000000000000000000000000`. Bit 46 (permission update) is **clear**, so the active permission can never rewrite permissions;
-   - no other active permission (on mainnet).
+   - no other active permission (on mainnet);
+   - the float's original key (CER-F) in **no** permission.
 2. Compare the unsigned JSON with the reviewed expected set field by field (keys, weights, thresholds, operations). In solo mode, a second reading on video.
 3. Move it to the air-gapped machine. Compute the transaction id with two independent tools and compare.
-4. Sign with two of the three owner devices. Each device's screen must show the same transaction id, or the fields of the update. If the device can only sign the hash of a permission update (blind signing), step 3 is the only check: do it twice, and switch that device setting off again after the ceremony.
+4. Sign.
+   - **At genesis**, the update is signed by the float's original key alone, on the air-gapped machine. Until it lands, that key is the account's only owner key, so the owner devices cannot sign it.
+   - **Later updates** (CER-R1, CER-R4; RB-3, RB-4, RB-8) are signed by two of the three owner devices. Each device's screen must show the same transaction id, or the fields of the update. If the device can only sign the hash of a permission update (blind signing), step 3 is the only check: do it twice, and switch that device setting off again after the ceremony.
 5. Broadcast from the networked machine.
 
-**Record:** transaction id; the expected-permission JSON's SHA-256; both tool outputs; which owner devices signed (by label).
+**Record:** transaction id; the expected-permission JSON's SHA-256; both tool outputs; which keys signed, by label (the float's original key at genesis, owner devices after).
 
 ### CER-6. Read-back and chain checks
 
 The Guard is still frozen, so nothing here goes through it.
 
-1. Read the account's permissions on both monitor providers and compare them with the expected set; the monitor reports MR-14 clear.
-2. On **Nile**, two checks that the chain itself enforces:
+1. Read the account's permissions on both monitor providers and compare them with the expected set. At genesis, also check that the float's original key is in **no** permission. The monitor reports MR-14 clear.
+2. **Genesis only:** destroy the float's original key, and only after step 1 passes; until then it is the one key that can correct the account (rule 7). Delete it and power the air-gapped machine off; it existed only in RAM (CER-F). Record the destruction in the transcript by the key's label, with the method, the time and the witness's initials.
+3. On **Nile**, two checks that the chain itself enforces:
    - a transaction with only the operator's signature must be rejected by the chain;
    - a permission update signed under the active permission must be rejected by the chain.
-3. Capture the baseline checks again on both hosts.
-4. Check that every alert the ceremony raised is in the rule-2 table (§1) and closed in the transcript.
+4. Capture the baseline checks again on both hosts.
+5. Check that every alert the ceremony raised is in the rule-2 table (§1) and closed in the transcript.
 
 A frozen Guard refuses co-signing with `FROZEN`, so the co-signed test transfer comes after the unfreeze (CER-7 step 3).
 
-**Record:** monitor read-back report; the rejection messages; the alert ids and how each was closed.
+**Record:** monitor read-back report; at genesis, the original key's destruction (label, method, time); the rejection messages; the alert ids and how each was closed.
 
 ### CER-7. Unfreeze, test and close
 
@@ -244,6 +259,12 @@ A rebuilt Guard or monitor host is not a key ceremony, but it is recorded like o
 ## Public keys and addresses
 | Key | Type | Public key or address | Derived on (two machines) |
 |---|---|---|---|
+| float account key (genesis only) | secp256k1 | float address | |
+
+## Keys destroyed or retired
+| Key (label) | Public key or address | Method (and medium or location label) | Time (UTC) | Initials |
+|---|---|---|---|---|
+| float original key (genesis only; after the CER-6 read-back) | | | | |
 
 ## File digests
 | File | SHA-256 | Computed on (two machines) |
@@ -274,4 +295,4 @@ Signatures: transcript.md.admin-<n>.sig (namespace vaultex-ceremony-v1)
 
 ## 6. K-alt variant
 
-If the Nile spike is NO-GO, the Guard holds no chain key and returns a signed decision instead, which the operator's own signer must verify before it signs ([threat model](../assurance/THREAT_MODEL_V2.md) §3.2, LM10). The ceremonies then change as follows: CER-2 makes only the receipt key; CER-5 puts only the operator key in the active permission, still without the permission-update bit; the operator's signer pins the Guard's receipt public key, recorded in the transcript; and CER-R1 rotates the operator's pin instead of an on-chain key. This file will be revised in full if K-alt is adopted.
+If the Nile spike is NO-GO, the Guard holds no chain key and returns a signed decision instead, which the operator's own signer must verify before it signs ([threat model](../assurance/THREAT_MODEL_V2.md) §3.2, LM10). The ceremonies then change as follows: CER-2 makes only the receipt key; CER-F is unchanged; CER-5, still signed at genesis by the float's original key alone, puts only the operator key in the active permission, still without the permission-update bit, and CER-6 still checks that the original key is in no permission before destroying it; the operator's signer pins the Guard's receipt public key, recorded in the transcript; and CER-R1 rotates the operator's pin instead of an on-chain key. This file will be revised in full if K-alt is adopted.
