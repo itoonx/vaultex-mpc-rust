@@ -99,18 +99,24 @@ impl Cursor {
             .iter()
             .map(|(h, id)| format!("{h} {id}\n"))
             .collect();
-        let tmp = path.with_extension("tmp");
-        let mut file = File::create(&tmp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&tmp, path)?;
-        // Make the rename itself durable.
-        let dir = path
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        File::open(dir)?.sync_all()
+        write_atomic(path, text.as_bytes())
     }
+}
+
+/// Replaces the file at `path` with `bytes` atomically and durably: write a temporary file,
+/// fsync it, rename it over `path`, fsync the directory.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let mut file = File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&tmp, path)?;
+    // Make the rename itself durable.
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    File::open(dir)?.sync_all()
 }
 
 #[cfg(test)]

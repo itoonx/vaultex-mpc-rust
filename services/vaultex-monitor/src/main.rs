@@ -1,43 +1,58 @@
 //! Vaultex outflow monitor (ROADMAP M7 #3, WS-07): watches the chain, matches every outflow to a
 //! receipt, alerts on approvals and allowances, and can only freeze.
 //!
-//! **Status: chain watcher only (T07-2).** `vaultex-monitor watch` follows TRON on at least two
-//! independent public providers, each with its own persisted cursor, and prints JSON lines on
-//! stdout:
-//! - `watched_tx`: a transaction signed by a watched address, per provider ("alarm on any");
-//! - `reorg`: a block left a provider's chain and is scanned again;
-//! - `provider_health` (every minute) and `no_healthy_provider` (every provider degraded);
-//! - `provider_failed`: a provider's watcher stopped on a fatal error.
+//! - `vaultex-monitor watch` follows TRON on at least two independent public providers, each with
+//!   its own persisted cursor, and prints JSON lines on stdout: `watched_tx` (a transaction signed
+//!   by a watched address, per provider: "alarm on any"), `token_pull` (a `transferFrom` taking a
+//!   watched address's tokens), `reorg`, `provider_health` (every minute), `no_healthy_provider`
+//!   and `provider_failed`. With `--config monitor.json` it also matches the float's transactions
+//!   to the Guard's receipts, reads the float's allowances every minute, and prints `alert` lines
+//!   (rules MR-01–MR-04, MR-06–MR-11 and MR-19: see [`matcher`]).
+//! - `vaultex-monitor refill-check` runs the check required before every refill ([`refill`]):
+//!   exit 0 PASS, 1 FAIL, 2 could not complete.
 //!
-//! Receipt matching, token-event logs, solidified-height agreement, alerts and the freeze path
-//! come in later tasks (T07-3, T07-4).
+//! Not built yet: the soft-freeze path (T07-4; alerts marked `freeze` are only reported), the
+//! independent intent-digest check (MR-05, after the `INTENT_V1` RFC), token event logs,
+//! solidified-height agreement between providers, balance reconciliation and the permission
+//! snapshot.
 
+mod abi;
 mod cursor;
+mod matcher;
 mod provider;
+mod receipts;
+mod refill;
 mod watcher;
 
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use serde::Serialize;
 use serde_json::json;
 
+use matcher::{Alert, Config, Matcher, TRX};
 use provider::{Backoff, HttpProvider, Provider, ProviderError};
+use receipts::{load_anchor, save_anchor, ReceiptFeed};
 use watcher::{Progress, WatchError, Watcher};
 
-/// Built-in public providers, all keyless: two per network, run by different operators.
-/// Sources (fetched 2026-10-11): developers.tron.network/docs/networks (TronGrid for mainnet and
-/// Nile; the community-run `api.nileex.io` for Nile) and tron.publicnode.com (PublicNode mainnet).
-/// Shasta has a single documented endpoint, so it needs `--provider`.
-const NETWORKS: &[(&str, &[(&str, &str)])] = &[
+/// Providers as (name, URL).
+type BuiltIn = &'static [(&'static str, &'static str)];
+
+/// Built-in public providers, all keyless: two per network, run by different operators, with the
+/// network's CAIP-2 id. Sources (fetched 2026-10-11): developers.tron.network/docs/networks
+/// (TronGrid for mainnet and Nile; the community-run `api.nileex.io` for Nile) and
+/// tron.publicnode.com (PublicNode mainnet). Shasta has a single documented endpoint, so it needs
+/// `--provider`.
+const NETWORKS: &[(&str, &str, BuiltIn)] = &[
     (
         "mainnet",
+        "tron:728126428",
         &[
             ("trongrid", "https://api.trongrid.io"),
             ("publicnode", "https://tron-rpc.publicnode.com"),
@@ -45,6 +60,7 @@ const NETWORKS: &[(&str, &[(&str, &str)])] = &[
     ),
     (
         "nile",
+        "tron:3448148188",
         &[
             ("trongrid-nile", "https://nile.trongrid.io"),
             ("nileex", "https://api.nileex.io"),
@@ -57,16 +73,22 @@ const POLL: Duration = Duration::from_secs(3);
 /// A provider with no successful call for this long is degraded.
 const DEGRADED_AFTER: Duration = Duration::from_secs(300);
 const HEALTH_EVERY: Duration = Duration::from_secs(60);
+/// How often the receipt log is read; well inside the matcher's grace period.
+const RECEIPT_POLL: Duration = Duration::from_secs(2);
+/// How often each provider reads the float's allowances (rule MR-08).
+const ALLOWANCE_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Parser)]
-#[command(version, about = "Vaultex outflow monitor (chain watcher only so far)")]
+#[command(version, about = "Vaultex outflow monitor")]
 enum Cli {
     /// Follow the chain on two or more providers and print JSON lines on stdout.
     Watch(WatchArgs),
+    /// Check, before a refill, that the float has no allowance and every outflow is accounted for.
+    RefillCheck(RefillArgs),
 }
 
 #[derive(clap::Args)]
-struct WatchArgs {
+struct Sources {
     /// Network whose built-in public providers to use: mainnet or nile.
     #[arg(
         long,
@@ -77,27 +99,80 @@ struct WatchArgs {
     /// Use these providers instead, as NAME=URL (repeat; at least two).
     #[arg(long = "provider", value_name = "NAME=URL", value_parser = parse_provider)]
     providers: Vec<(String, String)>,
-    /// TRON address (T…) whose transactions to report (repeat). Without one, the watcher only
-    /// scans, which serves as a provider soak test.
-    #[arg(long = "watch", value_name = "ADDRESS", value_parser = watcher::address_hex)]
-    watch: Vec<String>,
-    /// Directory for one cursor file per provider. Use one directory per network.
-    #[arg(long)]
-    state_dir: PathBuf,
-    /// First height to scan for a provider without a cursor (default: its current head).
-    #[arg(long)]
-    from_height: Option<u64>,
     /// Minimum spacing between two requests to one provider, in milliseconds.
     #[arg(long, default_value_t = 350)]
     min_interval_ms: u64,
 }
 
+#[derive(clap::Args)]
+struct WatchArgs {
+    #[command(flatten)]
+    sources: Sources,
+    /// TRON address (T…) whose transactions to report (repeat). Without one and without
+    /// `--config`, the watcher only scans, which serves as a provider soak test.
+    #[arg(long = "watch", value_name = "ADDRESS", value_parser = watcher::address_hex)]
+    watch: Vec<String>,
+    /// Directory for one cursor file per provider and the matcher's state. Use one per network.
+    #[arg(long)]
+    state_dir: PathBuf,
+    /// First height to scan for a provider without a cursor (default: its current head).
+    #[arg(long)]
+    from_height: Option<u64>,
+    /// The monitor configuration (`monitor.json`): watch its float, match its transactions to
+    /// the Guard's receipts, and raise alerts.
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct RefillArgs {
+    #[command(flatten)]
+    sources: Sources,
+    /// The monitor configuration (`monitor.json`).
+    #[arg(long)]
+    config: PathBuf,
+    /// The state directory that `watch --config` keeps.
+    #[arg(long)]
+    state_dir: PathBuf,
+    /// The asset to refill: TRX, or a listed token's address (T…).
+    #[arg(long, value_parser = parse_asset)]
+    asset: String,
+    /// The refill amount, in base units (sun for TRX).
+    #[arg(long)]
+    amount: u128,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    let Cli::Watch(args) = Cli::parse();
-    let Err(e) = run(args).await;
-    eprintln!("vaultex-monitor: {e}");
-    ExitCode::FAILURE
+    match Cli::parse() {
+        Cli::Watch(args) => {
+            let Err(e) = run(args).await;
+            eprintln!("vaultex-monitor: {e}");
+            ExitCode::FAILURE
+        }
+        Cli::RefillCheck(args) => match refill_check(args).await {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("vaultex-monitor: refill check could not complete: {e}");
+                ExitCode::from(2)
+            }
+        },
+    }
+}
+
+fn parse_asset(s: &str) -> Result<String, String> {
+    if s == TRX {
+        Ok(TRX.to_owned())
+    } else {
+        watcher::address_hex(s)
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 fn parse_provider(s: &str) -> Result<(String, String), String> {
@@ -117,16 +192,17 @@ fn parse_provider(s: &str) -> Result<(String, String), String> {
     Ok((name.to_owned(), url.to_owned()))
 }
 
-/// The providers to watch: at least two, with distinct names (they name the cursor files) and URLs.
-fn resolve_providers(args: &WatchArgs) -> Result<Vec<(String, String)>, String> {
+/// The providers to use: at least two, with distinct names (they name the cursor files) and URLs.
+fn resolve_providers(args: &Sources) -> Result<Vec<(String, String)>, String> {
     let list: Vec<(String, String)> = if args.providers.is_empty() {
         let network = args.network.as_deref().unwrap_or_default();
-        let (_, built_in) = NETWORKS
-            .iter()
-            .find(|(n, _)| *n == network)
-            .ok_or_else(|| {
-                format!("unknown network {network:?}: use mainnet, nile or --provider")
-            })?;
+        let (_, _, built_in) =
+            NETWORKS
+                .iter()
+                .find(|(n, _, _)| *n == network)
+                .ok_or_else(|| {
+                    format!("unknown network {network:?}: use mainnet, nile or --provider")
+                })?;
         built_in
             .iter()
             .map(|(n, u)| (n.to_string(), u.to_string()))
@@ -142,36 +218,153 @@ fn resolve_providers(args: &WatchArgs) -> Result<Vec<(String, String)>, String> 
     Ok(list)
 }
 
+/// With a built-in network, the configuration must name the same network.
+fn check_network(cfg: &Config, sources: &Sources) -> Result<(), String> {
+    let Some(name) = &sources.network else {
+        return Ok(()); // custom providers: the operator vouches for them
+    };
+    match NETWORKS.iter().find(|(n, _, _)| n == name) {
+        Some((_, caip2, _)) if *caip2 == cfg.network.as_str() => Ok(()),
+        _ => Err(format!(
+            "--network {name} does not match the configured network {}",
+            cfg.network.as_str()
+        )),
+    }
+}
+
+fn http_providers(sources: &Sources) -> Result<Vec<HttpProvider>, String> {
+    let interval = Duration::from_millis(sources.min_interval_ms);
+    resolve_providers(sources)?
+        .into_iter()
+        .map(|(name, url)| {
+            HttpProvider::new(&name, &url, interval).map_err(|e| format!("{name}: {e}"))
+        })
+        .collect()
+}
+
+async fn refill_check(args: RefillArgs) -> Result<bool, String> {
+    let cfg = Config::load(&args.config)?;
+    check_network(&cfg, &args.sources)?;
+    let providers = http_providers(&args.sources)?;
+    let (report, pass) = refill::check(
+        &providers,
+        &cfg,
+        &args.state_dir,
+        &args.asset,
+        args.amount,
+        now_ms(),
+    )
+    .await?;
+    print!("{report}");
+    Ok(pass)
+}
+
+/// The matcher with its receipt source, when `watch` runs with a configuration.
+struct Monitor {
+    matcher: Arc<Mutex<Matcher>>,
+    feed: ReceiptFeed,
+    anchor: PathBuf,
+}
+
+impl Monitor {
+    fn open(path: &Path, sources: &Sources, state_dir: &Path) -> Result<Self, String> {
+        let cfg = Config::load(path)?;
+        check_network(&cfg, sources)?;
+        let anchor = state_dir.join(matcher::ANCHOR);
+        let head = load_anchor(&anchor).map_err(|e| format!("{}: {e}", anchor.display()))?;
+        let feed = ReceiptFeed::new(cfg.receipt_log.clone(), cfg.receipt_key, head);
+        let matcher = Matcher::open(cfg, state_dir, now_ms())
+            .map_err(|e| format!("{}: {e}", state_dir.display()))?;
+        Ok(Self {
+            matcher: Arc::new(Mutex::new(matcher)),
+            feed,
+            anchor,
+        })
+    }
+
+    /// Reads new receipts, anchors the new head, and settles transactions whose grace ran out.
+    fn poll(&mut self) -> Result<(), String> {
+        let now = now_ms();
+        let polled = self.feed.poll();
+        if let (Ok(bodies), Some(head)) = (&polled, self.feed.head()) {
+            if !bodies.is_empty() {
+                save_anchor(&self.anchor, head)
+                    .map_err(|e| format!("cannot persist the receipt anchor: {e}"))?;
+            }
+        }
+        let mut m = self.matcher.lock().unwrap();
+        let mut alerts = match polled {
+            Ok(bodies) => m.receipts(&bodies, now),
+            Err(broken) => m.broken_receipts(&broken, now),
+        }
+        .map_err(journal_error)?;
+        alerts.extend(m.tick(now).map_err(journal_error)?);
+        drop(m);
+        emit_alerts(&alerts).map_err(|e| format!("cannot write alerts: {e}"))
+    }
+}
+
+fn journal_error(e: io::Error) -> String {
+    format!("cannot journal: {e}")
+}
+
 async fn run(args: WatchArgs) -> Result<Infallible, String> {
-    let providers = resolve_providers(&args)?;
+    let providers = http_providers(&args.sources)?;
     std::fs::create_dir_all(&args.state_dir)
         .map_err(|e| format!("{}: {e}", args.state_dir.display()))?;
-    let watch: HashSet<String> = args.watch.iter().cloned().collect();
+    let mut monitor = match &args.config {
+        Some(path) => Some(Monitor::open(path, &args.sources, &args.state_dir)?),
+        None => None,
+    };
+    let mut watch: HashSet<String> = args.watch.iter().cloned().collect();
+    let mut tokens = HashSet::new();
+    if let Some(m) = &monitor {
+        let m = m.matcher.lock().unwrap();
+        watch.insert(m.config().float.clone());
+        tokens.extend(m.config().tokens().cloned());
+    }
     if watch.is_empty() {
-        eprintln!("vaultex-monitor: no --watch address; scanning only");
+        eprintln!("vaultex-monitor: no --watch address or --config; scanning only");
     }
 
     let mut tasks = tokio::task::JoinSet::new();
     let mut healths = Vec::new();
-    for (name, url) in providers {
-        let interval = Duration::from_millis(args.min_interval_ms);
-        let provider =
-            HttpProvider::new(&name, &url, interval).map_err(|e| format!("{name}: {e}"))?;
+    for provider in providers {
+        let provider = Arc::new(provider);
+        let name = provider.name().to_owned();
         let cursor = args.state_dir.join(format!("{name}.cursor"));
-        let w = Watcher::open(provider, watch.clone(), cursor, args.from_height)
-            .map_err(|e| format!("{name}: {e}"))?;
+        let w = Watcher::open(
+            Arc::clone(&provider),
+            watch.clone(),
+            tokens.clone(),
+            cursor,
+            args.from_height,
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
         let health = Arc::new(Mutex::new(Health::new(&name)));
         healths.push(Arc::clone(&health));
+        let matcher = monitor.as_ref().map(|m| Arc::clone(&m.matcher));
+        if let Some(matcher) = matcher.clone() {
+            let name = format!("{name} (allowance reads)");
+            tasks.spawn(async move {
+                let Err(e) = allowance_loop(provider, matcher).await;
+                (name, e)
+            });
+        }
         tasks.spawn(async move {
-            let Err(e) = watch_loop(w, health).await;
+            let Err(e) = watch_loop(w, health, matcher).await;
             (name, e)
         });
     }
 
     let mut tick = tokio::time::interval(HEALTH_EVERY);
     tick.tick().await; // the first tick is immediate
+    let mut receipt_tick = tokio::time::interval(RECEIPT_POLL);
     loop {
         tokio::select! {
+            _ = receipt_tick.tick(), if monitor.is_some() => {
+                monitor.as_mut().expect("guarded by the branch condition").poll()?;
+            }
             done = tasks.join_next() => {
                 let Some(done) = done else {
                     return Err("every provider watcher stopped".into());
@@ -193,11 +386,14 @@ async fn run(args: WatchArgs) -> Result<Infallible, String> {
     }
 }
 
-/// Runs one provider's watcher until a fatal error: provider errors back off and retry, cursor or
-/// output failures stop it (fail closed: its health turns degraded and the failure is printed).
+/// Runs one provider's watcher until a fatal error: provider errors back off and retry, cursor,
+/// journal or output failures stop it (fail closed: its health turns degraded and the failure is
+/// printed). With a matcher, a step's transactions are classified and journaled before its events
+/// are printed and its cursor is committed.
 async fn watch_loop<P: Provider>(
     mut w: Watcher<P>,
     health: Arc<Mutex<Health>>,
+    matcher: Option<Arc<Mutex<Matcher>>>,
 ) -> Result<Infallible, String> {
     let name = w.name().to_owned();
     let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(60));
@@ -208,7 +404,16 @@ async fn watch_loop<P: Provider>(
                 backoff.reset();
                 match progress {
                     Progress::Scanned(events) => {
+                        let alerts = match &matcher {
+                            Some(m) => m
+                                .lock()
+                                .unwrap()
+                                .observe(&events, now_ms())
+                                .map_err(journal_error)?,
+                            None => Vec::new(),
+                        };
                         emit(&events).map_err(|e| format!("cannot write events: {e}"))?;
+                        emit_alerts(&alerts).map_err(|e| format!("cannot write alerts: {e}"))?;
                         w.commit()
                             .map_err(|e| format!("cannot persist the cursor: {e}"))?;
                     }
@@ -227,6 +432,53 @@ async fn watch_loop<P: Provider>(
             Err(fatal) => return Err(fatal.to_string()),
         }
     }
+}
+
+/// Reads the float's allowances on every listed token to every spender in the watched set, once
+/// a minute, on one provider (rule MR-08). A failed read ends the round; the next round retries.
+async fn allowance_loop<P: Provider>(
+    p: P,
+    matcher: Arc<Mutex<Matcher>>,
+) -> Result<Infallible, String> {
+    let mut tick = tokio::time::interval(ALLOWANCE_EVERY);
+    loop {
+        tick.tick().await;
+        let (float, tokens, spenders) = {
+            let m = matcher.lock().unwrap();
+            let tokens: Vec<String> = m.config().tokens().cloned().collect();
+            (m.config().float.clone(), tokens, m.spenders())
+        };
+        'round: for token in &tokens {
+            for spender in &spenders {
+                let params = abi::encode_address(&float) + &abi::encode_address(spender);
+                match p.call(&float, token, abi::ALLOWANCE, &params, false).await {
+                    Ok(value) => {
+                        let alerts = matcher
+                            .lock()
+                            .unwrap()
+                            .allowance(p.name(), token, spender, &value, now_ms())
+                            .map_err(journal_error)?;
+                        emit_alerts(&alerts).map_err(|e| format!("cannot write alerts: {e}"))?;
+                    }
+                    Err(e) => {
+                        eprintln!("vaultex-monitor: {}: allowance read failed: {e}", p.name());
+                        break 'round;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Prints alerts as `alert` JSON lines.
+fn emit_alerts(alerts: &[Alert]) -> io::Result<()> {
+    emit(&alerts.iter().map(alert_line).collect::<Vec<_>>())
+}
+
+fn alert_line(a: &Alert) -> serde_json::Value {
+    let mut line = json!(a);
+    line["kind"] = "alert".into();
+    line
 }
 
 /// Writes one JSON line per item to stdout and flushes, so a line is delivered before the cursor
@@ -301,9 +553,12 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
 
-    fn args(cli: &[&str]) -> Result<WatchArgs, clap::Error> {
+    fn args(cli: &[&str]) -> Result<Sources, clap::Error> {
         let argv = ["vaultex-monitor", "watch", "--state-dir", "s"];
-        Cli::try_parse_from(argv.iter().chain(cli)).map(|Cli::Watch(a)| a)
+        match Cli::try_parse_from(argv.iter().chain(cli))? {
+            Cli::Watch(a) => Ok(a.sources),
+            Cli::RefillCheck(_) => unreachable!(),
+        }
     }
 
     #[test]
@@ -313,7 +568,7 @@ mod tests {
 
     #[test]
     fn every_built_in_network_has_two_distinct_keyless_providers() {
-        for (network, _) in NETWORKS {
+        for (network, _, _) in NETWORKS {
             let list = resolve_providers(&args(&["--network", network]).unwrap()).unwrap();
             assert!(list.len() >= 2, "{network}");
             assert!(list.iter().all(|(_, url)| url.starts_with("https://")));
@@ -359,6 +614,71 @@ mod tests {
             "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6u"
         ])
         .is_err());
+    }
+
+    #[test]
+    fn refill_check_arguments_and_network_match() {
+        let parse = |extra: &[&str]| {
+            let argv = [
+                "vaultex-monitor",
+                "refill-check",
+                "--config",
+                "m.json",
+                "--state-dir",
+                "s",
+                "--network",
+                "nile",
+            ];
+            match Cli::try_parse_from(argv.iter().chain(extra)) {
+                Ok(Cli::RefillCheck(a)) => Ok((a.asset, a.amount)),
+                Ok(Cli::Watch(_)) => unreachable!(),
+                Err(e) => Err(e),
+            }
+        };
+        assert_eq!(
+            parse(&["--asset", "TRX", "--amount", "5"]).unwrap(),
+            (TRX.to_owned(), 5)
+        );
+        let usdt = parse(&[
+            "--asset",
+            "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+            "--amount",
+            "1",
+        ]);
+        assert_eq!(
+            usdt.unwrap().0,
+            "41a614f803b6fd780986a42c78ec9c7f77e6ded13c"
+        );
+        assert!(parse(&["--asset", "trx", "--amount", "5"]).is_err());
+        assert!(parse(&["--asset", "TRX", "--amount", "-1"]).is_err());
+        assert!(parse(&["--asset", "TRX"]).is_err());
+
+        let cfg = matcher::tests::config("open"); // a Nile configuration
+        assert!(check_network(&cfg, &args(&["--network", "nile"]).unwrap()).is_ok());
+        assert!(check_network(&cfg, &args(&["--network", "mainnet"]).unwrap()).is_err());
+        let custom = args(&[
+            "--provider",
+            "a=https://a.example",
+            "--provider",
+            "b=https://b.example",
+        ]);
+        assert!(check_network(&cfg, &custom.unwrap()).is_ok());
+    }
+
+    #[test]
+    fn alerts_print_as_alert_lines() {
+        let a = Alert {
+            id: "MR-04:ab".into(),
+            rule: "MR-04".into(),
+            severity: 1,
+            freeze: true,
+            detail: "no accept receipt".into(),
+            at_ms: 5,
+        };
+        let line = alert_line(&a);
+        assert_eq!(line["kind"], "alert");
+        assert_eq!(line["id"], "MR-04:ab");
+        assert_eq!(line["freeze"], true);
     }
 
     #[test]

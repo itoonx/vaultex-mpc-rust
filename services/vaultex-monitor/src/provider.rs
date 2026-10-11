@@ -1,16 +1,19 @@
 //! Chain data sources.
 //!
-//! A [`Provider`] serves TRON blocks. [`HttpProvider`] speaks the standard java-tron HTTP API
-//! (`/wallet/getnowblock`, `/wallet/getblockbynum`) that the public endpoints expose. It is keyless,
-//! spaces its own requests, bounds every call with timeouts, and classifies HTTP 429/403 as rate
-//! limiting so the caller can back off ([`Backoff`]).
+//! A [`Provider`] serves TRON blocks and a few state reads. [`HttpProvider`] speaks the standard
+//! java-tron HTTP API that the public endpoints expose: `/wallet/getnowblock` and
+//! `/wallet/getblockbynum` for blocks, `triggerconstantcontract` for TRC-20 reads, and the
+//! `/walletsolidity/` variants for solidified state. It is keyless, spaces its own requests, bounds
+//! every call with timeouts, and classifies HTTP 429/403 as rate limiting so the caller can back
+//! off ([`Backoff`]).
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use reqwest::header::RETRY_AFTER;
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A block as the watcher needs it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,14 +34,29 @@ pub struct Tx {
     pub contracts: Vec<Contract>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One contract of a transaction, as the provider's own protobuf parser rendered it. Addresses
+/// are 21-byte hex with the `41` prefix, lowercase; a field the contract type lacks is empty or 0.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Contract {
     /// For example `TransferContract` or `TriggerSmartContract`.
+    #[serde(rename = "type")]
     pub kind: String,
-    /// `owner_address`: 21-byte hex with the `41` prefix, lowercase (empty if absent).
+    /// `owner_address`: the signing account.
     pub owner: String,
     /// `Permission_id`: 0 is the owner permission, 2–9 are active permissions.
     pub permission_id: u32,
+    /// `to_address` (TRX and TRC-10 transfers).
+    pub to: String,
+    /// `amount` (TRX and TRC-10 transfers), in base units.
+    pub amount: i64,
+    /// `contract_address` (contract calls).
+    pub contract_address: String,
+    /// `data` (contract calls): the call data, lowercase hex.
+    pub data: String,
+    /// `call_value` in sun (contract calls).
+    pub call_value: i64,
+    /// `call_token_value` (TRC-10 sent with a contract call).
+    pub call_token_value: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +73,11 @@ pub enum ProviderError {
     Unavailable(String),
 }
 
-/// A source of TRON blocks at latest (unsolidified) height.
+/// A 256-bit ABI word, big-endian.
+pub type Word = [u8; 32];
+
+/// A source of TRON blocks at latest (unsolidified) height, and of account state at latest or
+/// solidified height.
 pub trait Provider: Send + Sync {
     /// Short, file-name-safe name; it keys the provider's cursor and its events.
     fn name(&self) -> &str;
@@ -63,6 +85,57 @@ pub trait Provider: Send + Sync {
     fn latest(&self) -> impl Future<Output = Result<Block, ProviderError>> + Send;
     /// The block at `height`; an error if the provider does not have it yet.
     fn block(&self, height: u64) -> impl Future<Output = Result<Block, ProviderError>> + Send;
+    /// The height of the provider's latest solidified block.
+    fn solid_height(&self) -> impl Future<Output = Result<u64, ProviderError>> + Send;
+    /// Calls the read-only `function` (for example `allowance(address,address)`) of `contract`
+    /// with ABI-encoded `params` (hex) as `caller`, and returns the single word it returns.
+    fn call(
+        &self,
+        caller: &str,
+        contract: &str,
+        function: &str,
+        params: &str,
+        solid: bool,
+    ) -> impl Future<Output = Result<Word, ProviderError>> + Send;
+    /// The TRX balance of `address`, in sun (0 for an account that does not exist).
+    fn trx_balance(
+        &self,
+        address: &str,
+        solid: bool,
+    ) -> impl Future<Output = Result<u64, ProviderError>> + Send;
+}
+
+/// One provider shared by its watcher and its state reads, so both go through its request spacing.
+impl<P: Provider> Provider for Arc<P> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+    fn latest(&self) -> impl Future<Output = Result<Block, ProviderError>> + Send {
+        (**self).latest()
+    }
+    fn block(&self, height: u64) -> impl Future<Output = Result<Block, ProviderError>> + Send {
+        (**self).block(height)
+    }
+    fn solid_height(&self) -> impl Future<Output = Result<u64, ProviderError>> + Send {
+        (**self).solid_height()
+    }
+    fn call(
+        &self,
+        caller: &str,
+        contract: &str,
+        function: &str,
+        params: &str,
+        solid: bool,
+    ) -> impl Future<Output = Result<Word, ProviderError>> + Send {
+        (**self).call(caller, contract, function, params, solid)
+    }
+    fn trx_balance(
+        &self,
+        address: &str,
+        solid: bool,
+    ) -> impl Future<Output = Result<u64, ProviderError>> + Send {
+        (**self).trx_balance(address, solid)
+    }
 }
 
 /// A java-tron HTTP endpoint, used without an API key.
@@ -94,12 +167,8 @@ impl HttpProvider {
         })
     }
 
-    async fn fetch(
-        &self,
-        path: &str,
-        body: serde_json::Value,
-        want: Option<u64>,
-    ) -> Result<Block, ProviderError> {
+    /// POSTs `body` to `path` and returns the response body of a 2xx answer.
+    async fn post(&self, path: &str, body: serde_json::Value) -> Result<Vec<u8>, ProviderError> {
         // Client-side spacing, so a catch-up burst does not trip the provider's limiter.
         {
             let mut last = self.last_request.lock().await;
@@ -136,7 +205,16 @@ impl HttpProvider {
             .bytes()
             .await
             .map_err(|e| ProviderError::Unavailable(e.without_url().to_string()))?;
-        parse_block(&bytes, want)
+        Ok(bytes.to_vec())
+    }
+}
+
+/// `/wallet/…` for latest state, `/walletsolidity/…` for solidified state.
+fn api(solid: bool) -> &'static str {
+    if solid {
+        "/walletsolidity"
+    } else {
+        "/wallet"
     }
 }
 
@@ -146,17 +224,55 @@ impl Provider for HttpProvider {
     }
 
     async fn latest(&self) -> Result<Block, ProviderError> {
-        self.fetch("/wallet/getnowblock", serde_json::json!({}), None)
-            .await
+        let body = self
+            .post("/wallet/getnowblock", serde_json::json!({}))
+            .await?;
+        parse_block(&body, None)
     }
 
     async fn block(&self, height: u64) -> Result<Block, ProviderError> {
-        self.fetch(
-            "/wallet/getblockbynum",
-            serde_json::json!({ "num": height }),
-            Some(height),
-        )
-        .await
+        let body = self
+            .post(
+                "/wallet/getblockbynum",
+                serde_json::json!({ "num": height }),
+            )
+            .await?;
+        parse_block(&body, Some(height))
+    }
+
+    // ponytail: the whole solidified block is fetched for its height; this runs only in the refill
+    // check, never in the polling loop.
+    async fn solid_height(&self) -> Result<u64, ProviderError> {
+        let body = self
+            .post("/walletsolidity/getnowblock", serde_json::json!({}))
+            .await?;
+        Ok(parse_block(&body, None)?.height)
+    }
+
+    async fn call(
+        &self,
+        caller: &str,
+        contract: &str,
+        function: &str,
+        params: &str,
+        solid: bool,
+    ) -> Result<Word, ProviderError> {
+        let body = serde_json::json!({
+            "owner_address": caller,
+            "contract_address": contract,
+            "function_selector": function,
+            "parameter": params,
+        });
+        let path = format!("{}/triggerconstantcontract", api(solid));
+        parse_call(&self.post(&path, body).await?)
+    }
+
+    async fn trx_balance(&self, address: &str, solid: bool) -> Result<u64, ProviderError> {
+        let path = format!("{}/getaccount", api(solid));
+        let body = self
+            .post(&path, serde_json::json!({ "address": address }))
+            .await?;
+        parse_balance(&body)
     }
 }
 
@@ -228,6 +344,18 @@ struct RawParameter {
 struct RawValue {
     #[serde(default)]
     owner_address: String,
+    #[serde(default)]
+    to_address: String,
+    #[serde(default)]
+    amount: i64,
+    #[serde(default)]
+    contract_address: String,
+    #[serde(default)]
+    data: String,
+    #[serde(default)]
+    call_value: i64,
+    #[serde(default)]
+    call_token_value: i64,
 }
 
 /// Parses and validates a block response. `want` is the height that was asked for, if any.
@@ -271,13 +399,19 @@ pub fn parse_block(body: &[u8], want: Option<u64>) -> Result<Block, ProviderErro
                 .raw_data
                 .contract
                 .into_iter()
-                .map(|c| Contract {
-                    kind: c.kind,
-                    owner: c
-                        .parameter
-                        .map(|p| p.value.owner_address.to_ascii_lowercase())
-                        .unwrap_or_default(),
-                    permission_id: c.permission_id,
+                .map(|c| {
+                    let v = c.parameter.map(|p| p.value).unwrap_or_default();
+                    Contract {
+                        kind: c.kind,
+                        owner: v.owner_address.to_ascii_lowercase(),
+                        permission_id: c.permission_id,
+                        to: v.to_address.to_ascii_lowercase(),
+                        amount: v.amount,
+                        contract_address: v.contract_address.to_ascii_lowercase(),
+                        data: v.data.to_ascii_lowercase(),
+                        call_value: v.call_value,
+                        call_token_value: v.call_token_value,
+                    }
                 })
                 .collect(),
         })
@@ -289,6 +423,88 @@ pub fn parse_block(body: &[u8], want: Option<u64>) -> Result<Block, ProviderErro
         time_ms: header.timestamp,
         txs,
     })
+}
+
+// `triggerconstantcontract` JSON, reduced to what a read needs.
+#[derive(Deserialize)]
+struct RawCall {
+    #[serde(rename = "Error")]
+    error: Option<String>,
+    result: Option<RawCallResult>,
+    #[serde(default)]
+    constant_result: Vec<String>,
+    transaction: Option<RawCallTx>,
+}
+
+#[derive(Deserialize)]
+struct RawCallResult {
+    #[serde(default)]
+    result: bool,
+    code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawCallTx {
+    #[serde(default)]
+    ret: Vec<RawCallRet>,
+}
+
+#[derive(Deserialize)]
+struct RawCallRet {
+    ret: Option<String>,
+}
+
+/// Parses a read-only call: it must have succeeded and returned exactly one word. A revert or any
+/// other shape is an error, never a zero.
+pub fn parse_call(body: &[u8]) -> Result<Word, ProviderError> {
+    let unavailable = |msg: String| ProviderError::Unavailable(msg);
+    let raw: RawCall = serde_json::from_slice(body)
+        .map_err(|e| unavailable(format!("malformed call response: {e}")))?;
+    if let Some(e) = raw.error {
+        return Err(unavailable(format!("node error: {}", clip(&e))));
+    }
+    let result = raw
+        .result
+        .ok_or_else(|| unavailable("call without result".into()))?;
+    if !result.result || result.code.is_some_and(|c| c != "SUCCESS") {
+        let msg = result.message.unwrap_or_default();
+        return Err(unavailable(format!("call refused: {}", clip(&msg))));
+    }
+    let failed = raw
+        .transaction
+        .and_then(|t| t.ret.into_iter().next())
+        .and_then(|r| r.ret)
+        .is_some_and(|r| r != "SUCESS" && r != "SUCCESS"); // java-tron spells it SUCESS
+    let [word] = raw.constant_result.as_slice() else {
+        return Err(unavailable("call did not return one word".into()));
+    };
+    let mut out = [0u8; 32];
+    match hex::decode_to_slice(word, &mut out) {
+        Ok(()) if !failed => Ok(out),
+        _ => Err(unavailable(format!("call failed: {}", clip(word)))),
+    }
+}
+
+#[derive(Deserialize)]
+struct RawAccount {
+    #[serde(rename = "Error")]
+    error: Option<String>,
+    #[serde(default)]
+    balance: u64,
+}
+
+/// Parses `getaccount`: java-tron answers `{}` for an account that does not exist yet.
+pub fn parse_balance(body: &[u8]) -> Result<u64, ProviderError> {
+    let raw: RawAccount = serde_json::from_slice(body)
+        .map_err(|e| ProviderError::Unavailable(format!("malformed account: {e}")))?;
+    match raw.error {
+        Some(e) => Err(ProviderError::Unavailable(format!(
+            "node error: {}",
+            clip(&e)
+        ))),
+        None => Ok(raw.balance),
+    }
 }
 
 /// Provider-supplied text is untrusted: keep at most 120 characters of it in our messages.
@@ -385,7 +601,12 @@ mod tests {
           "raw_data": {
             "contract": [{
               "parameter": {
-                "value": {"owner_address": "41A614F803B6FD780986A42C78EC9C7F77E6DED13C", "data": "a9059cbb"},
+                "value": {
+                  "owner_address": "41A614F803B6FD780986A42C78EC9C7F77E6DED13C",
+                  "contract_address": "41eca9bc828a3005b9a3b909f2cc5c2a54794de05f",
+                  "data": "A9059CBB",
+                  "call_value": 3
+                },
                 "type_url": "type.googleapis.com/protocol.TriggerSmartContract"
               },
               "type": "TriggerSmartContract",
@@ -412,16 +633,92 @@ mod tests {
             vec![Contract {
                 kind: "TransferContract".into(),
                 owner: "41313bd9f0dc4e4b2a787470b8dea27e58be82fc53".into(),
-                permission_id: 0,
+                to: "415e33cfa37d730a43063e70ff5381acfc7895e086".into(),
+                amount: 168_200,
+                ..Contract::default()
             }]
         );
         // Hex is normalised to lowercase; a missing `ret` stays None.
         assert_eq!(b.txs[1].result, None);
         assert_eq!(
-            b.txs[1].contracts[0].owner,
-            "41a614f803b6fd780986a42c78ec9c7f77e6ded13c"
+            b.txs[1].contracts[0],
+            Contract {
+                kind: "TriggerSmartContract".into(),
+                owner: "41a614f803b6fd780986a42c78ec9c7f77e6ded13c".into(),
+                permission_id: 2,
+                contract_address: "41eca9bc828a3005b9a3b909f2cc5c2a54794de05f".into(),
+                data: "a9059cbb".into(),
+                call_value: 3,
+                ..Contract::default()
+            }
         );
-        assert_eq!(b.txs[1].contracts[0].permission_id, 2);
+    }
+
+    #[test]
+    fn parses_reads_and_refuses_anything_but_one_returned_word() {
+        let word = "0".repeat(63) + "7";
+        let ok = format!(
+            r#"{{"result":{{"result":true}},"energy_used":900,"constant_result":["{word}"],"transaction":{{"ret":[{{}}]}}}}"#
+        );
+        assert_eq!(parse_call(ok.as_bytes()).unwrap()[31], 7);
+        for bad in [
+            r#"{"Error":"class org.tron.core.exception.ContractValidateException"}"#.to_owned(),
+            r#"{"result":{"code":"CONTRACT_VALIDATE_ERROR","message":"6e6f"}}"#.to_owned(),
+            r#"{"result":{"result":true},"constant_result":[]}"#.to_owned(),
+            r#"{"result":{"result":true},"constant_result":["08c379a0"]}"#.to_owned(),
+            ok.replace(r#"[{}]"#, r#"[{"ret":"FAILED"}]"#),
+            ok.replace(
+                r#""result":true}"#,
+                r#""result":true,"code":"OTHER_ERROR"}"#,
+            ),
+            "{}".to_owned(),
+        ] {
+            assert!(
+                matches!(
+                    parse_call(bad.as_bytes()),
+                    Err(ProviderError::Unavailable(_))
+                ),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            parse_balance(br#"{"address":"41aa","balance":123}"#).unwrap(),
+            123
+        );
+        // An account that does not exist yet.
+        assert_eq!(parse_balance(b"{}").unwrap(), 0);
+        assert!(parse_balance(br#"{"Error":"x"}"#).is_err());
+        assert!(parse_balance(br#"{"balance":-1}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn reads_go_to_the_latest_or_the_solidified_api() {
+        let word = "0".repeat(64);
+        let call = format!(r#"{{"result":{{"result":true}},"constant_result":["{word}"]}}"#);
+        let (url, server) = mock_server(vec![
+            http("200 OK", "", &call),
+            http("200 OK", "", &call),
+            http("200 OK", "", r#"{"balance":5}"#),
+            http("200 OK", "", NILE_BLOCK),
+        ])
+        .await;
+        let p = HttpProvider::new("mock", &url, Duration::ZERO).unwrap();
+        let float = "41a614f803b6fd780986a42c78ec9c7f77e6ded13c";
+        p.call(float, "41ee", "allowance(address,address)", "00", false)
+            .await
+            .unwrap();
+        p.call(float, "41ee", "balanceOf(address)", "00", true)
+            .await
+            .unwrap();
+        assert_eq!(p.trx_balance(float, true).await.unwrap(), 5);
+        assert_eq!(p.solid_height().await.unwrap(), 71_722_664);
+        let requests = server.await.unwrap();
+        assert!(requests[0].starts_with("POST /wallet/triggerconstantcontract "));
+        assert!(requests[0].contains(r#""function_selector":"allowance(address,address)""#));
+        assert!(requests[0].contains(&format!(r#""owner_address":"{float}""#)));
+        assert!(requests[1].starts_with("POST /walletsolidity/triggerconstantcontract "));
+        assert!(requests[2].starts_with("POST /walletsolidity/getaccount "));
+        assert!(requests[3].starts_with("POST /walletsolidity/getnowblock "));
     }
 
     #[test]

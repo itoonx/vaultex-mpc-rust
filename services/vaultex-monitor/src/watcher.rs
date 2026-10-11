@@ -10,8 +10,7 @@
 //!   in between replays them; consumers de-duplicate by `txid` and `block_id`.
 //!
 //! Each provider gets its own watcher and cursor, so an event seen by any provider is reported
-//! ("alarm on any"). Cross-provider agreement and solidified-height accounting belong to matching
-//! (T07-3).
+//! ("alarm on any"). Cross-provider agreement at solidified height is not implemented yet.
 
 use std::collections::HashSet;
 use std::io;
@@ -20,8 +19,9 @@ use std::path::PathBuf;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::abi;
 use crate::cursor::{Cursor, DEPTH};
-use crate::provider::{Block, Provider, ProviderError};
+use crate::provider::{Block, Contract, Provider, ProviderError};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -37,9 +37,18 @@ pub enum Event {
         /// The first contract that a watched address owns, and how many the transaction has.
         contract_index: usize,
         contracts: usize,
-        contract_type: String,
-        owner: String,
-        permission_id: u32,
+        contract: Contract,
+        result: Option<String>,
+    },
+    /// A transaction that no watched address signed, calling `transferFrom` on a listed token
+    /// with a watched address as the source: it spends an allowance of that address.
+    TokenPull {
+        provider: String,
+        height: u64,
+        block_id: String,
+        block_time_ms: i64,
+        txid: String,
+        contract: Contract,
         result: Option<String>,
     },
     /// Block `height` with id `orphaned_id` left this provider's chain; it is scanned again.
@@ -69,6 +78,8 @@ pub enum WatchError {
 pub struct Watcher<P> {
     provider: P,
     watch: HashSet<String>,
+    /// Token contracts whose `transferFrom` calls are checked for a watched source.
+    tokens: HashSet<String>,
     cursor: Cursor,
     path: PathBuf,
     /// Next height to scan; `None` until a fresh cursor learns the provider's head.
@@ -85,6 +96,7 @@ impl<P: Provider> Watcher<P> {
     pub fn open(
         provider: P,
         watch: HashSet<String>,
+        tokens: HashSet<String>,
         path: PathBuf,
         start: Option<u64>,
     ) -> io::Result<Self> {
@@ -93,6 +105,7 @@ impl<P: Provider> Watcher<P> {
         Ok(Self {
             provider,
             watch,
+            tokens,
             cursor,
             path,
             next,
@@ -159,7 +172,6 @@ impl<P: Provider> Watcher<P> {
                 .iter()
                 .position(|c| self.watch.contains(&c.owner));
             if let Some(i) = watched {
-                let c = &tx.contracts[i];
                 events.push(Event::WatchedTx {
                     provider: self.name().to_owned(),
                     height: block.height,
@@ -168,9 +180,17 @@ impl<P: Provider> Watcher<P> {
                     txid: tx.txid.clone(),
                     contract_index: i,
                     contracts: tx.contracts.len(),
-                    contract_type: c.kind.clone(),
-                    owner: c.owner.clone(),
-                    permission_id: c.permission_id,
+                    contract: tx.contracts[i].clone(),
+                    result: tx.result.clone(),
+                });
+            } else if let Some(c) = tx.contracts.iter().find(|c| self.pulls_from_watched(c)) {
+                events.push(Event::TokenPull {
+                    provider: self.name().to_owned(),
+                    height: block.height,
+                    block_id: block.id.clone(),
+                    block_time_ms: block.time_ms,
+                    txid: tx.txid.clone(),
+                    contract: c.clone(),
                     result: tx.result.clone(),
                 });
             }
@@ -178,6 +198,16 @@ impl<P: Provider> Watcher<P> {
         self.next = Some(block.height + 1);
         self.cursor.push(block.height, block.id);
         Ok(Progress::Scanned(events))
+    }
+
+    /// A direct `transferFrom` call on a listed token whose source is watched. A spend routed
+    /// through another contract is not visible here; it needs a standing allowance, which the
+    /// matcher's allowance checks catch first.
+    fn pulls_from_watched(&self, c: &Contract) -> bool {
+        c.kind == "TriggerSmartContract"
+            && self.tokens.contains(&c.contract_address)
+            && abi::selector(&c.data) == Some(abi::TRANSFER_FROM)
+            && abi::word(&c.data, 0).is_some_and(|w| self.watch.contains(&abi::address(w).0))
     }
 
     /// Persists the cursor. Call it after the events of every step before it were delivered.
@@ -203,15 +233,28 @@ pub fn address_hex(addr: &str) -> Result<String, String> {
     Ok(hex::encode(body))
 }
 
+/// Renders a 21-byte hex address (`41…`) as base58check (`T…`), for people. Anything else is
+/// returned unchanged.
+pub fn address_base58(hex_addr: &str) -> String {
+    match hex::decode(hex_addr) {
+        Ok(body) if body.len() == 21 => {
+            let sum = Sha256::digest(Sha256::digest(&body));
+            bs58::encode([&body[..], &sum[..4]].concat()).into_string()
+        }
+        _ => hex_addr.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{Contract, Tx};
+    use crate::provider::{Tx, Word};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     const FLOAT: &str = "41a614f803b6fd780986a42c78ec9c7f77e6ded13c";
     const OTHER: &str = "41313bd9f0dc4e4b2a787470b8dea27e58be82fc53";
+    const TOKEN: &str = "41eca9bc828a3005b9a3b909f2cc5c2a54794de05f";
 
     /// Block id for `height` on fork `fork`; it encodes the height like TRON ids do.
     fn id(height: u64, fork: u8) -> String {
@@ -225,7 +268,7 @@ mod tests {
             contracts: vec![Contract {
                 kind: "TransferContract".into(),
                 owner: owner.into(),
-                permission_id: 0,
+                ..Contract::default()
             }],
         }
     }
@@ -283,11 +326,30 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| ProviderError::Unavailable("block not available".into()))
         }
+
+        // The watcher reads blocks only.
+        async fn solid_height(&self) -> Result<u64, ProviderError> {
+            unimplemented!()
+        }
+        async fn call(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: bool,
+        ) -> Result<Word, ProviderError> {
+            unimplemented!()
+        }
+        async fn trx_balance(&self, _: &str, _: bool) -> Result<u64, ProviderError> {
+            unimplemented!()
+        }
     }
 
     fn open<'a>(fake: &'a Fake, dir: &tempfile::TempDir, start: Option<u64>) -> Watcher<&'a Fake> {
         let watch = HashSet::from([FLOAT.to_owned()]);
-        Watcher::open(fake, watch, dir.path().join("fake.cursor"), start).unwrap()
+        let tokens = HashSet::from([TOKEN.to_owned()]);
+        Watcher::open(fake, watch, tokens, dir.path().join("fake.cursor"), start).unwrap()
     }
 
     /// Steps (committing after each) until the watcher is at head; returns all events.
@@ -305,6 +367,7 @@ mod tests {
             .iter()
             .map(|e| match e {
                 Event::WatchedTx { height, txid, .. } => format!("tx {height} {txid}"),
+                Event::TokenPull { height, txid, .. } => format!("pull {height} {txid}"),
                 Event::Reorg { height, .. } => format!("reorg {height}"),
             })
             .collect()
@@ -327,14 +390,17 @@ mod tests {
         let Event::WatchedTx {
             provider,
             block_id,
-            owner,
+            contract,
             contracts,
             ..
         } = &events[1]
         else {
             unreachable!()
         };
-        assert_eq!((provider.as_str(), owner.as_str()), ("fake", FLOAT));
+        assert_eq!(
+            (provider.as_str(), contract.owner.as_str()),
+            ("fake", FLOAT)
+        );
         assert_eq!((block_id.as_str(), *contracts), (id(14, 0).as_str(), 1));
 
         // New blocks are picked up on the next poll.
@@ -479,6 +545,41 @@ mod tests {
         assert_eq!(summary(&drain(&mut w).await.unwrap()), ["tx 11 r"]);
     }
 
+    #[tokio::test]
+    async fn reports_transfer_from_calls_that_pull_from_a_watched_address() {
+        let call = |token: &str, selector: &str, from: &str| Tx {
+            txid: format!("{selector}-{}", &token[2..6]),
+            result: Some("SUCCESS".into()),
+            contracts: vec![Contract {
+                kind: "TriggerSmartContract".into(),
+                owner: OTHER.into(),
+                contract_address: token.into(),
+                data: format!(
+                    "{selector}{}{}{:064x}",
+                    abi::encode_address(from),
+                    abi::encode_address(OTHER),
+                    5
+                ),
+                ..Contract::default()
+            }],
+        };
+        let fake = Fake::default();
+        fake.put(
+            10,
+            0,
+            0,
+            vec![
+                call(TOKEN, abi::TRANSFER_FROM, FLOAT),
+                call(TOKEN, abi::TRANSFER_FROM, OTHER), // another source
+                call(OTHER, abi::TRANSFER_FROM, FLOAT), // not a listed token
+                call(TOKEN, abi::TRANSFER, FLOAT),      // not transferFrom
+            ],
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let events = drain(&mut open(&fake, &dir, Some(10))).await.unwrap();
+        assert_eq!(summary(&events), ["pull 10 23b872dd-eca9"]);
+    }
+
     #[test]
     fn decodes_tron_addresses_and_rejects_typos() {
         // TRON USDT; its hex form is the widely published `41a614…`.
@@ -490,6 +591,8 @@ mod tests {
             address_hex("TETXp15LarnzBPTubWzTA79qpvguRZn2cE").unwrap(),
             OTHER
         );
+        assert_eq!(address_base58(FLOAT), "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t");
+        assert_eq!(address_base58("41ab"), "41ab");
         for bad in [
             "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6u", // checksum
             "1BoatSLRHtKNngkdXEeobR76b53LETtpyT", // Bitcoin (prefix 0x00)
