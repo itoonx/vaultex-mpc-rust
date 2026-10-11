@@ -1,0 +1,34 @@
+schema = 1
+id = "01.banner"
+kind = "limitation"
+status = "limitation"
+text = 'UNAUDITED PRE-ALPHA RESEARCH SOFTWARE · TESTNET ONLY · DO NOT USE WITH REAL FUNDS. Known critical limitations (by category): (1) affected scheme classes — the hand-rolled threshold-ECDSA engines are unsound, and Sr25519/BLS signing is not threshold; (2) transport confidentiality during key generation; (3) control-plane freshness; (4) unenforced signing policy — signers do not independently verify what they sign; (5) unsafe deposit addresses: addresses exported by pre-cut versions for unimplemented chains, and P2WPKH addresses shown for FROST-TR wallets, may be unspendable; do not send funds to them.'
+text_zh = '未经审计的 Pre-Alpha 研究软件 · 仅限测试网 · 请勿用于真实资金。已知的严重限制（按类别）：(1) 受影响的签名方案类别 — 自行实现的门限 ECDSA 引擎不安全（unsound），且 Sr25519/BLS 签名并非门限签名；(2) 密钥生成期间的传输机密性；(3) 控制平面消息的新鲜性；(4) 签名策略未被强制执行 — 签名节点不会独立验证其所签署的内容；(5) 不安全的充值地址：代码裁剪（pre-cut）之前的版本为尚未实现的链导出的地址，以及为 FROST-TR 钱包显示的 P2WPKH 地址，可能无法花费；请勿向这些地址转入资金。'
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  'UNAUDITED PRE-ALPHA RESEARCH SOFTWARE · TESTNET ONLY · DO NOT USE WITH REAL FUNDS. Known critical limitations (by category): (1) affected scheme classes — the hand-rolled threshold-ECDSA engines are unsound, and Sr25519/BLS signing is not threshold; (2) transport confidentiality during key generation; (3) control-plane freshness; (4) unenforced signing policy — signers do not independently verify what they sign; (5) unsafe deposit addresses: addresses exported by pre-cut versions for unimplemented chains, and P2WPKH addresses shown for FROST-TR wallets, may be unspendable; do not send funds to them.',
+]
+quotes_zh = [
+  '未经审计的 Pre-Alpha 研究软件 · 仅限测试网 · 请勿用于真实资金。已知的严重限制（按类别）：(1) 受影响的签名方案类别 — 自行实现的门限 ECDSA 引擎不安全（unsound），且 Sr25519/BLS 签名并非门限签名；(2) 密钥生成期间的传输机密性；(3) 控制平面消息的新鲜性；(4) 签名策略未被强制执行 — 签名节点不会独立验证其所签署的内容；(5) 不安全的充值地址：代码裁剪（pre-cut）之前的版本为尚未实现的链导出的地址，以及为 FROST-TR 钱包显示的 P2WPKH 地址，可能无法花费；请勿向这些地址转入资金。',
+  '本警示以 [README.md](README.md) 中的英文原文为准。',
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#m5-contain-cut-and-licence-phase-1"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "M5 exit criterion 1 fixes this text as the canonical banner"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Weaknesses W2 (scheme classes), W4 (transport), W5 (control plane), W3 (signing policy) and W15 (unsafe addresses)"
+
+[[evidence]]
+type = "report"
+ref = "SECURITY_STATUS.md"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Each category with its planned fix and milestone"

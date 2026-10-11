@@ -1,0 +1,24 @@
+schema = 1
+id = "01.component.gateway-auth"
+kind = "security-posture"
+status = "limitation"
+support = "experimental"
+text = "Gateway authentication (key-exchange handshake, session JWT, mTLS via a TLS terminator, bearer JWT) is custom and has not been independently reviewed. It is experimental, and its replacement is under review (ADR-09)."
+text_zh = "网关认证（密钥交换握手、会话 JWT、经 TLS 终止器的 mTLS、Bearer JWT）为自定义实现，未经独立评审。它属于实验性，替换方案正在评估中（ADR-09）。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Gateway authentication (key-exchange handshake, session JWT, mTLS via a TLS terminator, bearer JWT) |"]
+quotes_zh = ["| 网关认证（密钥交换握手、会话 JWT、经 TLS 终止器的 mTLS、Bearer JWT） |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "SECURITY_STATUS.md#known-limitations"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Category 8: custom, unreviewed gateway authentication"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#11-decisions-needed-from-the-owner-adr-candidates"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "ADR-09: gateway authentication"

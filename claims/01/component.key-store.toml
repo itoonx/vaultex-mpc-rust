@@ -1,0 +1,24 @@
+schema = 1
+id = "01.component.key-store"
+kind = "capability"
+status = "verified"
+support = "experimental"
+text = "The encrypted key store derives an AES-256-GCM key with Argon2id. It is experimental, and there is no backup or restore tooling yet."
+text_zh = "加密密钥存储使用 Argon2id 派生 AES-256-GCM 密钥。它属于实验性，目前尚无备份或恢复工具。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Encrypted key store (Argon2id + AES-256-GCM) | Experimental |"]
+quotes_zh = ["| 加密密钥存储（Argon2id + AES-256-GCM） | 实验性 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "crates/mpc-wallet-core/src/key_store/encrypted.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Argon2id key derivation and AES-256-GCM encryption"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "S7 (sound hygiene baseline) and W8 (no backup, recovery, refresh or failover)"

@@ -1,0 +1,24 @@
+schema = 1
+id = "01.scheme.frost-secp256k1-tr"
+kind = "limitation"
+status = "limitation"
+support = "experimental"
+text = "FROST secp256k1 Taproot wraps the Zcash Foundation frost-secp256k1-tr crate (version 2.1). It is experimental: P2WPKH addresses shown for FROST-TR wallets may be unspendable (limitation 5)."
+text_zh = "FROST secp256k1 Taproot 封装了 Zcash Foundation 的 frost-secp256k1-tr crate（2.1 版）。它属于实验性：为 FROST-TR 钱包显示的 P2WPKH 地址可能无法花费（限制 5）。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| FROST secp256k1 Taproot | Wraps the ZF `frost-secp256k1-tr` crate | Experimental |"]
+quotes_zh = ["| FROST secp256k1 Taproot | 封装 ZF 的 `frost-secp256k1-tr` crate | 实验性 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "Cargo.toml"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Workspace dependency frost-secp256k1-tr 2.1"
+
+[[evidence]]
+type = "report"
+ref = "SECURITY_STATUS.md#known-limitations"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Category 5: unsafe deposit addresses"

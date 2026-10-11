@@ -1,0 +1,23 @@
+schema = 1
+id = "01.tests.test-parameters"
+kind = "limitation"
+status = "limitation"
+text = "The tests use test-size cryptographic parameters. Passing tests do not show that anything works at production parameters or across hosts."
+text_zh = "测试使用的是测试规模的密码学参数。测试通过并不表明任何功能能在生产参数下或跨主机正常工作。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["The tests use test-size cryptographic parameters."]
+quotes_zh = ["测试使用的是测试规模的密码学参数。"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W13: tests and CI exercise test-only crypto parameters"
+
+[[evidence]]
+type = "report"
+ref = "SECURITY_STATUS.md#known-limitations"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Category 6: test-only cryptographic parameters can reach builds"

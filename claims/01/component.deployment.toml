@@ -1,0 +1,18 @@
+schema = 1
+id = "01.component.deployment"
+kind = "limitation"
+status = "limitation"
+support = "experimental"
+text = "The deployment artifacts (Docker Compose, Kubernetes manifests, Helm, Terraform) are experimental, and none of them starts a working multi-host cluster."
+text_zh = "部署产物（Docker Compose、Kubernetes 清单、Helm、Terraform）属于实验性，均无法启动可用的多主机集群。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Deployment: Docker Compose, Kubernetes manifests, Helm, Terraform | Experimental |"]
+quotes_zh = ["| 部署：Docker Compose、Kubernetes 清单、Helm、Terraform | 实验性 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W16: no shipped artifact starts a working multi-host cluster"

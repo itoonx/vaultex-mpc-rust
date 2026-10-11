@@ -1,0 +1,18 @@
+schema = 1
+id = "01.component.cli"
+kind = "limitation"
+status = "limitation"
+support = "experimental"
+text = "The CLI (mpc-wallet-cli) is a single-process demo that runs every party in one process, so one process holds every key share. It is experimental and must never be used with real funds."
+text_zh = "CLI（mpc-wallet-cli）是单进程演示，所有参与方都在同一进程中运行，因此一个进程持有全部密钥份额。它属于实验性，切勿用于真实资金。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| CLI (`mpc-wallet-cli`) | Experimental |"]
+quotes_zh = ["| CLI（`mpc-wallet-cli`） | 实验性 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "SECURITY_STATUS.md#known-limitations"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Category 7: key shares co-located by demo tooling"

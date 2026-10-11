@@ -1,0 +1,37 @@
+schema = 1
+id = "01.architecture"
+kind = "capability"
+status = "verified"
+text = "In the code, each MPC node holds one key share in its own encrypted key store, a gateway orchestrator coordinates the nodes over NATS, and the chain crates build and encode transactions. The gateway holds no key shares, but it does hold signing authority: see limitation (4) of the banner."
+text_zh = "在代码中，每个 MPC 节点在自己的加密密钥存储中持有一个密钥份额，网关协调器通过 NATS 协调各节点，链相关的 crate 负责构建和编码交易。网关不持有密钥份额，但持有签名权限：见警示中的限制 (4)。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "Each signer node holds one key share, a gateway coordinates the nodes over NATS, and the chain crates build and encode transactions.",
+  "REST gateway and orchestrator (holds no key shares)",
+  "Standalone MPC node (one party, one share)",
+]
+quotes_zh = [
+  "每个签名节点持有一个密钥份额，网关通过 NATS 协调各节点，链相关的 crate 负责构建和编码交易。",
+  "REST 网关与协调器（不持有密钥份额）",
+  "独立 MPC 节点（一个参与方，一个份额）",
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "services/mpc-node/src/main.rs::EncryptedFileStore"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Each node opens its own encrypted key store for its share"
+
+[[evidence]]
+type = "code"
+ref = "services/api-gateway/src/orchestrator.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "The orchestrator keeps wallet metadata and talks to the nodes over NATS"
+
+[[evidence]]
+type = "command"
+ref = "git grep -nE 'EncryptedFileStore|KeyStore' <commit> -- services/api-gateway/src"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+result = "one match, an error-mapping arm in errors.rs; the gateway opens no key store"

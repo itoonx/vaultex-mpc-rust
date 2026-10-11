@@ -1,0 +1,29 @@
+schema = 1
+id = "01.project.research-prototype"
+kind = "capability"
+status = "verified"
+text = "Vaultex is a threshold-MPC wallet research prototype: a Rust workspace that explores a self-hosted threshold multi-party computation (MPC) wallet."
+text_zh = "Vaultex 是一个门限 MPC 钱包研究原型：一个用于探索可自托管门限多方计算（MPC）钱包的 Rust 工作区。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "**Threshold-MPC wallet research prototype in Rust**",
+  "Vaultex is a Rust workspace that explores a self-hosted threshold multi-party computation (MPC) wallet.",
+]
+quotes_zh = [
+  "**用 Rust 编写的门限 MPC 钱包研究原型**",
+  "Vaultex 是一个 Rust 工作区，用于探索可自托管的门限多方计算（MPC）钱包。",
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "Cargo.toml"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Workspace of three crates and two services"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#12-placement-by-subsystem-with-trl"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Every subsystem is placed at stage ST0 (research) or ST1 (prototype)"

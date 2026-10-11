@@ -1,0 +1,156 @@
+# claims/schema.toml: the claims-ledger schema, version 1.
+#
+# Owned by WS-01 (ROADMAP §5.0). claims/claims.py reads this file to validate the
+# ledger and to render CLAIMS.md, so the field list below is the contract.
+# Adding an optional field keeps version 1. Renaming, removing or tightening a
+# field needs a new version and an owner-approved change.
+#
+# One claim = one file: claims/<ws>/<slug>.toml, where <ws> is the two-digit
+# workstream number. Each workstream writes only its own folder.
+#
+# Rules that span fields (enforced by `claims.py check`):
+#   R1  id is "<ws>.<slug>" and equals the file's folder and name. IDs are never
+#       reused; a retracted claim keeps its file with status = "withdrawn".
+#   R2  status "verified" or "limitation" needs at least one evidence item.
+#   R3  status "withdrawn" needs the [withdrawn] table and an empty surfaces list;
+#       withdrawn.replaced_by, if set, names a claim that is not withdrawn.
+#   R4  a live claim has observed <= today and
+#       observed < expires <= observed + max_age_days[kind];
+#       past its expiry date it fails the check until it is re-verified or
+#       withdrawn. A withdrawn claim is a permanent record and has no expires.
+#   R5  a live claim of kind "metric" needs [instrument] (toolchain, features,
+#       crypto parameters).
+#   R6  every surface is declared in claims/surfaces.toml. For each language
+#       that the claim's surfaces use, the claim gives quotes (en) or quotes_zh
+#       (zh), every quote occurs verbatim in each surface of that language, and
+#       a zh surface also needs text_zh. Every quote has no leading or trailing
+#       whitespace and at least 4 word characters (regex \w), so that a blank
+#       or punctuation-only quote cannot satisfy R7.
+#   R7  coverage: every claim-bearing line of a surface contains a quote of a
+#       non-withdrawn claim that lists that surface, or is an exempt line in
+#       claims/surfaces.toml. Fenced code blocks, headings, table header and
+#       delimiter rows, rules and HTML-only lines are skipped.
+#   R8  evidence is pinned: commit is a 40-hex SHA that exists in git history,
+#       and the file exists at that commit, together with the test function
+#       (test) or the symbol after '::' (code). A "command" item is
+#       documentation for a human to re-run; the checker never executes it.
+#       A "tx" item is not re-checked on chain by the checker (no network);
+#       its note records the last manual re-check.
+#   R9  CLAIMS.md is byte-equal to `claims.py render` output (no hand edits).
+
+version = 1
+
+# Base URL for evidence links in CLAIMS.md (changes only if the repository moves).
+repo_url = "https://github.com/itoonx/vaultex-mpc-rust"
+
+# Maximum days between `observed` and `expires`, per kind. ESTIMATES: one review
+# cycle for capability and limitation claims; a week for CI-derived metrics,
+# because a floating toolchain can change a result with no code change.
+[max_age_days]
+capability = 90
+limitation = 90
+security-posture = 90
+metric = 7
+process = 180
+licence = 180
+market = 90
+
+# ---------------------------------------------------------------- fields
+
+[field.schema]
+type = "integer"
+required = true
+doc = "Schema version this file follows. Always 1."
+
+[field.id]
+type = "string"
+required = true
+pattern = '^[0-9]{2}\.[a-z0-9][a-z0-9.-]{1,78}$'
+doc = "\"<ws>.<slug>\": the folder, a dot, and the file name without .toml (R1)."
+
+[field.kind]
+type = "string"
+required = true
+enum = ["capability", "limitation", "security-posture", "metric", "process", "licence", "market"]
+doc = "What sort of statement this is. Sets the maximum age (max_age_days) and the CLAIMS.md section."
+
+[field.status]
+type = "string"
+required = true
+enum = ["verified", "limitation", "hypothesis", "withdrawn"]
+doc = "verified: evidence attached. limitation: a known weakness, stated publicly. hypothesis: unproven; allowed only in plan or research documents, marked HYPOTHESIS. withdrawn: retracted; no surface may repeat it."
+
+[field.support]
+type = "string"
+enum = ["supported", "staged", "experimental", "not-integrated", "not-implemented"]
+doc = "Optional. The support-matrix status of the chain, scheme or component the claim is about."
+
+[field.text]
+type = "string"
+required = true
+doc = "The claim in one or two plain English sentences, as CLAIMS.md shows it. No Markdown."
+
+[field.text_zh]
+type = "string"
+doc = "The zh-CN rendering of text. Required when a surface has lang = \"zh\" (R6)."
+
+[field.surfaces]
+type = "array"
+required = true
+doc = "Repo-relative paths of the public documents that state this claim, each declared in claims/surfaces.toml. Empty when withdrawn."
+
+[field.quotes]
+type = "array"
+doc = "Verbatim excerpts (single lines or parts of lines) of the English surfaces where the claim is stated (R6, R7)."
+
+[field.quotes_zh]
+type = "array"
+doc = "Verbatim excerpts of the zh-CN surfaces where the claim is stated (R6, R7)."
+
+[field.evidence]
+type = "array-of-tables"
+doc = "Pinned evidence items; see [evidence_type.*] (R2, R8)."
+
+[field.instrument]
+type = "table"
+doc = "How a metric was measured: toolchain, features, crypto_params, host (R5)."
+
+[field.observed]
+type = "date"
+required = true
+doc = "The date the evidence was last checked."
+
+[field.expires]
+type = "date"
+doc = "The date by which the claim must be re-checked. Required unless the claim is withdrawn (R4)."
+
+[field.withdrawn]
+type = "table"
+doc = "Only for status = withdrawn: on (date), reason (category level, no mechanics), replaced_by (optional claim id) (R3)."
+
+# ------------------------------------------------------- evidence types
+# Every item has `type`, the keys listed in `required`, and optionally `note`.
+
+[evidence_type.code]
+required = ["ref", "commit"]
+doc = "A source file (ref = repo path, optionally followed by '::' and a symbol) at a commit."
+
+[evidence_type.test]
+required = ["ref", "path", "commit"]
+doc = "A test: ref = fully qualified test name, path = the file that defines it, at a commit."
+
+[evidence_type.report]
+required = ["ref", "commit"]
+doc = "A document in this repository: ref = path, optionally with a #anchor, at a commit."
+
+[evidence_type.command]
+required = ["ref", "commit", "result"]
+doc = "A read-only shell command (ref) run against a commit, and its result. Never executed by the checker."
+
+[evidence_type.tx]
+required = ["ref", "network"]
+doc = "An on-chain transaction: ref = transaction id, network = '<chain>:<network>'. The note says when and how it was last re-checked."
+
+[evidence_type.ci_run]
+required = ["url"]
+doc = "A GitHub Actions run: url = https://github.com/<owner>/<repo>/actions/runs/<id>."

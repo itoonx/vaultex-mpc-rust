@@ -1,0 +1,44 @@
+schema = 1
+id = "01.chain.experimental-44"
+kind = "limitation"
+status = "limitation"
+support = "experimental"
+text = "The code names 44 chains besides the six staged ones: 25 EVM networks other than Ethereum; Bitcoin mainnet, Litecoin, Dogecoin and Zcash; six Substrate chains; five Cosmos chains; and Movement, TON, Monero and Starknet. None has end-to-end evidence. They are experimental, and addresses exported for them may be unspendable (limitation 5)."
+text_zh = "除六条预备链外，代码中还列出了 44 条链：Ethereum 以外的 25 个 EVM 网络；Bitcoin 主网、Litecoin、Dogecoin 和 Zcash；六条 Substrate 链；五条 Cosmos 链；以及 Movement、TON、Monero 和 Starknet。它们都没有端到端证据，属于实验性；为它们导出的地址可能无法花费（限制 5）。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "The code also names 44 other chains. None of them has end-to-end evidence.",
+  "| EVM networks other than Ethereum (25):",
+  "| Bitcoin mainnet, Litecoin, Dogecoin, Zcash |",
+  "| Polkadot, Kusama, Astar, Acala, Phala, Interlay |",
+  "| Cosmos Hub, Osmosis, Celestia, Injective, Sei |",
+  "| Movement, TON, Monero, Starknet |",
+]
+quotes_zh = [
+  "代码中还列出了另外 44 条链，它们都没有端到端证据。",
+  "| Ethereum 以外的 EVM 网络（25 条）：",
+  "| Bitcoin 主网、Litecoin、Dogecoin、Zcash |",
+  "| Polkadot、Kusama、Astar、Acala、Phala、Interlay |",
+  "| Cosmos Hub、Osmosis、Celestia、Injective、Sei |",
+  "| Movement、TON、Monero、Starknet |",
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "crates/mpc-wallet-chains/src/provider.rs::Chain"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "The Chain enum has 50 variants"
+
+[[evidence]]
+type = "code"
+ref = "crates/mpc-wallet-chains/src/metadata.rs::CHAIN_METADATA"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "6 entries: Ethereum, BitcoinTestnet, Solana, Sui, Aptos and Tron"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W15: the advertised surface far exceeds the working product, and unsafe addresses are exposed"
