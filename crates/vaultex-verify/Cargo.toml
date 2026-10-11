@@ -1,0 +1,12 @@
+[package]
+name = "vaultex-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vaultex verifier kernel: signer-side decode, policy, approvals, velocity and receipts (skeleton)"
+publish = false # working name until ADR-12
+
+# Kernel boundary (ROADMAP M6 #1): no MPC, transport, async runtime or network crate, here or
+# transitively. kernel.yml asserts it with `cargo tree`; clippy.toml bans clock, env and sockets.
+[dependencies]
+vaultex-types = { path = "../vaultex-types" }
