@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing. Gateway persistence is an open owner decision (ADR-10, [ROADMAP §11](../../ROADMAP.md#11-decisions-needed-from-the-owner-adr-candidates)).
+
 # Redis + KMS/HSM Migration Spec
 
 ## Problem

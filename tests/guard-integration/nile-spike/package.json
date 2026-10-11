@@ -1,0 +1,10 @@
+{
+  "name": "vaultex-nile-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Nile testnet spike: TRON native multisig co-signing under an active permission (T06-2/T06-3).",
+  "dependencies": {
+    "tronweb": "6.3.0"
+  }
+}

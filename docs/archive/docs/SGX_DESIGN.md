@@ -1,3 +1,7 @@
+> **ARCHIVED — SUPERSEDED (2026-10-11).** Kept for history only; it does not describe Vaultex today.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing. TEE work is deferred, and the code has only a mock enclave ([ROADMAP §3.5](../../ROADMAP.md#35-scope-cuts)).
+
 # SGX Enclave Design Document — DEC-017
 
 > **Status:** Approved (Sprint 23)

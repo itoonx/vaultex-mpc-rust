@@ -1,3 +1,7 @@
+> **ARCHIVED — CONCLUSIONS WITHDRAWN (2026-10-11).** Written by the project's internal AI-agent process, not by an independent reviewer. Its conclusions are unreliable and must not be cited.
+> Current status: [README](../../../README.md), [SECURITY_STATUS.md](../../../SECURITY_STATUS.md), [CLAIMS.md](../../../CLAIMS.md).
+> Superseded by: nothing. The engines it describes are to be replaced by an adopted, pinned library ([ROADMAP §1.4](../../ROADMAP.md#14-honest-re-baseline-of-milestone-history), M2 row).
+
 # Sprint 28 Mathematical Proofs
 
 > **Purpose:** Formal correctness proofs for the Paillier-based MtA and ZK proof
