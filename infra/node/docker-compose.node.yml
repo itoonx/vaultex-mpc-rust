@@ -36,10 +36,10 @@ services:
       # Publish the health/metrics port to the host (read from the env-file).
       - "${HEALTH_PORT:-9090}:${HEALTH_PORT:-9090}"
     volumes:
-      # Default: docker-managed named volume (container's mpc user owns it, so
-      #   on-disk shares written during DKG persist with correct perms).
-      # --keys <hostpath> sets KEYS_MOUNT to a bind mount of existing shares.
-      - ${KEYS_MOUNT:-boot-node-keys}:/data/keys
+      # Docker-managed named volume only: the node writes its own share here
+      # during DKG. Deliberately fixed (no variable, no host bind mount) so the
+      # boot node can never be pointed at a multi-party CLI keystore.
+      - boot-node-keys:/data/keys
     restart: unless-stopped
 
 volumes:

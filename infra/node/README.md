@@ -36,8 +36,9 @@ public key must be a real curve point, so `init` mints it in audited Rust via
 | `node.env.example` | Template / single source of truth for every env var |
 | `node.env` | Your filled config (gitignored) — created by `init` |
 | `gateway.key` | Generated gateway Ed25519 private key (gitignored, 0600) |
-| `.boot-node.state` | Run-mode state (`NATS_MODE`, `KEYS_MOUNT`) for `up`/`down` |
+| `.boot-node.state` | Run-mode state (`NATS_MODE`) for `up`/`down` |
 | `docker-compose.node.yml` | One node + optional `bundled-nats` profile |
+| `test-node-wrapper.sh` | Regression check that the wrapper never mounts a host keystore (bash only, stubs docker) |
 
 ## NATS modes
 
@@ -47,16 +48,28 @@ public key must be a real curve point, so `init` mints it in audited Rust via
   container; the node connects to your broker. `up` probes reachability and warns
   early. The node has `restart: unless-stopped`, so it retries until NATS is up.
 
-## Key-share modes
+## Key shares
 
-- **Default (named volume):** the node starts with an empty docker-managed
-  `/data/keys`. This is the right state for a node that will receive its share via
-  **DKG over NATS** (keygen is a multi-party operation — a lone node cannot keygen
-  itself). The volume is owned by the container's `mpc` user, so shares written
-  during DKG persist with correct permissions.
-- **Mount existing shares:** `init --party 1 --keys /path/to/keys` bind-mounts an
-  existing EncryptedFileStore directory (e.g. a previously-funded keystore). Use the
-  **same `KEY_STORE_PASSWORD`** that encrypted those shares.
+The node keeps its share in a docker-managed named volume, `boot-node-keys`, mounted
+at `/data/keys`. It starts empty and the node fills it with **its own share only**,
+via **DKG over NATS** (keygen is a multi-party operation — a lone node cannot keygen
+itself). The volume is owned by the container's `mpc` user, so shares written during
+DKG persist with correct permissions. The volume is fixed in
+`docker-compose.node.yml`: there is no variable or flag that swaps it for a host path.
+
+**The wrapper never mounts a multi-party CLI keystore.** An earlier version had an
+`init --keys <hostpath>` option that bind-mounted an existing keystore directory. A
+keystore written by the `mpc-wallet` CLI holds **every party's share** under one
+password, so mounting it into one node would put a full key-reconstruction set on a
+single host and defeat the threshold. That option is removed:
+
+- `init --keys …` now exits with an error;
+- `up` refuses to start if `.boot-node.state` still records a host keystore mount
+  from the old option. Re-run `scripts/node.sh init` with your original flags minus
+  `--keys` (it keeps your existing `node.env` secrets) to clear it.
+
+Do not copy a CLI keystore into the volume by hand either. Legacy multi-party
+keystores are for local demos only and are not a migration source for nodes.
 
 ## Multiple nodes
 
@@ -67,8 +80,5 @@ nodes, give each its own checkout/working copy, or run them on separate hosts.
 
 ## Notes
 
-- On Docker Desktop (macOS), bind-mounting a host keystore generally works despite
-  the container running as non-root; on Linux ensure the dir is readable by the
-  container `mpc` user.
 - `MPC_WALLET_BIN=/path/to/mpc-wallet scripts/node.sh init ...` overrides which CLI
   binary mints the identity keys.
