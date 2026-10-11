@@ -19,6 +19,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.93" # MSRV. ponytail: = the one toolchain verified (1.93.1); locked deps need >= 1.91; lower it only with a CI job on that toolchain
 license = "MIT"
 
 [workspace.dependencies]
