@@ -57,7 +57,7 @@ Severity uses GitHub's advisory levels: critical, high, moderate and low. There 
 
 ## Coordinated disclosure (90 days)
 
-- Please keep your report private for **90 days from the day you send it**, or until a fix is released, whichever comes first. We can agree a different window with you, for example when users must re-key before details go public.
+- Please keep your report private for **90 days from the day you send it**. If a fix ships sooner, please keep it private until we publish the advisory and, where users must re-key, until the grace period that advisory announces has ended (within the 90 days unless we agree otherwise).
 - Fixed issues get a GitHub Security Advisory, with a CVE where one applies.
 - For an issue that is still unfixed, the project publishes at **category level only**: what is affected, the planned fix and what users should do. It publishes no exploit details and no pointers into the code. Detailed advisories follow only after the fix ships, affected users have had time to re-key, and a grace period has passed.
 - After the 90 days you are free to publish. If the issue is still unfixed, we ask you to publish at category level as well and to leave out working exploit details, because users may still hold keys that it affects.
