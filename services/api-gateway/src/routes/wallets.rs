@@ -34,7 +34,8 @@ use crate::state::AppState;
 // generation, raw-digest signing and every legacy scheme; only a debug build may
 // lift those three, with the `dev-unfreeze` feature, for testnet development.
 // Any network or chain other than testnet/devnet is refused in every build,
-// `dev-unfreeze` included. The MPC nodes enforce the same refusals independently.
+// `dev-unfreeze` included; EVM transactions also need network "testnet" and an EVM
+// testnet chain id. The MPC nodes enforce the network and scheme refusals independently.
 
 /// `true` unless this is a debug build with the `dev-unfreeze` feature.
 const FROZEN: bool = !cfg!(feature = "dev-unfreeze");
@@ -66,6 +67,30 @@ pub(crate) fn check_network(network: &str) -> Result<(), ApiError> {
         return Ok(());
     }
     Err(refused(format_args!("network '{network}'")))
+}
+
+/// EVM transactions are allowed on "testnet" only, in every build. EVM has no
+/// devnet, and the RPC endpoint tables resolve a devnet request to mainnet endpoints.
+pub(crate) fn check_evm_network(network: &str) -> Result<(), ApiError> {
+    if network == "testnet" {
+        return Ok(());
+    }
+    Err(refused(format_args!(
+        "EVM transactions on network '{network}'"
+    )))
+}
+
+/// Second layer behind `check_evm_network`: the RPC endpoint must report an EVM
+/// testnet chain id, so a mis-mapped endpoint never gets a signed transaction.
+pub(crate) fn check_evm_chain_id(chain_id: u64) -> Result<(), ApiError> {
+    // Sepolia, Polygon Amoy, BSC testnet, Arbitrum Sepolia, OP Sepolia,
+    // Base Sepolia, Avalanche Fuji, Linea Sepolia.
+    const EVM_TESTNET_CHAIN_IDS: [u64; 8] =
+        [11155111, 80002, 97, 421614, 11155420, 84532, 43113, 59141];
+    if EVM_TESTNET_CHAIN_IDS.contains(&chain_id) {
+        return Ok(());
+    }
+    Err(refused(format_args!("EVM chain id {chain_id}")))
 }
 
 /// Refuse chains that are mainnet whatever the configured network, in every build.
@@ -596,5 +621,14 @@ pub(crate) mod freeze_tests {
         assert_frozen(check_network("Mainnet"), "network");
         assert!(check_network("testnet").is_ok());
         assert!(check_network("devnet").is_ok());
+    }
+
+    #[test]
+    fn freeze_refuses_evm_mainnet_chain_ids() {
+        for id in [1u64, 137, 56, 42161, 10, 8453, 43114, 59144] {
+            assert_frozen(check_evm_chain_id(id), "EVM chain id");
+        }
+        assert!(check_evm_chain_id(11155111).is_ok());
+        assert!(check_evm_chain_id(80002).is_ok());
     }
 }
