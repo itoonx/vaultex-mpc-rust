@@ -3,5 +3,10 @@ name = "vaultex-redteam"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Vaultex adversarial verification harness (skeleton)"
+description = "Vaultex adversarial verification harness: incident catalogue, TRON replay fixtures"
 publish = false # test harness; never published
+
+# Pure on purpose: the kernel's test suite links this crate, so it stays inside the kernel boundary
+# (no async runtime, network, MPC or transport crate).
+[dependencies]
+vaultex-types = { path = "../vaultex-types" }
