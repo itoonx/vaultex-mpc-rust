@@ -1,0 +1,10 @@
+{
+  "name": "vaultex-verify-differential",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "tronweb side of the strict TRON decoder's differential test (driven by tests/tron_differential.rs).",
+  "dependencies": {
+    "tronweb": "6.3.0"
+  }
+}
