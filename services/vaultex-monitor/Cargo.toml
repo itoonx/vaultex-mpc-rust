@@ -3,5 +3,21 @@ name = "vaultex-monitor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Vaultex outflow monitor: matches on-chain outflows to receipts and can soft-freeze (skeleton)"
+description = "Vaultex outflow monitor: watches the chain on independent providers and matches outflows to receipts (chain watcher only so far)"
 publish = false # working name until ADR-12
+
+# Every crate below is already in Cargo.lock. The monitor links no chain, MPC or kernel crate: it
+# reads chain data with its own client (ROADMAP WS-07, "different implementer").
+[dependencies]
+bs58 = { workspace = true }
+clap = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

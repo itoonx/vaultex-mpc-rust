@@ -5390,6 +5390,18 @@ version = "0.1.0"
 [[package]]
 name = "vaultex-monitor"
 version = "0.1.0"
+dependencies = [
+ "bs58",
+ "clap",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
 
 [[package]]
 name = "vaultex-redteam"
