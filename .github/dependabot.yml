@@ -1,0 +1,38 @@
+# Dependabot version updates: weekly, batched, aged.
+# Security-update PRs are a repository setting (not this file) and always target the default branch.
+# Every PR here is only a proposal: it still needs green CI (audit, deny), CODEOWNERS review and owner approval.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: dev # DEC-009: work lands on dev; main only through a green PR
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown: # supply chain: let a new release age before it is proposed
+      default-days: 7
+      semver-major-days: 30
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch: # one batched PR a week; majors stay one PR each
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: glass_pumpkin # exact pin; an upgrade is a reviewed manual change
+    commit-message:
+      prefix: build
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: / # scans .github/workflows; SHA pins are bumped together with their version comments
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7 # github-actions supports only default-days
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
