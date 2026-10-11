@@ -1,0 +1,26 @@
+[package]
+name = "vaultex-verify-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Skeleton (T05-2): never built by the main workspace or CI, and has no lockfile yet.
+# `libfuzzer-sys` is not in the main Cargo.lock; it needs owner approval before the first run.
+[dependencies]
+libfuzzer-sys = "0.4"
+vaultex-types = { path = "../../vaultex-types" }
+vaultex-verify = { path = ".." }
+
+# Its own workspace, so the main workspace never builds it.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "tron_decode"
+path = "fuzz_targets/tron_decode.rs"
+test = false
+doc = false
+bench = false
