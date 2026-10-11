@@ -1,18 +1,39 @@
 name: Release
 
+# Auto-release is DISABLED (ROADMAP M5 #6). Nothing tags or publishes on push any more; a release
+# happens only when a maintainer runs this workflow by hand from `main` (Actions -> Release ->
+# Run workflow). Releases cut here are UNSIGNED and carry no provenance or SBOM.
+#
+# Signed releases return in M7 (the Guard) and M11 (the full stack): cosign-signed reproducible
+# builds with SLSA provenance, a CycloneDX SBOM and digest-pinned images. Release automation is
+# re-enabled only in that form (M11 #5); until then, keep this workflow manual.
+#
+# ponytail: the script below is kept as-is apart from least privilege, a SHA-pinned checkout and
+# moving every expression value into `env:` (no `${{ }}` inside `run:`). It still uses the
+# runner's default `bash -e`; the signed-release workflow replaces it wholesale, so it is not
+# reworked further.
+
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# Never run two releases at once, and never cancel one that has started.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Auto Release
+    name: Manual Release (unsigned)
+    # Same invariant as the old push-to-main trigger: only `main` is ever released.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the tag and the GitHub release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
         with:
           fetch-depth: 0  # need full history for tag + changelog
 
@@ -25,9 +46,9 @@ jobs:
 
       - name: Determine version bump from commits
         id: bump
+        env:
+          LATEST_TAG: ${{ steps.latest_tag.outputs.tag }}
         run: |
-          LATEST_TAG="${{ steps.latest_tag.outputs.tag }}"
-
           # Get commit messages since last tag
           if [ "$LATEST_TAG" = "v0.0.0" ]; then
             COMMITS=$(git log --format="%s" HEAD)
@@ -73,18 +94,19 @@ jobs:
           esac
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          {
+            echo "skip=false"
+            echo "version=$NEW_VERSION"
+            echo "bump=$BUMP"
+          } >> "$GITHUB_OUTPUT"
           echo "Bump: $BUMP → v$NEW_VERSION"
 
       - name: Generate changelog
         if: steps.bump.outputs.skip != 'true'
         id: changelog
+        env:
+          LATEST_TAG: ${{ steps.latest_tag.outputs.tag }}
         run: |
-          LATEST_TAG="${{ steps.latest_tag.outputs.tag }}"
-          NEW_VERSION="${{ steps.bump.outputs.version }}"
-
           {
             echo "changelog<<CHANGELOG_EOF"
 
@@ -124,10 +146,11 @@ jobs:
         if: steps.bump.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: v${{ steps.bump.outputs.version }}
+          NOTES: ${{ steps.changelog.outputs.changelog }}
         run: |
-          VERSION="v${{ steps.bump.outputs.version }}"
           gh release create "$VERSION" \
             --title "$VERSION" \
-            --notes "${{ steps.changelog.outputs.changelog }}" \
+            --notes "$NOTES" \
             --target main
           echo "Released $VERSION"
