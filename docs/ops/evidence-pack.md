@@ -15,7 +15,7 @@ Vocabulary is in the [ops README](README.md) §1.
 
 A pack lets anyone with the pack, the trusted public keys from the ceremony transcript, and access to a chain-data source the monitor did not use, check **months later and offline** that for one network and one calendar month:
 
-1. every outflow from the float matched a Guard receipt, and the Guard's receipt log is one unbroken, signed chain that continues from the previous pack;
+1. every outflow from the float matched a Guard receipt (or, if owner-signed, a ceremony or incident record), and the Guard's receipt log is unbroken: one signed chain per receipt key, each continuing from the previous pack or introduced by a recorded rotation or ceremony;
 2. every decision can be re-derived from the archived request and the policy bundle in force;
 3. balances reconcile to zero residual every day, and every allowance from the float is zero (or an alert explains it);
 4. every alert, freeze, drill, incident, key change, configuration change and release change in the month is recorded;
@@ -82,17 +82,19 @@ UTF-8 JSON. The signatures cover the file's **exact bytes**, so a verifier hashe
 | `period.start`, `period.end` | RFC 3339 UTC | The month; `end` is exclusive |
 | `blocks.first`, `blocks.last` | integer | Solidified heights covered, inclusive |
 | `floats` | array of strings | Float addresses (base58check) |
-| `receipts.receipt_keys` | array of hex | Guard receipt public keys seen in the segment, in order of use |
-| `receipts.first_seq`, `receipts.last_seq` | integer | Sequence numbers of the first and last frame in `segment.bin` |
-| `receipts.head_digest` | hex | Digest of the last receipt |
-| `receipts.checkpoint` | object or `null` | `{seq, digest}` of the previous pack's last receipt; `null` only for the first pack after genesis |
+| `receipts.chains` | array of objects | One entry per Guard receipt key used in the period, **in order of use**. A receipt's `seq` counts per receipt key, from 0 with an all-zero `prev` (`ReceiptBodyV1`), so each key's receipts form their own chain. Fields below |
+| `.receipt_key` | hex | The receipt public key |
+| `.first_seq`, `.last_seq` | integer | Sequence numbers of this key's first and last frame in `segment.bin` |
+| `.head_digest` | hex | Digest of this key's last receipt in the period |
+| `.checkpoint` | object or `null` | `{seq, digest}` of this key's last receipt in an earlier pack. `null` when the key's chain starts in this period; `first_seq` is then 0 |
+| `.started_by` | object or `null` | Set exactly when `checkpoint` is `null`. `{"rotation": {receipt_key, seq, digest}}`: the receipt under the previous key that records the rotation to this one (CER-R2 step 1). `{"ceremony": "<transcript id>"}`: genesis, or a new key after a compromise (CER-R2 step 2), with the re-anchor point in that transcript |
 | `prev_manifest_sha256` | hex or `null` | SHA-256 of the previous pack's `MANIFEST.json`; `null` only for the first pack |
 | `monitor.version`, `monitor.binary_sha256`, `monitor.config_sha256` | string, hex, hex | The monitor build and configuration at period end |
 | `guard.release_digests` | array of hex | Every Guard binary digest that ran in the period, in order (details in `host/releases.csv`) |
 | `created_at` | RFC 3339 UTC | Build time |
 | `files` | array of `{path, bytes, sha256}` | **Every** file in the pack except `MANIFEST.json` and the `*.sig` files beside it, sorted by `path` (byte order) |
 
-Example (values shortened to placeholders):
+Example (values shortened to placeholders; a month with a scheduled receipt-key rotation, so two chains):
 
 ```json
 {
@@ -103,11 +105,24 @@ Example (values shortened to placeholders):
   "blocks": { "first": 1000000, "last": 1892799 },
   "floats": ["<float address>"],
   "receipts": {
-    "receipt_keys": ["<32-byte hex>"],
-    "first_seq": 1042,
-    "last_seq": 1987,
-    "head_digest": "<32-byte hex>",
-    "checkpoint": { "seq": 1041, "digest": "<32-byte hex>" }
+    "chains": [
+      {
+        "receipt_key": "<old key, 32-byte hex>",
+        "first_seq": 1042,
+        "last_seq": 1500,
+        "head_digest": "<32-byte hex>",
+        "checkpoint": { "seq": 1041, "digest": "<32-byte hex>" },
+        "started_by": null
+      },
+      {
+        "receipt_key": "<new key, 32-byte hex>",
+        "first_seq": 0,
+        "last_seq": 486,
+        "head_digest": "<32-byte hex>",
+        "checkpoint": null,
+        "started_by": { "rotation": { "receipt_key": "<old key>", "seq": 1500, "digest": "<32-byte hex>" } }
+      }
+    ]
   },
   "prev_manifest_sha256": "<32-byte hex>",
   "monitor": { "version": "<semver>", "binary_sha256": "<32-byte hex>", "config_sha256": "<32-byte hex>" },
@@ -124,12 +139,12 @@ Example (values shortened to placeholders):
 
 ## 5. File formats
 
-**Conventions for every CSV:** UTF-8, LF line ends, RFC 4180 quoting, a header row with exactly the columns below in this order. Amounts are integers in the asset's base unit (sun for TRX, the token's smallest unit otherwise), never decimals. Times are Unix milliseconds UTC unless a column says seconds. Transaction ids and digests are lowercase hex. Addresses are base58check. Booleans are `true`/`false`. An empty cell means "not applicable", never zero.
+**Conventions for every CSV:** UTF-8, LF line ends, RFC 4180 quoting, a header row with exactly the columns below in this order. Amounts are integers in the asset's base unit (sun for TRX, the token's smallest unit otherwise), never decimals. Times are Unix milliseconds UTC unless a column says seconds. Transaction ids and digests are lowercase hex. Addresses are base58check. Booleans are `true`/`false`. An empty cell means "not applicable", never zero. Since `seq` counts per receipt key, a receipt reference in any `*_seq` column is written `<first 16 hex of the receipt key>:<seq>`.
 
 ### 5.1 Receipts
 
-- **`receipts/segment.bin`:** a sequence of frames, each a 4-byte little-endian length followed by that many bytes of the canonical (BCS) encoding of one `ReceiptV1` ([`vaultex-types`](../../crates/vaultex-types/src/receipt.rs); semantics in the `RECEIPT_V1` RFC, T05-7a). Frames are in sequence order, gapless from `first_seq` to `last_seq`. The segment holds **every** receipt in the period: accepts and refusals, co-sign and shadow, and state changes.
-- **`receipts/anchors.csv`:** `seq,digest,monitor_time_ms`. The monitor anchors the head at least every 60 s and at every accept. Every anchor must lie on the chain in `segment.bin` (or in an earlier pack).
+- **`receipts/segment.bin`:** a sequence of frames, each a 4-byte little-endian length followed by that many bytes of the canonical (BCS) encoding of one `ReceiptV1` ([`vaultex-types`](../../crates/vaultex-types/src/receipt.rs); semantics in the `RECEIPT_V1` RFC, T05-7a). Frames are grouped by chain, in the order of `receipts.chains`; within a chain they are in sequence order, gapless from its `first_seq` to its `last_seq`. The segment holds **every** receipt in the period: accepts and refusals, co-sign and shadow, and state changes. After a compromise re-key (CER-R2 step 2), the old key's frames after the transcript's re-anchor point stay in the segment as incident evidence; they are checked as a chain (V-5) but are not counted as decisions.
+- **`receipts/anchors.csv`:** `receipt_key,seq,digest,monitor_time_ms`. The monitor anchors the head at least every 60 s and at every accept. Every anchor must lie on its key's chain in `segment.bin` (or in an earlier pack).
 - **`receipts/requests/<request-id-hex>.bin`:** the canonical bytes of the archived request for each decision, as the Guard exported them. They make replay possible (§7, V-6).
 
 ### 5.2 Policy and configuration
@@ -228,8 +243,8 @@ Run on any machine, in the extracted pack directory, with the trusted `allowed_s
 | V-1 | Trusted keys: the pack's `config/allowed_signers` equals the trusted copy, or every difference is a rotation recorded in the transcripts | `diff` |
 | V-2 | The monitor's signature, and every admin countersignature | `ssh-keygen -Y verify` (below) |
 | V-3 | Every listed file exists with the listed size and SHA-256, and no unlisted file exists | `jq`, `shasum` (below) |
-| V-4 | Continuity with the previous pack: `prev_manifest_sha256` is its manifest's SHA-256; `receipts.checkpoint` is its last receipt; `receipts.first_seq` is one more than its `last_seq`; `blocks.first` is one more than its `blocks.last` | `shasum`, `jq` |
-| V-5 | The receipt chain: canonical decoding, signatures, sequence, previous links, key continuity, non-decreasing time, starting at the checkpoint; every anchor in `anchors.csv` lies on it | Offline receipt verifier *(planned, T05-6)* |
+| V-4 | Continuity with the previous pack: `prev_manifest_sha256` is its manifest's SHA-256; `blocks.first` is one more than its `blocks.last`. **Per chain:** a `checkpoint` equals the `last_seq` and `head_digest` of that key's chain in an earlier pack, and `first_seq` is one more; a chain without one has `first_seq` 0 and a `started_by`. The previous pack's last chain either continues here or ended there in a rotation that a chain here names | `shasum`, `jq` |
+| V-5 | **Each chain:** canonical decoding, signatures by its `receipt_key`, gapless sequence from `first_seq` to `last_seq`, previous links from the checkpoint (or from an all-zero `prev` at 0), non-decreasing time, ending at `head_digest`. **Between chains:** each `rotation` start names a receipt on the previous key's chain that records the rotation to this key; each `ceremony` start names a transcript with this key and, after a compromise, the re-anchor point; time never goes backwards. Every anchor in `anchors.csv` lies on its key's chain | Offline receipt verifier *(planned, T05-6; the rotation receipt's form comes from T05-7a)* |
 | V-6 | Replay: each decision re-derived from its archived request and the bundle in force gives the same decision | Offline replay *(planned, T05-6/T06-5)*; compare with `replay/report.txt` |
 | V-7 | Chain re-check against a **third** data source the monitor did not use: every outflow exists at its height with its effects; daily balances and allowances match; no float-signed transaction in the period is missing from `outflows.csv` | `vaultex-monitor evidence verify --rpc <third source>` *(planned)* |
 | V-8 | Table invariants: every outflow has a receipt or a fired rule; every residual is 0; every non-zero allowance and every freeze has a record; `summary.md` recomputes from the tables | `vaultex-monitor evidence verify` *(planned)* |
@@ -250,7 +265,8 @@ comm -3 <(find . -type f ! -name 'MANIFEST.json*' | sed 's|^\./||' | LC_ALL=C so
 
 # V-4: link to the previous pack
 shasum -a 256 /path/to/previous/MANIFEST.json   # must equal .prev_manifest_sha256
-jq '.prev_manifest_sha256, .receipts.checkpoint, .receipts.first_seq, .blocks.first' MANIFEST.json
+jq '.prev_manifest_sha256, .blocks.first, (.receipts.chains[] | {receipt_key, first_seq, checkpoint, started_by})' MANIFEST.json
+jq '.blocks.last, (.receipts.chains[-1] | {receipt_key, last_seq, head_digest})' /path/to/previous/MANIFEST.json
 ```
 
 A pack that fails any step is an incident ([RB-1](runbooks.md#rb-1-sev-1-triage-after-an-auto-freeze) if it points to missing or altered receipts).
@@ -270,6 +286,7 @@ A pack that fails any step is an incident ([RB-1](runbooks.md#rb-1-sev-1-triage-
 | Pack content | Needs | From |
 |---|---|---|
 | Receipts that say whether a decision was co-sign or shadow, and receipts for state changes (freeze, unfreeze, bundle offered or activated, key rotation) | Receipt format | T05-6 / T05-7a (WS-05, WS-03) |
+| The rotation receipt that links one receipt key's chain to the next (`started_by.rotation`, V-5) | Receipt-key rotation semantics | T05-7a |
 | Archived requests (`receipts/requests/`) and the exported frames | Guard receipt export with a request sidecar | T06-5 (WS-06) |
 | V-5, V-6 | Offline receipt verifier and replay | T05-6 |
 | Chain tables, monitor tables, refill checks | Matching and alert rules | T07-3 |

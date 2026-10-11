@@ -81,7 +81,7 @@ The same names as [threat model v2](../assurance/THREAT_MODEL_V2.md) §3.2.
 | Chain watcher, `vaultex-monitor watch` | T07-2 | **Implemented.** Follows TRON on two or more keyless public providers, with a crash-safe cursor per provider, fork detection and rate-limit backoff. No matching, alerts or freeze |
 | Receipt matching, alert rules, refill check | T07-3 | Planned (waits on receipts, T05-6) |
 | Freeze path; drills DR-1…DR-5 and DR-8 | T07-4 | Planned (waits on T07-3 and T06-5) |
-| Guard service | T06-5 | Skeleton that refuses every request; blocked on ADR-11 and ADR-17 |
+| Guard service | T06-5 | Skeleton that refuses every request; blocked on ADR-11 and ADR-17. These files also need from it a read-only journal export for the `mon` role ([host baseline](host-baseline.md) HB-29) |
 | `vaultex-policy` and `vaultex-approve` | T05-8 | Skeletons |
 | Offline receipt verifier | T05-6 | Planned |
 | `vaultex-monitor evidence build` / `evidence verify` | Follow-up (WS-07) | Planned. Until it exists, the manual checks in [`evidence-pack.md`](evidence-pack.md) §7 apply |
@@ -98,7 +98,7 @@ Every command these files name for a planned component is marked *(planned)*. It
 1. **Executed effects, not decoded intent.** The monitor judges what the chain did: token transfer events, contract results, balance changes and fees. A decoder defect therefore cannot hide an outflow from it.
 2. **Alarm on any source, clear only when all agree.** An event seen by either chain provider raises an alarm. A block counts as clear only when both providers agree at solidified height.
 3. **Freeze is cheap, unfreeze is dear.** Any Sev-1 freezes. An unfreeze needs M-of-N admins, a written cause, and local submission on the Guard host ([RB-10](runbooks.md#rb-10-unfreeze)).
-4. **No cheap attacker-triggered freeze.** Every freeze rule needs a float signature, a real allowance, an issuer action, a donation above the float ceiling, or an event inside the Guard domain. Dust, zero-value transfers and events from unlisted contracts never freeze.
+4. **No cheap attacker-triggered freeze.** Every freeze rule needs a float signature, a real (non-zero) allowance, an issuer action, a donation that takes the float more than its headroom above its ceiling (MR-12), or an event inside the Guard domain. Dust, zero-value transfers, zero-value approvals and events from unlisted contracts never freeze.
 5. **The monitor can never unfreeze.** It holds no admin key.
 6. **Fail closed.** No real-funds operation without a running monitor (RF-4). If the monitor is lost, an admin freezes the Guard, or the liveness lease lapses (OD-1).
 7. **Nile first.** Every ceremony and drill runs on Nile before mainnet, with the same steps and the same transaction shapes.

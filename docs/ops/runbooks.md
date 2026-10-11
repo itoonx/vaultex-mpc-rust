@@ -27,26 +27,26 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 
 | ID | Detects | Severity | Freezes | Runbook |
 |---|---|---|---|---|
-| MR-01 | A float-signed transaction of a contract type other than a TRX transfer or a smart-contract call | 1 | Yes | RB-1, then RB-3 or RB-4 |
-| MR-02 | A float-signed transaction under a permission other than the configured active one, including the owner permission. It fires during ceremonies too; there the Guard is already frozen and the page is acknowledged in the transcript | 1 | Yes | RB-1; RB-8 if owner keys are suspect |
-| MR-03 | A float-signed contract call to a token outside the allowlist, or anything but the plain token transfer (selector, call value, call-data length) | 1 | Yes | RB-1; RB-2 if it changed an allowance |
-| MR-04 | A float-signed transaction with no matching co-sign accept receipt after the grace period (10 s, ESTIMATE; it covers receipt-export lag, since the Guard records a receipt before it releases a signature) | 1 | Yes | RB-1, then RB-3 or RB-4 |
+| MR-01 | A float-signed transaction of a contract type other than a TRX transfer or a smart-contract call. **Fires during ceremonies:** an owner-signed permission update (type 46) raises it; expected there ([ceremony](../ceremonies/guard.md#1-rules-for-every-ceremony) rule 2) | 1 | Yes | RB-1, then RB-3 or RB-4. Not for a transaction in a declared ceremony's plan |
+| MR-02 | A float-signed transaction under a permission other than the configured active one, including the owner permission. **Fires during ceremonies:** every owner-signed ceremony or recovery transaction raises it; there the Guard is already frozen, and the alert is expected and closed in the transcript or incident record (ceremony rule 2) | 1 | Yes | RB-1; RB-8 if owner keys are suspect |
+| MR-03 | A float-signed contract call to a token outside the allowlist, or anything but the plain token transfer (selector, call value, call-data length). **Fires during recovery:** RB-2's owner-signed `approve(spender, 0)` raises it; expected there (ceremony rule 2) | 1 | Yes | RB-1; RB-2 if it changed an allowance |
+| MR-04 | A float-signed transaction with no matching co-sign accept receipt after the grace period (10 s, ESTIMATE; it covers receipt-export lag, since the Guard records a receipt before it releases a signature). **Fires during ceremonies:** no owner-signed transaction has a co-sign receipt, so each one in a ceremony or recovery raises it; expected there (ceremony rule 2) | 1 | Yes | RB-1, then RB-3 or RB-4. Not for a transaction in a declared ceremony's plan |
 | MR-05 | A matched transaction whose executed effects (recipient, asset, amount, fee) differ from its receipt or from the monitor's own derivation of the intent | 1 | Yes | RB-1; a kernel defect is suspected (stay frozen; report it under `SECURITY.md`) |
 | MR-06 | Receipt-chain integrity failure: signature, sequence gap, previous-link, key continuity, time going backwards, a receipt later than its transaction's block, or a history that does not extend the monitor's anchored head | 1 | Yes | RB-3 |
-| MR-07 | An `Approval` event naming the float as owner, on an allowlisted token | 1 | Yes; refills blocked | RB-2 |
+| MR-07 | An `Approval` event with a **non-zero** value naming the float as owner, on an allowlisted token. A zero-value `Approval` (such as RB-2's revocation) is Info under MR-19: it raises no allowance, and the float-signed transaction behind it is caught by MR-02, MR-03 or MR-04 | 1 | Yes; refills blocked | RB-2 |
 | MR-08 | A non-zero allowance from the float to any spender in the watched set | 1 | Yes; refills blocked | RB-2 |
 | MR-09 | Tokens leave the float in a transaction the float did not sign | 1 | Yes | RB-2 |
 | MR-10 | A monitor cap exceeded: per transaction, rolling 24 h amount or count per asset, or fee spend. The monitor's caps are the written loss budget, not the policy bundle's | 1 | Yes | RB-1 |
 | MR-11 | A destination outside the monitor's allowlist | 1 (allowlist mode) or 2 (open mode; OD-2) | In allowlist mode | RB-1 |
-| MR-12 | The float's balance (any asset, or TRX) above its ceiling | 2 | Yes | RB-1, RB-9 |
-| MR-13 | Solvency at solidified height: the balance change differs from inflows − matched outflows − fees | 1 | Yes | RB-1 |
+| MR-12 | The float's balance (any asset, or TRX) above its ceiling. Up to the **headroom** above it (per asset, in `monitor.toml`; ESTIMATE 10% of the ceiling, and always far above dust) it only pages; beyond the headroom it also freezes. Refills stop at the ceiling minus the headroom (RB-9), so only a sizeable donation can freeze | 2 | Only beyond the headroom | RB-9 (excess); RB-1 if frozen |
+| MR-13 | Solvency at solidified height: the balance change differs from inflows − outflows − fees over every transaction the monitor observed, so something moved that the monitor did not see. Matching is MR-04's job | 1 | Yes | RB-1 |
 | MR-14 | The account's permissions differ from the expected set (keys, thresholds, operations, permission count). During a ceremony it is expected until `monitor.toml` is updated | 1 | Yes | RB-3 or RB-8, unless it is the ceremony's own change |
 | MR-15 | A token issuer action: deprecation, or blacklisting of the float (Sev-1, freezes); pause or a fee-parameter change (Sev-2) | 1 or 2 | Sev-1 cases | RB-12 |
-| MR-16 | Guard lifecycle: a **loosening** policy bundle offered (Sev-1 page inside its time-lock, no freeze); tightening, activation, state changes, key rotations (Sev-2) | 1 or 2 | No | RB-1: confirm an admin intended it. Any admin cancels a pending loosening by issuing a tightening |
+| MR-16 | Guard lifecycle: a **loosening** policy bundle offered (Sev-1 page inside its time-lock, no freeze); tightening, activation, state changes, key rotations (Sev-2). The changes a declared ceremony makes are expected (ceremony rule 2) | 1 or 2 | No | RB-1: confirm an admin intended it. Any admin cancels a pending loosening by issuing a tightening |
 | MR-17 | An accept receipt whose transaction never appeared by its expiry plus 2 minutes | Info; Sev-2 above 5 a day | No | — |
 | MR-18 | A possible double pay: the same recipient, asset and amount within 24 h | 2 | No | RB-1 (reconcile with the operator) |
-| MR-19 | Spoofable noise: dust, zero-value transfers and events from unlisted contracts naming the float | Info | **Never** | — |
-| MR-20 | Data and host health: provider divergence at solidified height; a provider down > 5 min; head lag > 30 s; clock offset > 500 ms; a Guard binary digest ≠ the pinned release; a login outside a declared window | 2 (both providers down: 1) | No (with OD-1 the Guard fails closed) | RB-7, RB-14 |
+| MR-19 | Spoofable noise: dust, zero-value transfers, zero-value `Approval` events, and events from unlisted contracts naming the float. Only a donation that takes the float past its MR-12 headroom can freeze, and that costs the sender real funds | Info | **Never** | — |
+| MR-20 | Data and host health: provider divergence at solidified height; a provider down > 5 min; head lag > 30 s; clock offset > 500 ms; a Guard binary digest ≠ the pinned release; a login outside a declared window; the pull of the Guard host's journal failing for > 5 min or showing a gap ([host baseline](host-baseline.md) HB-29) | 2 (both providers down: 1) | No (with OD-1 the Guard fails closed) | RB-7, RB-14 |
 
 **Freeze latency.** From the block time of the triggering transaction to the Guard's first `FROZEN` refusal receipt: target p99 ≤ 32 s, hard limit **60 s** (RF-4; ESTIMATE budget: 3–6 s to reach a provider, ≤ 3 s poll, ≤ 2 s fetch, up to the grace period for MR-04, ≤ 1 s to sign, post and fsync, plus retry slack).
 
@@ -87,12 +87,13 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 
 1. Keep the Guard frozen. Refills are blocked automatically.
 2. If tokens are already leaving (MR-09): the owner permission (2-of-3) sweeps the remaining tokens to the cold treasury first. Then continue.
-3. The owner permission signs `approve(spender, 0)` for every spender with a non-zero allowance, following the ceremony rules.
+3. The owner permission signs `approve(spender, 0)` for every spender with a non-zero allowance, following the ceremony rules. Each owner-signed transaction here (sweep or revocation) raises the alerts listed for it in [ceremony rule 2](../ceremonies/guard.md#1-rules-for-every-ceremony): acknowledge each one in the incident record against its transaction hash.
 4. Confirm that every allowance in the watched set is 0 **at solidified height on both providers**.
 5. An allowance needs a float signature, so find which keys signed the approving transaction. Until that is explained, treat it as RB-3 (Guard key) and RB-4 (operator key) together.
-6. Refill only after the refill check passes ([RB-9](#rb-9-refill)).
+6. Close the alerts in the incident record: the triggering MR-07, MR-08 or MR-09 once step 4 holds and step 5 is explained (including any RB-3 or RB-4 it led to), and the expected alerts from step 3. The refill check needs no open Sev-1, so this comes first.
+7. Refill only after the refill check passes ([RB-9](#rb-9-refill)).
 
-**Evidence:** transaction hashes; the allowance readings; the refill-check report.
+**Evidence:** transaction hashes; the allowance readings; the closed alerts; the refill-check report.
 
 ### RB-3. Guard-key compromise suspected, or freeze not confirmed
 
@@ -123,10 +124,10 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 4. Restore the receipt journal **from the monitor's anchored copy**, then verify it end to end with the offline receipt verifier *(planned, T05-6)*. Its head must equal the monitor's last anchor.
 5. Restore the configuration files from backup and compare their SHA-256 with the ceremony transcript.
 6. Start the Guard frozen. The monitor must reconnect and report head continuity.
-7. On Nile: co-sign one test transfer through the full path (this is drill DR-6, the M7 #4 restore drill).
-8. Unfreeze ([RB-10](#rb-10-unfreeze)).
+7. Unfreeze ([RB-10](#rb-10-unfreeze)). A frozen Guard refuses co-signing, so the test comes after this.
+8. Test. On Nile: co-sign one test transfer through the full path, matched by the monitor (this is drill DR-6, the M7 #4 restore drill). On mainnet: the first payout after the unfreeze, with the monitor watching. If the test fails, any admin re-freezes at once and the failure goes to [RB-1](#rb-1-sev-1-triage-after-an-auto-freeze).
 
-**Evidence:** drill or incident log; head continuity; the test transaction hash.
+**Evidence:** drill or incident log; head continuity; the unfreeze receipt; the test transaction hash.
 
 ### RB-6. Monitor host lost
 
@@ -136,7 +137,7 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 4. Keys:
    - Freeze key lost: make a new one ([CER-3](../ceremonies/guard.md#cer-3-monitor-keys)), add it with a tightening bundle (one admin, immediate), and remove the old one later with a loosening bundle (M-of-N, time-locked) ([CER-R3](../ceremonies/guard.md#cer-r3-monitor-key-rotation)).
    - Evidence or ack key lost: make new ones and record them (CER-R3).
-5. Rebuild the receipt copy: pull the Guard's export from the first sequence number after the last evidence pack, and verify that it extends that pack's head. The anchors taken since that pack are lost with the host, so a rewrite inside that window would go unseen; record the gap in the incident record.
+5. Rebuild the receipt copy: pull the Guard's export from the receipt after the last evidence pack's head for the current receipt key (sequence numbers count per key; [evidence-pack.md](evidence-pack.md) §4), and verify that it extends that head. The anchors taken since that pack are lost with the host, so a rewrite inside that window would go unseen; record the gap in the incident record.
 6. Rescan the chain from the last solidified height in the last evidence pack, so nothing in the outage window is missed.
 7. Every outflow during the outage must be matched before the Guard is unfrozen ([RB-10](#rb-10-unfreeze)).
 
@@ -161,20 +162,22 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 
 1. Run the refill check on the monitor host: `vaultex-monitor refill-check` *(planned, T07-3)*. It prints PASS only if:
    - no Sev-1 alert is open, and the Guard is RUNNING or deliberately FROZEN;
-   - every float-signed transaction since the account was created has been classified, none raised an allowance, and every allowance in the watched set reads 0 at solidified height on both providers;
-   - every outflow up to the solidified height is matched and the balances reconcile (MR-13 clean);
-   - the balance plus the refill amount stays at or under the ceiling, for the asset and for TRX;
+   - every allowance-raising transaction has been followed by a revocation and has a closed incident record; every allowance in the watched set reads 0 at solidified height on both providers;
+   - every outflow up to the solidified height is matched to a receipt, or (owner-signed) to a closed ceremony or incident record, and the balances reconcile (MR-13 clean);
+   - the balance plus the refill amount stays at or under **the ceiling minus the headroom** (MR-12), for the asset and for TRX;
    - the permissions equal the expected set.
-2. The owner signs the transfer from the cold treasury **only with a PASS report less than 10 minutes old**, and for an amount that keeps the float under its ceiling.
+2. The owner signs the transfer from the cold treasury **only with a PASS report less than 10 minutes old**, and for an amount within that bound.
 3. The monitor confirms the inflow (class "refill") and the new balance.
 
 A refill that arrives without a matching PASS report pages Sev-2. **Evidence:** the signed PASS report and the transaction hash, both in the evidence pack.
+
+**Excess above the ceiling (MR-12).** Within the headroom the Guard keeps running: the owner has the excess sent back to the cold treasury as a normal co-signed transfer (operator → Guard), allowed because the cold treasury is on the destination allowlist (CER-4). An owner-permission sweep would freeze the Guard (MR-02), so it is not used here. Beyond the headroom the Guard is already frozen, and stays frozen while the excess is there: the owner permission sweeps the excess to the cold treasury under the ceremony rules (its alerts are expected, [ceremony rule 2](../ceremonies/guard.md#1-rules-for-every-ceremony)), then RB-1 and RB-10.
 
 ### RB-10. Unfreeze
 
 1. Preconditions, all written in the incident record:
    - the cause is known and fixed (RB-1);
-   - every outflow is matched, every allowance is 0, and the permissions equal the expected set;
+   - every outflow is matched to a receipt or to a closed ceremony or incident record, every allowance is 0, and the permissions equal the expected set;
    - for a host rebuild, head continuity is confirmed.
 2. M admins each sign the unfreeze order on their own admin devices.
 3. The order is submitted **locally on the Guard host**, through its admin socket. The network API refuses unfreeze orders.
@@ -228,10 +231,10 @@ Drills prove the runbooks work. Each produces a signed drill log (§7) that goes
 |---|---|---|---|---|
 | DR-1 | The freeze pipeline, without the chain | Inject a drill-tagged event into the monitor's matcher on a testnet Guard: `vaultex-monitor drill --synthetic` *(planned, T07-4)* | Freeze receipt and first `FROZEN` refusal within 60 s of injection; unfreeze with test-only admin keys | Weekly, automated |
 | DR-2 | **The ≤ 60 s auto-freeze on a real outflow** (M7 #3; on mainnet, M7 #8) | See §4.1 | t2 − t0 ≤ 60 s | Nile before Rung 2; mainnet once in Phase A |
-| DR-3 | Approval and allowance detection, and the refill block | On Nile, the owner permission signs `approve(treasury, 1)` on the test token | MR-07 at once and MR-08 at the next snapshot; freeze within 60 s; refill check FAIL; after `approve(treasury, 0)` and solidification, refill check PASS | Nile before Rung 2 |
+| DR-3 | Approval and allowance detection, and the refill block | On Nile, the owner permission signs `approve(treasury, 1)` on the test token | MR-07 at once and MR-08 at the next snapshot; freeze within 60 s; refill check FAIL. Then RB-2: `approve(treasury, 0)` raises only the expected alerts (MR-02, MR-03, MR-04; no MR-07); after solidification, and once the drill's alerts are closed in the drill log, refill check PASS | Nile before Rung 2 |
 | DR-4 | The Guard fails closed when the monitor is lost (only if OD-1 is adopted) | Stop the monitor on a testnet setup | Guard refuses co-sign requests within the lease period, with a receipted refusal | Nile before Rung 2 |
 | DR-5 | Degraded data sources | Block provider A at the monitor's firewall, then both | One down: Sev-2 within 5 min and alarms still fire. Both down: no block clears; lease lapse or Sev-1 | Nile before Rung 2 |
-| DR-6 | Guard restore to a fresh host (M7 #4 restore drill) | RB-5 end to end on Nile | Head continuity; a co-signed test transfer matched by the monitor | Before Rung 2; then quarterly |
+| DR-6 | Guard restore to a fresh host (M7 #4 restore drill) | RB-5 end to end on Nile | Head continuity; after the unfreeze, a co-signed test transfer matched by the monitor | Before Rung 2; then quarterly |
 | DR-7 | Chain-native recovery: the owner keys rotate the Guard key (M7 #4; on mainnet, M7 #8) | CER-R1 | New permissions read back; the old Guard key's co-signature is rejected by the chain; the monitor's expected set updated | Nile before Rung 2; mainnet in Phase A |
 | DR-8 | Receipt-history tampering is detected | On a testnet Guard, serve the monitor a receipt history that does not extend its anchored head (test fixture) | MR-06 and a freeze | Before Rung 2 |
 | DR-9 | Time to hard freeze | Retrieve 2 of the 3 cold keys and sign a Nile permission update, from a cold start | Measured. The result is the documented exposure window for a stolen Guard key plus operator key | Before Rung 2; then quarterly |

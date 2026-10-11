@@ -31,7 +31,7 @@ Vocabulary (domains, keys, severities) is in the [ops README](README.md) §1.
 | FD-5 | Cold keys never touch a networked machine. Transactions travel by file or QR code, and every hash is checked on an air-gapped machine ([ceremonies](../ceremonies/guard.md)) |
 | FD-6 | The owner's everyday laptop holds no production credential. Admin work runs from a dedicated device or a separate OS user gated by hardware keys (OD-7) |
 | FD-7 | DNS and the public CA system are out of the trust path. mTLS pins certificates; endpoints are configured by IP address or pinned name |
-| FD-8 | Data flows one way. Receipts and logs go D-G → D-M (the monitor **pulls** receipts with a read-only certificate). Freeze orders go D-M → D-G. Nothing goes D-M → D-OP except pages. The Guard cannot write into the monitor's state |
+| FD-8 | Data flows one way. Receipts and the Guard host's journal go D-G → D-M, and the monitor **pulls** both over its pinned `mon` connection, which can only read and freeze (HB-12, HB-29). Freeze orders go D-M → D-G. Nothing goes D-M → D-OP except pages. The Guard host opens no connection to the monitor host, so it cannot write into the monitor's state ([threat model](../assurance/THREAT_MODEL_V2.md) TB4) |
 
 Solo-mode limit: one human can still reach every domain. These rules defend against the loss of one credential, vendor or host, not against compromise of the owner (threat model LM7).
 
@@ -92,7 +92,7 @@ LoginGraceTime 30
 |---|---|
 | HB-11 | nftables, **default deny** in both directions, with an explicit allowlist per host (§9) |
 | HB-12 | The Guard API accepts connections only from the D-OP and D-M addresses, and only with a pinned client certificate per role (`op`, `mon`). The admin surface (policy install, unfreeze, receipt-key rotation) is a local Unix socket on the Guard host, never a network port |
-| HB-13 | **The Guard has no chain-RPC egress.** It decides from the bytes it is given, and its only outbound traffic is time, OS updates, log upload to D-M and, if ADR-17 picks cloud custody, the key service's endpoint (preferably a private endpoint) |
+| HB-13 | **The Guard has no chain-RPC egress.** It decides from the bytes it is given, and its only outbound traffic is time, OS updates and, if ADR-17 picks cloud custody, the key service's endpoint (preferably a private endpoint) |
 | HB-14 | IPv6 is either disabled or given the same rules, plus ICMPv6 neighbour discovery |
 
 `/etc/nftables.conf` for the Guard host (reference; the addresses are RFC 5737 documentation values):
@@ -103,12 +103,10 @@ flush ruleset
 
 define ADMIN_SSH   = { 192.0.2.10 }                  # declared admin addresses
 define CALLERS     = { 198.51.100.20, 203.0.113.30 } # D-OP submitter, D-M monitor
-define MONITOR     = { 203.0.113.30 }                # log upload target
 define NTS         = { 192.0.2.123, 192.0.2.124 }    # pinned NTS servers
 define RESOLVER    = { 192.0.2.53 }
 define MIRRORS     = { 192.0.2.80 }                  # OS package mirror
 define GUARD_PORT  = 8443
-define JOURNAL_RX  = 19532
 
 table inet filter {
     chain input {
@@ -130,7 +128,7 @@ table inet filter {
         ip daddr $NTS udp dport 123 accept
         ip daddr $RESOLVER meta l4proto { tcp, udp } th dport 53 accept
         ip daddr $MIRRORS tcp dport { 80, 443 } accept   # packages are signed by the distribution
-        ip daddr $MONITOR tcp dport $JOURNAL_RX accept   # journal upload to D-M
+        # No rule to D-M: the monitor pulls receipts and the journal (HB-29)
     }
 }
 ```
@@ -147,7 +145,7 @@ The monitor host uses the same structure, with the differences in §9.
 | HB-16 | Sandboxing as below. `systemd-analyze security` output is stored in the transcript; target exposure ≤ 2.0 (ESTIMATE) |
 | HB-17 | Secrets reach the service only through `LoadCredentialEncrypted=`: never through environment variables, command lines or plain files. Core dumps are off |
 
-`/etc/systemd/system/vaultex-guard.service` (reference; the binary's flags are defined by T06-5, and the monitor's unit differs only in names, credentials and `ExecStart`):
+`/etc/systemd/system/vaultex-guard.service` (reference; the binary's flags are defined by T06-5, and the monitor's unit differs only in names, credentials and `ExecStart`, and has no `SupplementaryGroups=` line):
 
 ```ini
 [Unit]
@@ -159,6 +157,8 @@ After=network-online.target time-sync.target
 Type=simple
 User=vaultex-guard
 Group=vaultex-guard
+# Read-only journal access, for the export the monitor pulls (HB-29).
+SupplementaryGroups=systemd-journal
 # Flags are placeholders until T06-5 defines them.
 ExecStart=/opt/vaultex/bin/vaultex-guard --config /etc/vaultex/guard.toml
 Restart=on-failure
@@ -258,8 +258,10 @@ rtcsync
 
 | ID | Item |
 |---|---|
-| HB-29 | journald is persistent, with a size cap. The Guard host uploads `sshd` and service logs to the monitor host (`systemd-journal-upload` to `systemd-journal-remote`), which accepts them from that one address only. The upload path can append logs; it cannot touch the monitor's state |
+| HB-29 | journald is persistent, with a size cap. The Guard host's journal (`sshd`, logins, the Guard unit) reaches D-M by **pull**: the monitor reads it over its existing pinned `mon` mTLS connection to the Guard API, from a stored cursor, at least every 10 s (ESTIMATE). The read-only export is a **T06-5 requirement**; for it, the Guard unit gets read-only access to the journal (`SupplementaryGroups=systemd-journal`, §6). The monitor treats what it pulls as untrusted data, as it does receipts. A pull failing for > 5 min, or a cursor that no longer resolves or skips sequence numbers, pages (MR-20). The Guard host opens no connection to the monitor host, and the monitor host has **no inbound service port** (FD-8) |
 | HB-30 | **Any login outside a declared maintenance window pages** (MR-20, Sev-2). Windows are declared to the monitor in advance ([RB-14](runbooks.md#rb-14-planned-maintenance)) |
+
+ponytail: the Guard host's journal is not sealed (no Forward Secure Sealing). A root attacker there can erase a login before the next pull; the pull interval bounds that window, and the erasure itself shows up as a gap that pages.
 
 ---
 
@@ -272,7 +274,7 @@ Captured at the ceremony (CER-0, CER-6), after every rebuild, and then quarterly
 | Firewall | `nft list ruleset` | Equal to the reviewed file |
 | SSH | `sshd -T` | `passwordauthentication no`, `kbdinteractiveauthentication no`, `permitrootlogin no`, `pubkeyauthoptions verify-required`, only `sk-ssh-ed25519@openssh.com` accepted |
 | Unit sandbox | `systemd-analyze security vaultex-<service>.service` | Exposure ≤ 2.0 (ESTIMATE target) |
-| Listening sockets | `ss -tlnup` | Guard: `sshd` and the Guard port. Monitor: `sshd` and the journal receiver. Plus chronyd on localhost |
+| Listening sockets | `ss -tlnup` | Guard: `sshd` and the Guard port. Monitor: `sshd` only. Plus chronyd on localhost |
 | Time | `chronyc -N authdata` and `chronyc tracking` | Every source authenticated with NTS; offset well under 500 ms |
 | Binary | `sha256sum /opt/vaultex/bin/vaultex-<service>` | Equal to the signed release digest |
 | Accounts | `getent passwd` (login shells only) | The admin user only, plus root locked |
@@ -287,8 +289,8 @@ Captured at the ceremony (CER-0, CER-6), after every rebuild, and then quarterly
 
 | | Guard host (D-G) | Monitor host (D-M) |
 |---|---|---|
-| Inbound | SSH from admin addresses; the Guard API from the D-OP and D-M addresses only | SSH from admin addresses; journal upload from the Guard host only. No service port |
-| Outbound | Time, resolver, OS mirrors, journal upload to D-M; the key service only if ADR-17 picks cloud custody. **No chain RPC** | Time, resolver, OS mirrors, HTTPS to its two chain providers, the Guard API, the alert services and the dead-man check |
+| Inbound | SSH from admin addresses; the Guard API from the D-OP and D-M addresses only | SSH from admin addresses only. No service port |
+| Outbound | Time, resolver, OS mirrors; the key service only if ADR-17 picks cloud custody. **No chain RPC, and nothing to D-M** | Time, resolver, OS mirrors, HTTPS to its two chain providers, the Guard API (receipts, the journal export, freeze orders), the alert services and the dead-man check |
 | Keys | Guard key (ADR-17), receipt key, server TLS key | Freeze key, evidence key, ack key (OD-1), mTLS client key, provider API keys (sent only in the provider's header, never in a URL) |
 | State | Receipt journal; replay, velocity and freeze state (T06-5) | Cursors, the anchored receipt copy, the alert journal |
 | Unattended restart | Yes with a sealed credential or cloud custody. A passphrase typed at start needs a human | Yes |

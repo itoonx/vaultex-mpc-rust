@@ -28,7 +28,14 @@ Vocabulary (domains, keys, float, soft and hard freeze) is in the [ops README](.
 ## 1. Rules for every ceremony
 
 1. **Nile first.** Every ceremony runs on Nile, then on mainnet with the same steps and the same transaction shapes. The mainnet run starts only after the Nile transcript has been reviewed.
-2. **The Guard is frozen throughout** (if it exists yet). The ceremony window is declared to the monitor in advance, so the alerts that a permission change raises (MR-02, MR-14) are expected and acknowledged in the transcript. The end of the ceremony is an M-of-N unfreeze ([RB-10](../ops/runbooks.md#rb-10-unfreeze)).
+2. **The Guard is frozen until CER-7** (if it exists yet), which unfreezes it M-of-N ([RB-10](../ops/runbooks.md#rb-10-unfreeze)) before the co-signed test. The ceremony window is declared to the monitor in advance. Owner-signed transactions carry no co-sign receipt, so they raise Sev-1 alerts by design. The alerts in the table below are expected: acknowledge each one in the transcript against its transaction id, and close it there. Any other alert, or one of these on a transaction that is not in the ceremony plan, is real: stop (rule 7) and start at [RB-0](../ops/runbooks.md#rb-0-first-response-to-any-page). In an incident (RB-2…RB-9) the incident record stands in for the transcript.
+
+   | Ceremony action | Used in | Expected alerts ([runbooks](../ops/runbooks.md) §1) |
+   |---|---|---|
+   | Owner-signed permission update (contract type 46) | CER-5, CER-R1, CER-R4; RB-3, RB-4, RB-8 | MR-01 (contract type), MR-02 (owner permission), MR-04 (no co-sign receipt), MR-14 (until the account's permissions and the expected set in `monitor.toml` agree again) |
+   | Owner-signed `approve(spender, 0)` revocation | RB-2 | MR-02, MR-03 (not a plain transfer), MR-04. A zero-value `Approval` is Info, not MR-07 |
+   | Owner-signed sweep to the cold treasury | RB-2, RB-3, RB-9 (excess beyond the MR-12 headroom) | MR-02, MR-04; MR-10 if it exceeds a monitor cap |
+   | Guard lifecycle change the ceremony makes: bundle install or tightening, key rotation, state change | CER-4, CER-7, CER-R1…CER-R5 | MR-16 (Sev-2) |
 3. **Cold devices never touch a network.** Transactions move between the networked machine and the air-gapped machine by file (removable media used only for the ceremony) or by QR code.
 4. **Two tools, two machines.** Every transaction id, address and file digest is computed twice, on two machines with two independent tools, and compared before anything is signed.
 5. **What may be written down:** public keys, addresses, digests, transaction ids, device labels, hashed device serial numbers, locations by label. **Never:** a private key, a seed, a passphrase or a provider key. Passphrases are not spoken aloud and never typed into a networked machine.
@@ -114,11 +121,11 @@ On the monitor host:
 1. Build the genesis bundle with `vaultex-policy` *(planned, T05-8)*:
    - freeze keys: the monitor's freeze key (admins can always freeze);
    - caps: the Phase caps, at or under ROADMAP §3.4 and the owner's written loss budget;
-   - destinations: the allowlist (OD-2);
+   - destinations: the allowlist (OD-2), which includes the cold treasury so that an excess can be swept back by a normal co-signed transfer (MR-12);
    - tokens: each one through the token onboarding checklist ([runbooks](../ops/runbooks.md) §5);
    - the Guard key's address and the configured active permission id.
 2. M admins sign it. Install it **locally** on the Guard host, together with the admin-set file.
-3. Write `monitor.toml`: network and float address, token allowlist, the monitor's own caps (the written loss budget, not the bundle's), the destination allowlist, the **expected permission set** (CER-5), the Guard's receipt public key, certificate pin and endpoint, the pinned Guard release digest, the cold treasury address, the provider endpoints (never their keys), and alert routing.
+3. Write `monitor.toml`: network and float address, token allowlist, the monitor's own caps (the written loss budget, not the bundle's), the float ceiling and its headroom per asset (MR-12), the destination allowlist, the **expected permission set** (CER-5), the Guard's receipt public key, certificate pin and endpoint, the pinned Guard release digest, the cold treasury address, the provider endpoints (never their keys), and alert routing.
 4. Write `guard.toml` *(planned, T06-5)*. Neither file holds a secret value.
 
 **Record:** SHA-256 of the bundle, the admin set, `monitor.toml` and `guard.toml`.
@@ -136,32 +143,38 @@ On the monitor host:
 
 **Record:** transaction id; the expected-permission JSON's SHA-256; both tool outputs; which owner devices signed (by label).
 
-### CER-6. Read-back and test
+### CER-6. Read-back and chain checks
+
+The Guard is still frozen, so nothing here goes through it.
 
 1. Read the account's permissions on both monitor providers and compare them with the expected set; the monitor reports MR-14 clear.
-2. On **Nile**:
-   - one co-signed test transfer through the full path (operator submitter → Guard → chain), matched by the monitor;
+2. On **Nile**, two checks that the chain itself enforces:
    - a transaction with only the operator's signature must be rejected by the chain;
    - a permission update signed under the active permission must be rejected by the chain.
-3. On **mainnet**, the first Phase-A payout is the test, with the monitor watching. It is an owner action under RF-1.
-4. Capture the baseline checks again on both hosts.
+3. Capture the baseline checks again on both hosts.
+4. Check that every alert the ceremony raised is in the rule-2 table (§1) and closed in the transcript.
 
-**Record:** monitor read-back report; test transaction ids; the rejection messages.
+A frozen Guard refuses co-signing with `FROZEN`, so the co-signed test transfer comes after the unfreeze (CER-7 step 3).
 
-### CER-7. Close
+**Record:** monitor read-back report; the rejection messages; the alert ids and how each was closed.
+
+### CER-7. Unfreeze, test and close
 
 1. Unfreeze: M admins sign, submitted locally on the Guard host ([RB-10](../ops/runbooks.md#rb-10-unfreeze)).
-2. Close the declared ceremony window.
-3. Complete the transcript. Compute its SHA-256. M admins sign it with their review credentials:
+2. Close the declared ceremony window, so that any alert from here on is real.
+3. **Post-unfreeze test.** On **Nile**: one co-signed test transfer through the full path (operator submitter → Guard → chain), matched by the monitor with no alert. On **mainnet**: the first payout after the unfreeze is the test, with the monitor watching; at genesis that is the first Phase-A payout, an owner action under RF-1. If the test fails, any admin re-freezes at once and the failure goes to [RB-1](../ops/runbooks.md#rb-1-sev-1-triage-after-an-auto-freeze); the ceremony is not complete.
+4. Complete the transcript. Compute its SHA-256. M admins sign it with their review credentials:
    `ssh-keygen -Y sign -f ~/.ssh/vaultex_review_sk -n vaultex-ceremony-v1 < transcript.md > transcript.md.admin-<n>.sig`
-4. Store the transcript, its signatures and the video digest in the private evidence store. They go into the next evidence pack.
-5. The public parts (public keys, transaction ids) may appear in the canary report if OD-6 allows.
+5. Store the transcript, its signatures and the video digest in the private evidence store. They go into the next evidence pack.
+6. The public parts (public keys, transaction ids) may appear in the canary report if OD-6 allows.
+
+**Record:** the unfreeze receipt (sequence number and digest); the test transaction id and its receipt.
 
 ---
 
 ## 4. Rotation and recovery ceremonies
 
-Each one follows §1 and §2, runs on Nile first (with the same JSON shape), and ends with CER-6 (read-back) and CER-7 (close).
+Each one follows §1 and §2, runs on Nile first (with the same JSON shape), and ends with CER-6 (read-back and chain checks, Guard still frozen) and CER-7 (unfreeze, then the co-signed test, then close).
 
 ### CER-R1. Guard key rotation
 
@@ -172,9 +185,9 @@ Used for scheduled rotation, by [RB-3](../ops/runbooks.md#rb-3-guard-key-comprom
 3. Build a permission update that replaces the old Guard key with the new one in active permission 2 and changes **nothing else**. Review it as a diff against the current expected set.
 4. Sign with two owner devices (CER-5 steps 3–5) and broadcast.
 5. Update the expected permission set in `monitor.toml` and the Guard's configuration (both are recorded changes); restart the Guard frozen.
-6. Read back (CER-6). On Nile, show that a co-signature by the **old** key is now rejected by the chain.
+6. Read back (CER-6). On Nile, also show that a co-signature by the **old** key is now rejected by the chain. That signature is made with the old key's own custody tool (key tool or key service), not through the Guard, and before step 7 retires the key.
 7. Retire the old key: file custody, crypto-shred both backups and record it by location label; cloud custody, disable the key now and schedule its deletion after 30 days; for (b), create a new standby key.
-8. Unfreeze (CER-7).
+8. Unfreeze, test and close (CER-7).
 
 ### CER-R2. Receipt key rotation
 
@@ -183,7 +196,7 @@ Used for scheduled rotation, by [RB-3](../ops/runbooks.md#rb-3-guard-key-comprom
 
 ### CER-R3. Monitor key rotation
 
-1. **Freeze key:** make the new key (CER-3). Add it to the bundle's freeze keys with a tightening bundle (one admin; takes effect at once). Confirm the Guard accepts a freeze from it (on Nile, a test freeze). Then remove the old key with a loosening bundle (M-of-N; time-locked).
+1. **Freeze key:** make the new key (CER-3). Add it to the bundle's freeze keys with a tightening bundle (one admin; takes effect at once). Confirm the Guard accepts a freeze from it: on Nile, after CER-7, run drill DR-1 ([runbooks](../ops/runbooks.md) §4), whose freeze is now signed by the new key; it must pass. Then remove the old key with a loosening bundle (M-of-N; time-locked).
 2. **Evidence key:** make a new key; publish the new `allowed_signers` in a transcript. Packs signed before the change keep verifying against the transcript that was current when they were signed.
 3. **Ack key** (OD-1): make a new key and install its public key in the Guard's configuration.
 
@@ -206,7 +219,7 @@ Used by [RB-13](../ops/runbooks.md#rb-13-policy-admin-key-lost-or-compromised).
 
 ### CER-R6. Host rebuild
 
-A rebuilt Guard or monitor host is not a key ceremony, but it is recorded like one: [RB-5](../ops/runbooks.md#rb-5-guard-host-lost-or-rebuilt) and [RB-6](../ops/runbooks.md#rb-6-monitor-host-lost), with CER-0 steps 1–3 and CER-6.
+A rebuilt Guard or monitor host is not a key ceremony, but it is recorded like one: [RB-5](../ops/runbooks.md#rb-5-guard-host-lost-or-rebuilt) and [RB-6](../ops/runbooks.md#rb-6-monitor-host-lost), with CER-0 steps 1–3, CER-6, and the unfreeze before the co-signed test as in CER-7.
 
 ---
 
