@@ -8,14 +8,21 @@
 //! # Status
 //!
 //! - [`tron`]: the strict TRON decoder (M6 #2). Implemented.
-//! - Policy bundle, approvals, velocity and receipts: not implemented yet.
+//! - [`velocity`] and [`breaker`]: velocity caps behind the [`velocity::VelocityStore`] trait,
+//!   with an fsync'd file implementation; the per-signer cap calibration helper; the auto-pause
+//!   state machine (M6 #5). The M-of-N unpause waits on the policy bundle (ADR-11).
+//! - Policy bundle, approvals and receipts: not implemented yet.
 //!
 //! Boundary (ROADMAP M6 #1): this crate depends only on `vaultex-types` and pure crates. No MPC,
 //! transport, async-runtime or network crate may appear in its dependency tree
 //! (`.github/workflows/kernel.yml` checks with `cargo tree`), and its `clippy.toml` bans clock,
-//! environment and socket access: time and storage are parameters.
+//! environment and socket access: time is a parameter, and storage sits behind a trait whose one
+//! implementation is a local file ([`velocity::FileStore`]).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod amount;
+pub mod breaker;
 pub mod tron;
+pub mod velocity;
