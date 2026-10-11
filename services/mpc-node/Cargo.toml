@@ -11,9 +11,10 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Debug builds only: lift the release freeze (keygen, raw-digest signing, legacy
-# schemes, non-test networks) for testnet development. A release build with this
-# feature fails to compile; see src/freeze.rs (ROADMAP M5 #5).
+# Debug builds only: lift the release freeze on keygen, raw-digest signing and
+# legacy schemes for testnet development. Non-test networks stay refused in every
+# build, this feature included. A release build with this feature fails to
+# compile; see src/freeze.rs (ROADMAP M5 #5).
 dev-unfreeze = []
 
 [dependencies]

@@ -18,8 +18,9 @@
 //! - `NETWORK` — `testnet` (default) or `devnet`; any other value is refused (release freeze)
 //!
 //! # Release freeze
-//! Every build refuses keygen, raw-digest signing, legacy schemes and non-test
-//! networks until M10-F; see `freeze.rs`.
+//! Until M10-F the node refuses keygen, raw-digest signing and legacy schemes
+//! (a debug build may lift these with `dev-unfreeze`), and refuses non-test
+//! networks in every build; see `freeze.rs`.
 
 mod freeze;
 mod rpc;
@@ -1471,8 +1472,8 @@ mod tests {
     // ── Release freeze (ROADMAP M5 #5) ─────────────────────────────────
 
     /// Node config for freeze tests. The NATS URL points nowhere: a frozen node
-    /// must refuse before it connects to anything.
-    #[cfg(not(feature = "dev-unfreeze"))]
+    /// must refuse before it connects to anything. The network tests below run
+    /// in every build, `dev-unfreeze` included.
     fn freeze_test_config(dir: &std::path::Path, network: &str) -> NodeConfig {
         NodeConfig {
             party_id: PartyId(1),
@@ -1486,7 +1487,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "dev-unfreeze"))]
     fn assert_frozen(error: Option<String>, what: &str) {
         let error = error.expect("a frozen node must return an error");
         assert!(
@@ -1571,7 +1571,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "dev-unfreeze"))]
     #[test]
     #[should_panic(expected = "release freeze: network 'mainnet' is refused")]
     fn freeze_refuses_mainnet_network() {
@@ -1579,7 +1578,6 @@ mod tests {
         freeze_test_config(tmp.path(), "mainnet").validate();
     }
 
-    #[cfg(not(feature = "dev-unfreeze"))]
     #[test]
     fn freeze_refuses_unknown_network_but_allows_test_networks() {
         assert_frozen(freeze::check_network("").err(), "network");

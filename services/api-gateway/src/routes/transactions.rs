@@ -344,7 +344,6 @@ mod tests {
         assert!(explorer_url(Chain::Monero, &NetworkEnv::Mainnet, "x").is_none());
     }
 
-    #[cfg(not(feature = "dev-unfreeze"))]
     fn tx_request(chain: &str) -> TransactionRequest {
         TransactionRequest {
             chain: chain.into(),
@@ -356,7 +355,6 @@ mod tests {
     }
 
     /// Refused before the wallet lookup and before any RPC call.
-    #[cfg(not(feature = "dev-unfreeze"))]
     #[tokio::test]
     async fn freeze_refuses_mainnet_network_transaction() {
         use crate::routes::wallets::freeze_tests::{assert_frozen, privileged_ctx, state_on};
@@ -373,7 +371,6 @@ mod tests {
     }
 
     /// A mainnet-only chain is refused even on a testnet gateway.
-    #[cfg(not(feature = "dev-unfreeze"))]
     #[tokio::test]
     async fn freeze_refuses_mainnet_chain_transaction() {
         use crate::routes::wallets::freeze_tests::{assert_frozen, privileged_ctx, state_on};

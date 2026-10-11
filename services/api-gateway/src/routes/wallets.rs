@@ -31,10 +31,10 @@ use crate::state::AppState;
 // ── Release freeze (ROADMAP M5 #5) ─────────────────────────────────
 //
 // Until the full independent audit (M10-F) closes, the gateway refuses key
-// generation, raw-digest signing, every legacy scheme and any network other
-// than testnet/devnet. Every build is frozen by default; only a debug build may
-// opt out, with the `dev-unfreeze` feature, for testnet development. The MPC
-// nodes enforce the same refusals independently.
+// generation, raw-digest signing and every legacy scheme; only a debug build may
+// lift those three, with the `dev-unfreeze` feature, for testnet development.
+// Any network or chain other than testnet/devnet is refused in every build,
+// `dev-unfreeze` included. The MPC nodes enforce the same refusals independently.
 
 /// `true` unless this is a debug build with the `dev-unfreeze` feature.
 const FROZEN: bool = !cfg!(feature = "dev-unfreeze");
@@ -44,30 +44,34 @@ compile_error!(
     "`dev-unfreeze` is for debug builds only: release builds stay frozen until M10-F (ROADMAP M5 #5)"
 );
 
+fn refused(what: impl Display) -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        ErrorCode::PolicyDenied,
+        format!("release freeze: {what} is refused in this build"),
+    )
+}
+
 /// Refuse `what` when the build is frozen.
 pub(crate) fn refuse_if_frozen(what: impl Display) -> Result<(), ApiError> {
     if FROZEN {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            ErrorCode::PolicyDenied,
-            format!("release freeze: {what} is refused in this build"),
-        ));
+        return Err(refused(what));
     }
     Ok(())
 }
 
-/// Only testnet and devnet are allowed; anything else fails closed.
+/// Only testnet and devnet are allowed; anything else fails closed in every build.
 pub(crate) fn check_network(network: &str) -> Result<(), ApiError> {
     if matches!(network, "testnet" | "devnet") {
         return Ok(());
     }
-    refuse_if_frozen(format_args!("network '{network}'"))
+    Err(refused(format_args!("network '{network}'")))
 }
 
-/// Refuse chains that are mainnet whatever the configured network.
+/// Refuse chains that are mainnet whatever the configured network, in every build.
 pub(crate) fn check_chain(chain: Chain) -> Result<(), ApiError> {
     if matches!(chain, Chain::BitcoinMainnet) {
-        return refuse_if_frozen(format_args!("mainnet chain '{chain}'"));
+        return Err(refused(format_args!("mainnet chain '{chain}'")));
     }
     Ok(())
 }
@@ -125,6 +129,7 @@ pub async fn create_wallet(
     Json(req): Json<CreateWalletRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<WalletResponse>>), ApiError> {
     require_admin_mfa(&ctx)?;
+    check_network(&state.network)?;
     refuse_if_frozen("key generation")?;
 
     let scheme: mpc_wallet_core::types::CryptoScheme = req
@@ -266,18 +271,16 @@ pub async fn get_wallet(
 }
 
 /// Chains to derive display addresses for, given the wallet's signing scheme.
-/// A frozen build never serves a mainnet-only chain's address.
+/// Never a mainnet-only chain (see `check_chain`).
 fn address_chains(scheme: CryptoScheme) -> Vec<Chain> {
-    let mut chains = match scheme {
+    match scheme {
         CryptoScheme::Gg20Ecdsa | CryptoScheme::Cggmp21Secp256k1 => {
             vec![Chain::Ethereum, Chain::Polygon, Chain::Bsc, Chain::Arbitrum]
         }
         CryptoScheme::FrostEd25519 => vec![Chain::Solana, Chain::Sui, Chain::Aptos],
-        CryptoScheme::FrostSecp256k1Tr => vec![Chain::BitcoinTestnet, Chain::BitcoinMainnet],
+        CryptoScheme::FrostSecp256k1Tr => vec![Chain::BitcoinTestnet],
         _ => vec![],
-    };
-    chains.retain(|&chain| check_chain(chain).is_ok());
-    chains
+    }
 }
 
 /// `POST /v1/wallets/:id/sign` — distributed MPC sign.
@@ -300,6 +303,7 @@ pub async fn sign_message(
     require_roles(&ctx, &[ApiRole::Initiator, ApiRole::Admin])?;
     Permissions::check_risk_tier_for_signing(&ctx)
         .map_err(|e| ApiError::forbidden(e.to_string()))?;
+    check_network(&state.network)?;
     // The caller supplies an opaque digest with no transaction context.
     refuse_if_frozen("raw-digest signing")?;
 
@@ -445,7 +449,9 @@ pub async fn unfreeze_wallet(
     )))
 }
 
-#[cfg(all(test, not(feature = "dev-unfreeze")))]
+/// Release-freeze tests. The network and chain refusals hold in every build, so
+/// only the keygen, raw-sign and legacy-scheme tests are skipped under `dev-unfreeze`.
+#[cfg(test)]
 pub(crate) mod freeze_tests {
     use super::*;
 
@@ -475,6 +481,7 @@ pub(crate) mod freeze_tests {
         );
     }
 
+    #[cfg(not(feature = "dev-unfreeze"))]
     #[tokio::test]
     async fn freeze_refuses_keygen() {
         let state = state_on("testnet").await;
@@ -488,6 +495,7 @@ pub(crate) mod freeze_tests {
         assert_frozen(result, "key generation");
     }
 
+    #[cfg(not(feature = "dev-unfreeze"))]
     #[tokio::test]
     async fn freeze_refuses_raw_sign() {
         let state = state_on("testnet").await;
@@ -504,6 +512,7 @@ pub(crate) mod freeze_tests {
         assert_frozen(result, "raw-digest signing");
     }
 
+    #[cfg(not(feature = "dev-unfreeze"))]
     #[test]
     fn freeze_refuses_legacy_schemes() {
         for scheme in [
@@ -517,6 +526,34 @@ pub(crate) mod freeze_tests {
         ] {
             assert_frozen(check_scheme(scheme), "legacy scheme");
         }
+    }
+
+    /// Holds under `dev-unfreeze` too: a mainnet gateway never starts a keygen
+    /// or a raw signing round.
+    #[tokio::test]
+    async fn freeze_refuses_mainnet_network_keygen_and_raw_sign() {
+        let state = state_on("mainnet").await;
+        let req = CreateWalletRequest {
+            label: "freeze".into(),
+            scheme: "frost-ed25519".into(),
+            threshold: 2,
+            total_parties: 3,
+        };
+        let result =
+            create_wallet(State(state.clone()), Extension(privileged_ctx()), Json(req)).await;
+        assert_frozen(result, "network 'mainnet'");
+
+        let req = SignRequest {
+            message: "deadbeef".into(),
+        };
+        let result = sign_message(
+            State(state),
+            Extension(privileged_ctx()),
+            Path("any-wallet".into()),
+            Json(req),
+        )
+        .await;
+        assert_frozen(result, "network 'mainnet'");
     }
 
     #[tokio::test]

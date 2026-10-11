@@ -1,9 +1,10 @@
 //! Release freeze (ROADMAP M5 #5).
 //!
 //! Until the full independent audit (M10-F) closes, the node refuses key
-//! generation, raw-digest signing, every legacy scheme and any network other
-//! than testnet/devnet. Every build is frozen by default; only a debug build
-//! may opt out, with the `dev-unfreeze` feature, for testnet development.
+//! generation, raw-digest signing and every legacy scheme; only a debug build
+//! may lift those three, with the `dev-unfreeze` feature, for testnet
+//! development. Any network other than testnet/devnet is refused in every
+//! build, `dev-unfreeze` included.
 
 use std::fmt::Display;
 
@@ -17,20 +18,24 @@ compile_error!(
     "`dev-unfreeze` is for debug builds only: release builds stay frozen until M10-F (ROADMAP M5 #5)"
 );
 
+fn refused(what: impl Display) -> String {
+    format!("release freeze: {what} is refused in this build")
+}
+
 /// Refuse `what` when the build is frozen.
 pub fn refuse_if_frozen(what: impl Display) -> Result<(), String> {
     if FROZEN {
-        return Err(format!("release freeze: {what} is refused in this build"));
+        return Err(refused(what));
     }
     Ok(())
 }
 
-/// Only testnet and devnet are allowed; anything else fails closed.
+/// Only testnet and devnet are allowed; anything else fails closed in every build.
 pub fn check_network(network: &str) -> Result<(), String> {
     if matches!(network, "testnet" | "devnet") {
         return Ok(());
     }
-    refuse_if_frozen(format_args!("network '{network}'"))
+    Err(refused(format_args!("network '{network}'")))
 }
 
 /// Refuse every legacy scheme.
