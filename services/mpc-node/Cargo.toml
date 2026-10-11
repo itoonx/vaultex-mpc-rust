@@ -9,6 +9,14 @@ description = "MPC Node — holds exactly one party's key share, participates in
 name = "mpc-node"
 path = "src/main.rs"
 
+[features]
+default = []
+# Debug builds only: lift the release freeze on keygen, raw-digest signing and
+# legacy schemes for testnet development. Non-test networks stay refused in every
+# build, this feature included. A release build with this feature fails to
+# compile; see src/freeze.rs (ROADMAP M5 #5).
+dev-unfreeze = []
+
 [dependencies]
 mpc-wallet-core = { path = "../../crates/mpc-wallet-core" }
 

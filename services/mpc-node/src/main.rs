@@ -15,7 +15,14 @@
 //! - `NODE_SIGNING_KEY` — hex Ed25519 signing key for envelope auth
 //! - `GATEWAY_PUBKEY` — hex Ed25519 verifying key of the gateway (for SignAuth verification)
 //! - `HEALTH_PORT` — HTTP port for health/metrics endpoints (default: 9090)
+//! - `NETWORK` — `testnet` (default) or `devnet`; any other value is refused (release freeze)
+//!
+//! # Release freeze
+//! Until M10-F the node refuses keygen, raw-digest signing and legacy schemes
+//! (a debug build may lift these with `dev-unfreeze`), and refuses non-test
+//! networks in every build; see `freeze.rs`.
 
+mod freeze;
 mod rpc;
 
 use std::collections::HashMap as StdHashMap;
@@ -133,6 +140,7 @@ struct NodeConfig {
     signing_key: SigningKey,
     gateway_pubkey: ed25519_dalek::VerifyingKey,
     auth_cache_max_entries: usize,
+    network: String,
 }
 
 impl NodeConfig {
@@ -169,6 +177,8 @@ impl NodeConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_AUTH_CACHE_MAX_ENTRIES);
 
+        let network = std::env::var("NETWORK").unwrap_or_else(|_| "testnet".into());
+
         let config = Self {
             party_id: PartyId(party_id),
             nats_url,
@@ -177,6 +187,7 @@ impl NodeConfig {
             signing_key,
             gateway_pubkey,
             auth_cache_max_entries,
+            network,
         };
         config.validate();
         config
@@ -203,6 +214,9 @@ impl NodeConfig {
             self.auth_cache_max_entries > 0,
             "AUTH_CACHE_MAX_ENTRIES must be > 0"
         );
+        if let Err(e) = freeze::check_network(&self.network) {
+            panic!("{e}");
+        }
     }
 }
 
@@ -216,6 +230,8 @@ async fn main() {
         party_id = config.party_id.0,
         nats_url = %config.nats_url,
         key_store_dir = %config.key_store_dir.display(),
+        network = %config.network,
+        frozen = freeze::FROZEN,
         "MPC Node starting"
     );
 
@@ -428,6 +444,16 @@ async fn execute_keygen(
     config: &NodeConfig,
     key_store: &EncryptedFileStore,
 ) -> KeygenResponse {
+    if let Err(e) = freeze::refuse_if_frozen("key generation") {
+        return KeygenResponse {
+            party_id: config.party_id.0,
+            group_id: req.group_id.clone(),
+            group_pubkey_hex: String::new(),
+            success: false,
+            error: Some(e),
+        };
+    }
+
     let scheme: CryptoScheme = match req.scheme.parse() {
         Ok(s) => s,
         Err(e) => {
@@ -639,6 +665,18 @@ async fn execute_sign(
     key_store: &EncryptedFileStore,
     auth_cache: &Mutex<AuthorizationCache>,
 ) -> SignResponse {
+    // A v1 sign request is a bare digest with no transaction context, so the
+    // node cannot check what it signs: refused before any share is loaded.
+    if let Err(e) = freeze::refuse_if_frozen("raw-digest signing") {
+        return SignResponse {
+            party_id: config.party_id.0,
+            group_id: req.group_id.clone(),
+            signature_json: None,
+            success: false,
+            error: Some(e),
+        };
+    }
+
     // Load this party's share from key store
     let group_id = KeyGroupId::from_string(req.group_id.clone());
     let share = match key_store.load(&group_id, config.party_id).await {
@@ -876,15 +914,19 @@ fn unwrap_signed_message(
 /// Create MPC protocol instance for a given scheme.
 fn create_protocol(scheme: CryptoScheme) -> Result<Box<dyn MpcProtocol>, String> {
     use mpc_wallet_core::protocol::*;
-    match scheme {
-        CryptoScheme::Gg20Ecdsa => Ok(Box::new(gg20::Gg20Protocol::new())),
-        CryptoScheme::FrostEd25519 => Ok(Box::new(frost_ed25519::FrostEd25519Protocol::new())),
+    let protocol: Box<dyn MpcProtocol> = match scheme {
+        CryptoScheme::Gg20Ecdsa => Box::new(gg20::Gg20Protocol::new()),
+        CryptoScheme::FrostEd25519 => Box::new(frost_ed25519::FrostEd25519Protocol::new()),
         CryptoScheme::FrostSecp256k1Tr => {
-            Ok(Box::new(frost_secp256k1::FrostSecp256k1TrProtocol::new()))
+            Box::new(frost_secp256k1::FrostSecp256k1TrProtocol::new())
         }
-        CryptoScheme::Cggmp21Secp256k1 => Ok(Box::new(cggmp21::Cggmp21Protocol::new())),
-        _ => Err(format!("unsupported scheme: {scheme:?}")),
-    }
+        CryptoScheme::Cggmp21Secp256k1 => Box::new(cggmp21::Cggmp21Protocol::new()),
+        _ => return Err(format!("unsupported scheme: {scheme:?}")),
+    };
+    // Every protocol instance is created here, so this is the single choke point
+    // for the legacy-scheme refusal (the zero-sized instance is simply dropped).
+    freeze::check_scheme(scheme)?;
+    Ok(protocol)
 }
 
 #[cfg(test)]
@@ -911,25 +953,41 @@ mod tests {
     #[test]
     fn test_create_protocol_gg20() {
         let result = create_protocol(CryptoScheme::Gg20Ecdsa);
-        assert!(result.is_ok(), "Gg20Ecdsa should be supported");
+        assert_eq!(
+            result.is_ok(),
+            !freeze::FROZEN,
+            "Gg20Ecdsa should be supported only when unfrozen"
+        );
     }
 
     #[test]
     fn test_create_protocol_frost_ed25519() {
         let result = create_protocol(CryptoScheme::FrostEd25519);
-        assert!(result.is_ok(), "FrostEd25519 should be supported");
+        assert_eq!(
+            result.is_ok(),
+            !freeze::FROZEN,
+            "FrostEd25519 should be supported only when unfrozen"
+        );
     }
 
     #[test]
     fn test_create_protocol_frost_secp256k1() {
         let result = create_protocol(CryptoScheme::FrostSecp256k1Tr);
-        assert!(result.is_ok(), "FrostSecp256k1Tr should be supported");
+        assert_eq!(
+            result.is_ok(),
+            !freeze::FROZEN,
+            "FrostSecp256k1Tr should be supported only when unfrozen"
+        );
     }
 
     #[test]
     fn test_create_protocol_cggmp21() {
         let result = create_protocol(CryptoScheme::Cggmp21Secp256k1);
-        assert!(result.is_ok(), "Cggmp21Secp256k1 should be supported");
+        assert_eq!(
+            result.is_ok(),
+            !freeze::FROZEN,
+            "Cggmp21Secp256k1 should be supported only when unfrozen"
+        );
     }
 
     #[test]
@@ -1409,5 +1467,124 @@ mod tests {
         );
         assert!(text.contains("# HELP"), "should contain HELP comments");
         assert!(text.contains("# TYPE"), "should contain TYPE comments");
+    }
+
+    // ── Release freeze (ROADMAP M5 #5) ─────────────────────────────────
+
+    /// Node config for freeze tests. The NATS URL points nowhere: a frozen node
+    /// must refuse before it connects to anything. The network tests below run
+    /// in every build, `dev-unfreeze` included.
+    fn freeze_test_config(dir: &std::path::Path, network: &str) -> NodeConfig {
+        NodeConfig {
+            party_id: PartyId(1),
+            nats_url: "nats://127.0.0.1:1".into(),
+            key_store_dir: dir.to_path_buf(),
+            key_store_password: Zeroizing::new("test-password".into()),
+            signing_key: random_signing_key(),
+            gateway_pubkey: random_signing_key().verifying_key(),
+            auth_cache_max_entries: 16,
+            network: network.into(),
+        }
+    }
+
+    fn assert_frozen(error: Option<String>, what: &str) {
+        let error = error.expect("a frozen node must return an error");
+        assert!(
+            error.starts_with("release freeze: ") && error.contains(what),
+            "expected a release-freeze refusal of {what}, got: {error}"
+        );
+    }
+
+    #[cfg(not(feature = "dev-unfreeze"))]
+    #[tokio::test]
+    async fn freeze_refuses_keygen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = freeze_test_config(tmp.path(), "testnet");
+        let key_store = EncryptedFileStore::new(tmp.path().to_path_buf(), "test-password");
+        let req = rpc::KeygenRequest {
+            group_id: "freeze-keygen".into(),
+            label: "freeze".into(),
+            scheme: "frost-ed25519".into(),
+            threshold: 2,
+            total_parties: 3,
+            session_id: "s".into(),
+            peer_keys: vec![],
+            nats_url: None,
+        };
+
+        let resp = execute_keygen(&req, &config, &key_store).await;
+
+        assert!(!resp.success);
+        assert!(resp.group_pubkey_hex.is_empty());
+        assert_frozen(resp.error, "key generation");
+        assert!(key_store.list().await.unwrap().is_empty(), "no share saved");
+    }
+
+    #[cfg(not(feature = "dev-unfreeze"))]
+    #[tokio::test]
+    async fn freeze_refuses_raw_sign() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = freeze_test_config(tmp.path(), "testnet");
+        let key_store = EncryptedFileStore::new(tmp.path().to_path_buf(), "test-password");
+        let auth_cache = Mutex::new(AuthorizationCache::new(16));
+        let req = rpc::SignRequest {
+            group_id: "freeze-sign".into(),
+            message_hex: hex::encode([0xab; 32]),
+            signer_ids: vec![1, 2],
+            session_id: "s".into(),
+            peer_keys: vec![],
+            sign_authorization: "{}".into(),
+            nats_url: None,
+        };
+
+        let resp = execute_sign(&req, &config, &key_store, &auth_cache).await;
+
+        assert!(!resp.success);
+        assert!(resp.signature_json.is_none());
+        // Refused before the share lookup, not by "load share failed".
+        assert_frozen(resp.error, "raw-digest signing");
+    }
+
+    #[cfg(not(feature = "dev-unfreeze"))]
+    #[test]
+    fn freeze_refuses_legacy_schemes() {
+        for scheme in [
+            CryptoScheme::Gg20Ecdsa,
+            CryptoScheme::Cggmp21Secp256k1,
+            CryptoScheme::FrostEd25519,
+            CryptoScheme::FrostSecp256k1Tr,
+            CryptoScheme::Sr25519Threshold,
+            CryptoScheme::StarkThreshold,
+            CryptoScheme::Bls12_381Threshold,
+        ] {
+            assert_frozen(freeze::check_scheme(scheme).err(), "legacy scheme");
+        }
+        // The protocol factory, which every keygen and sign goes through,
+        // refuses each engine it knows.
+        for scheme in [
+            CryptoScheme::Gg20Ecdsa,
+            CryptoScheme::Cggmp21Secp256k1,
+            CryptoScheme::FrostEd25519,
+            CryptoScheme::FrostSecp256k1Tr,
+        ] {
+            assert_frozen(create_protocol(scheme).err(), "legacy scheme");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "release freeze: network 'mainnet' is refused")]
+    fn freeze_refuses_mainnet_network() {
+        let tmp = tempfile::tempdir().unwrap();
+        freeze_test_config(tmp.path(), "mainnet").validate();
+    }
+
+    #[test]
+    fn freeze_refuses_unknown_network_but_allows_test_networks() {
+        assert_frozen(freeze::check_network("").err(), "network");
+        assert_frozen(freeze::check_network("Mainnet").err(), "network");
+        assert!(freeze::check_network("testnet").is_ok());
+        assert!(freeze::check_network("devnet").is_ok());
+        let tmp = tempfile::tempdir().unwrap();
+        freeze_test_config(tmp.path(), "testnet").validate();
     }
 }

@@ -562,8 +562,48 @@ fn post_json_with_session_sync() -> Client {
 // 11. Happy-Path: Keygen + Sign (Real MPC via NATS)
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Release freeze (ROADMAP M5 #5): a default build refuses keygen even for an
+/// Admin + MFA session, before the request reaches any MPC node.
+#[cfg(not(feature = "dev-unfreeze"))]
 #[tokio::test]
 #[ignore = "requires running gateway: ./scripts/local-infra.sh up"]
+async fn freeze_refuses_keygen_live() {
+    let gw = gateway_url();
+    let admin_key =
+        load_admin_key().expect("Admin key not found — run ./scripts/local-infra.sh up first");
+    let (session_token, _) = full_handshake_with_key(&gw, admin_key).await;
+
+    let create_body = serde_json::json!({
+        "label": "freeze-live",
+        "scheme": "frost-ed25519",
+        "threshold": 2,
+        "total_parties": 3
+    });
+    let resp = post_json_with_session_sync()
+        .post(format!("{gw}/v1/wallets"))
+        .header("x-session-token", &session_token)
+        .json(&create_body)
+        .send()
+        .await
+        .expect("create wallet request failed");
+
+    let status = resp.status().as_u16();
+    let json: Value = resp.json().await.unwrap();
+    assert_eq!(status, 403, "a frozen gateway must refuse keygen: {json}");
+    assert_eq!(json["success"].as_bool(), Some(false));
+    assert_eq!(json["error"]["code"].as_str(), Some("POLICY_DENIED"));
+    let message = json["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("release freeze:"),
+        "expected a release-freeze refusal, got: {json}"
+    );
+}
+
+/// Keygen and raw signing are refused by the release freeze, so this only runs
+/// against a debug stack built with `dev-unfreeze` (and tests run with it too).
+#[cfg(feature = "dev-unfreeze")]
+#[tokio::test]
+#[ignore = "requires a debug `dev-unfreeze` gateway + MPC nodes"]
 async fn test_keygen_and_sign_happy_path() {
     let gw = gateway_url();
     let admin_key =
