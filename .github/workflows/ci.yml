@@ -1,10 +1,39 @@
 name: CI
 
+# Integrity rules (ROADMAP M5 #6):
+# - Every `run:` step runs under bash with `set -euo pipefail` (defaults.run below), so any failing
+#   command, including one inside a pipeline, fails its step. Gating is by exit code only.
+# - Every action is pinned to a full commit SHA; the trailing comment names the ref it was resolved
+#   from on 2026-10-11. Bump pins deliberately, never back to a moving tag or branch.
+# - The workflow token is read-only; a job that needs more declares exactly that.
+#
+# Canary procedure (owner-run; proves a failing test turns CI red):
+#   1. Cut a throwaway branch from the integration tip, e.g. `canary/ci-red-YYYYMMDD`.
+#   2. Add one deliberately failing unit test to any workspace crate and change nothing else, e.g.
+#        #[test] fn ci_canary_must_fail() { panic!("CI canary: this run must be red"); }
+#   3. Push it and open a PR to main. Expected on both the push and the PR run: "Build & Test" is
+#      red at "Run tests", with the canary listed as FAILED. A green result means the gate is
+#      broken: stop and fix this file before trusting any CI result.
+#   4. Record the red run URLs, close the PR, delete the branch, then record a green run on main.
+
 on:
   push:
     branches: ["**"]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
+
+# Superseded runs on feature branches and PRs are cancelled; a run already in progress on main or
+# dev is never cancelled (a newer push may still replace one that is only queued).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,9 +47,12 @@ jobs:
     name: Format check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -30,11 +62,14 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           shared-key: "rust-workspace"
           cache-targets: true
@@ -45,23 +80,22 @@ jobs:
 
       # Tests (reuses clippy compilation — near-zero compile time)
       # Run with --test-threads=4 to validate multi-thread safety (LazyLock, LocalTransport isolation)
+      # The gate is cargo's exit code; there is no test-count floor.
       - name: Run tests
-        run: |
-          cargo test --workspace --features local-transport -- --test-threads=4 2>&1 | tee /tmp/test-output.txt
-          TEST_COUNT=$(grep "test result:" /tmp/test-output.txt | awk -F'[; ]' '{sum+=$4} END {print sum}')
-          echo "Total tests: $TEST_COUNT"
-          if [ "$TEST_COUNT" -lt 860 ]; then
-            echo "::error::Test count dropped below 860 (got $TEST_COUNT) — check for accidentally deleted tests"
-            exit 1
-          fi
+        run: cargo test --workspace --features local-transport -- --test-threads=4
 
   audit:
     name: Security audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # audit-check publishes its findings as a "Security audit" check run
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
       # Use pre-built cargo-audit from GitHub Action (no compile from source)
-      - uses: rustsec/audit-check@v2.0.0
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ github.token }}
 
@@ -104,9 +138,13 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           shared-key: "rust-workspace"
 
@@ -168,7 +206,7 @@ jobs:
           cargo test -p mpc-wallet-core --test e2e_tests --features local-transport -- --ignored --test-threads=1 \
             --skip test_nats_sign_gg20_direct \
             --skip test_distributed_keygen_then_sign
-          kill $(cat /tmp/gateway.pid) 2>/dev/null || true
+          kill "$(cat /tmp/gateway.pid)" 2>/dev/null || true
 
   coverage:
     name: Code coverage
@@ -176,9 +214,13 @@ jobs:
     needs: [build]
     if: (github.event_name == 'pull_request' && github.base_ref == 'main') || github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           shared-key: "rust-workspace"
       - name: Install cargo-tarpaulin
@@ -204,9 +246,13 @@ jobs:
     if: (github.event_name == 'pull_request' && github.base_ref == 'main') || github.ref == 'refs/heads/main'
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           prefix-key: "bench-"
           shared-key: "rust-bench"
