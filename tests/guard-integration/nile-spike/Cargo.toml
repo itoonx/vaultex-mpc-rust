@@ -1,0 +1,23 @@
+[package]
+name = "nile-spike-signer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Nile spike (T06-2): the Rust k256 co-signer key of the 2-of-2 active permission. Testnet only."
+
+[[bin]]
+name = "spike-sign"
+path = "src/main.rs"
+
+# Same crates and versions as the root Cargo.lock; nothing new.
+[dependencies]
+k256 = { version = "0.13", features = ["ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+sha3 = "0.10"
+bs58 = "0.5"
+hex = "0.4"
+
+# Standalone on purpose: not a member of the root workspace, so the spike never
+# enters the production build graph. Build with --manifest-path (see README).
+[workspace]
