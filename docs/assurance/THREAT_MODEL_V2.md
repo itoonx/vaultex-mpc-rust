@@ -18,7 +18,7 @@
 - **Now**: present in the code at HEAD. It is experimental and has had no independent review ([`SECURITY_STATUS.md`](../../SECURITY_STATUS.md), "Controls present in the code").
 - **M5 … M12**: an exit criterion of that milestone in [ROADMAP §4.3](../ROADMAP.md#43-milestone-definitions), cited as `M6 #2`; `PC-nn`, `PL-nn` and `RF-n` are the ROADMAP §2.2–§2.3 and §3.4 criteria. A control counts only once its milestone closes on an artifact (ROADMAP §9.5). Until then it is a plan.
 - **Gated**: lands only if G-MPC passes (ADR-07). It may never be built.
-- **Limit**: an accepted residual risk. It stays after every milestone, is listed in §9, and goes into the known-issues list (T14-4).
+- **Limit**: an accepted residual risk. It stays after every milestone, is listed in §9, and goes into the [known-issues list](KNOWN_ISSUES.md) §2.
 
 **IDs.** SO (objectives), AS (assets), TB (trust boundaries), AC (actors), TH (threats), SC (scenarios), AP (assumptions) and LM (limits) are local to this document. They never reuse a ROADMAP prefix (RK, K, PC, PL, RF, ST, B, AL).
 
@@ -373,7 +373,7 @@ What each compromise yields once the controls above are in place. "Today" refers
 | AP7 | The adopted engine provides its documented guarantees under its documented usage | SO6 | AL3 (M10-F); nothing beyond what AL3 covers is assumed |
 | AP8 | The primitives are sound: SHA-256, Ed25519 with strict verification, secp256k1 ECDSA, the chosen AEAD | All | Standard primitives from reviewed libraries |
 
-**Accepted limits.** Each one stays, and each goes into the known-issues list (T14-4).
+**Accepted limits.** Each one stays, and each goes into the [known-issues list](KNOWN_ISSUES.md) §2 (KI-11 to KI-21).
 
 | ID | Limit |
 |---|---|
