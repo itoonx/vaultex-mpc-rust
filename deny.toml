@@ -1,6 +1,7 @@
-# cargo-deny policy: DRAFT (ROADMAP M5 #7, M7 #6). T02-11 finalises it and runs it in CI. It has not
-# been run locally yet, because cargo-deny is not installed on the development machine (Q-RUN-2).
-# Format: cargo-deny >= 0.18.2.
+# cargo-deny policy (ROADMAP M5 #7, M7 #6). cargo-vet's config is in supply-chain/.
+# Check: `cargo deny --locked check advisories bans licenses sources`, with a pinned cargo-deny in CI.
+# cargo-deny is not installed on the development machine (Q-RUN-2).
+# Format: cargo-deny >= 0.19.0 (the `unsound` scope).
 #
 # The advisory exceptions mirror .cargo/audit.toml, which also has the reachability notes. Every
 # exception is PENDING OWNER SIGN-OFF and states "expires YYYY-MM-DD" in its reason. The daily audit
@@ -19,6 +20,11 @@ targets = [
 [advisories]
 yanked = "deny"
 unmaintained = "all"
+# Unsound advisories count anywhere in the graph, not only for direct dependencies (the default). Most
+# crypto crates arrive transitively, and the daily `cargo audit --deny warnings` already fails on them.
+unsound = "all"
+# Some ignores name crates that may sit only in Cargo.lock and never in this graph. An unused ignore is
+# a warning (the default), so the CI log shows which ones can go.
 ignore = [
     { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102 via async-nats 0.38; UNREACHED (rustls 0.23 verifies with patched webpki 0.103); fix: async-nats >= 0.47; pending owner sign-off; expires 2026-12-14" },
     { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102 via async-nats 0.38; UNREACHED (rustls 0.23 verifies with patched webpki 0.103); fix: async-nats >= 0.47; pending owner sign-off; expires 2026-12-14" },
@@ -34,6 +40,8 @@ ignore = [
 
 [licenses]
 # Permissive licences found in today's dependency graph. The project licence itself is ADR-02.
+# Checked against `cargo metadata` for the three targets on 2026-10-11: every crate's licence expression
+# is satisfied, every entry below is used, and each exception matches a crate in the graph.
 allow = [
     "MIT",
     "MIT-0",
@@ -62,9 +70,26 @@ exceptions = [
 # Many duplicate majors today (alloy, ark-*, rand); tighten after the M5 cut shrinks the graph.
 multiple-versions = "warn"
 wildcards = "deny"
-# Exempts the workspace's own path dependencies, but only once the crates are `publish = false`
-# (requested from WS-03; it also blocks an accidental crates.io publish before ADR-12).
+# Exempts path dependencies only in crates marked `publish = false`. The legacy mpc-wallet-* crates do
+# not have that line yet (requested; it also blocks an accidental crates.io publish before ADR-12).
 allow-wildcard-paths = true
+deny = [
+    # One TLS stack: rustls. Each of these would add a second TLS implementation (OpenSSL or the
+    # platform's) to review.
+    { crate = "openssl", reason = "rustls only" },
+    { crate = "openssl-sys", reason = "rustls only" },
+    { crate = "native-tls", reason = "rustls only" },
+    # Kernel and Guard crypto (the cargo-vet crypto-reviewed set): exactly one copy of each, so one
+    # version is reviewed and no second copy links in. Each has a single version today.
+    { crate = "k256", deny-multiple-versions = true },
+    { crate = "ecdsa", deny-multiple-versions = true },
+    { crate = "elliptic-curve", deny-multiple-versions = true },
+    { crate = "crypto-bigint", deny-multiple-versions = true },
+    { crate = "ed25519-dalek", deny-multiple-versions = true },
+    { crate = "curve25519-dalek", deny-multiple-versions = true },
+    { crate = "sha2", deny-multiple-versions = true },
+    { crate = "sha3", deny-multiple-versions = true },
+]
 
 [sources]
 unknown-registry = "deny"
