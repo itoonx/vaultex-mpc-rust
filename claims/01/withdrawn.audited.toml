@@ -1,0 +1,24 @@
+schema = 1
+id = "01.withdrawn.audited"
+kind = "security-posture"
+status = "withdrawn"
+text = 'The authentication stack passed a security audit (57 tests, all findings resolved).'
+surfaces = []
+observed = 2026-10-11
+
+[withdrawn]
+on = 2026-10-11
+reason = 'It was an internal AI-agent review, not an independent audit. No independent audit has taken place.'
+replaced_by = "01.no-independent-audit"
+
+[[evidence]]
+type = "report"
+ref = "README.md"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Where the claim was stated before the README rewrite"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W6 and W14"

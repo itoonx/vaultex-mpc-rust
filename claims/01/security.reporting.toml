@@ -1,0 +1,23 @@
+schema = 1
+id = "01.security.reporting"
+kind = "process"
+status = "verified"
+text = "Vulnerabilities are reported privately through GitHub private vulnerability reporting, as SECURITY.md describes, and never in public issues."
+text_zh = "漏洞应按照 SECURITY.md 的说明，通过 GitHub 私密漏洞报告功能私下报告，切勿通过公开 issue 报告。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).",
+  "| [Security policy](SECURITY.md) | How to report a vulnerability |",
+]
+quotes_zh = [
+  "请按照 [SECURITY.md](SECURITY.md) 中的说明私下报告漏洞。",
+  "| [安全政策](SECURITY.md) | 如何报告漏洞 |",
+]
+observed = 2026-10-11
+expires = 2027-04-09
+
+[[evidence]]
+type = "report"
+ref = "SECURITY.md#reporting-a-vulnerability"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Turning on private vulnerability reporting for the repository and proving the channel with a test report is a pending owner action (TASKS T00-3); until then SECURITY.md gives a detail-free fallback"

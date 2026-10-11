@@ -1,0 +1,29 @@
+schema = 1
+id = "01.support.none-supported"
+kind = "limitation"
+status = "limitation"
+text = "Nothing in Vaultex is supported for real funds, and no mainnet network is supported on any chain."
+text_zh = "Vaultex 中没有任何内容支持真实资金，任何链的主网均不受支持。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "**Nothing is supported today.**",
+  "No mainnet network is supported on any chain.",
+]
+quotes_zh = [
+  "**目前没有任何内容处于已支持状态。**",
+  "任何链的主网均不受支持。",
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#12-placement-by-subsystem-with-trl"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Every subsystem is at stage ST0 or ST1; the chain encoders have 0 mainnet transactions"
+
+[[evidence]]
+type = "report"
+ref = "SECURITY.md#supported-versions"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "No version is supported for real funds"

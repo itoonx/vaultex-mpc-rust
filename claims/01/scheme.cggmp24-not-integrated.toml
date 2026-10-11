@@ -1,0 +1,24 @@
+schema = 1
+id = "01.scheme.cggmp24-not-integrated"
+kind = "process"
+status = "verified"
+support = "not-integrated"
+text = "The LFDT-Lockness cggmp24 library is not integrated. It is the proposed replacement for the hand-rolled ECDSA engines, and the decision is pending (ADR-07)."
+text_zh = "LFDT-Lockness 的 cggmp24 库尚未集成。它被提议用于替换自行实现的 ECDSA 引擎，决策待定（ADR-07）。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| `cggmp24` (LFDT-Lockness, pinned) | Upstream library | Not integrated |"]
+quotes_zh = ["| `cggmp24`（LFDT-Lockness，锁定版本） | 上游库 | 尚未集成 |"]
+observed = 2026-10-11
+expires = 2027-04-09
+
+[[evidence]]
+type = "command"
+ref = "git show <commit>:Cargo.lock | grep -c '^name = \"cggmp'"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+result = "0"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#11-decisions-needed-from-the-owner-adr-candidates"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "ADR-07: MPC engine swap, conditional on the G-MPC gate"

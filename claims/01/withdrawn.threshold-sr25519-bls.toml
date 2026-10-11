@@ -1,0 +1,24 @@
+schema = 1
+id = "01.withdrawn.threshold-sr25519-bls"
+kind = "capability"
+status = "withdrawn"
+text = 'Sr25519 and BLS12-381 support threshold key generation and distributed signing.'
+surfaces = []
+observed = 2026-10-11
+
+[withdrawn]
+on = 2026-10-11
+reason = 'Neither is threshold signing (limitation 1).'
+replaced_by = "01.scheme.sr25519-bls"
+
+[[evidence]]
+type = "report"
+ref = "README.md"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Where the claim was stated before the README rewrite"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W2"

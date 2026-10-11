@@ -1,0 +1,23 @@
+schema = 1
+id = "01.licence.none-yet"
+kind = "licence"
+status = "verified"
+text = "The repository contains no licence file, so no licence is granted yet. The license field in the Cargo manifests predates this and will be corrected together with the licence files."
+text_zh = "本仓库尚未包含许可证文件，因此尚未授予任何许可。Cargo 清单中的 license 字段早于此说明，将与许可证文件一并更正。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["This repository does not contain a licence file yet, so this README grants no licence."]
+quotes_zh = ["本仓库目前尚未包含许可证文件，因此本 README 不授予任何许可。"]
+observed = 2026-10-11
+expires = 2027-04-09
+
+[[evidence]]
+type = "command"
+ref = "git ls-tree -r --name-only <commit> | grep -ciE '(^|/)(licen[cs]e|notice|copying)[^/]*$'"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+result = "0"
+
+[[evidence]]
+type = "code"
+ref = "Cargo.toml"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "license = \"MIT\" in the workspace package section, to be corrected with the licence files (ROADMAP M5 #2)"

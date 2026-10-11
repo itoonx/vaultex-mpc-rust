@@ -1,0 +1,36 @@
+schema = 1
+id = "01.chain.tron"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "TRON (TRX, TRC-20) on the Shasta testnet: transaction encoding is byte-equal to tronweb reference vectors, and transactions were confirmed on Shasta. They were signed with a hand-rolled threshold-ECDSA engine, which is experimental (limitation 1). Staged."
+text_zh = "TRON（TRX、TRC-20），Shasta 测试网：交易编码与 tronweb 参考向量逐字节一致，交易已在 Shasta 上确认。这些交易由自行实现的门限 ECDSA 引擎签名，该引擎为实验性（限制 1）。状态：预备。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| TRON | Shasta testnet | TRX, TRC-20 |"]
+quotes_zh = ["| TRON | Shasta 测试网 | TRX、TRC-20 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::tron::proto::tests::proto_matches_tronweb_reference"
+path = "crates/mpc-wallet-chains/src/tron/proto.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::tron::proto::tests::proto_matches_tronweb_trc20_reference"
+path = "crates/mpc-wallet-chains/src/tron/proto.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "tx"
+ref = "632a52ef4129f52e03d950cd7552202a964c126d6a251ccb6b0a6467f04b9ce2"
+network = "tron:shasta"
+note = "TRX transfer. Re-checked 2026-10-11 with the public TronGrid Shasta API: found in block 64742020"
+
+[[evidence]]
+type = "tx"
+ref = "54a73460ea78e5558ce78471e72600c68cc88a428dd76f2a47aa7a5e527fc296"
+network = "tron:shasta"
+note = "TRC-20 transfer of testnet USDT. Re-checked 2026-10-11 with the public TronGrid Shasta API: receipt SUCCESS, block 64750375"
