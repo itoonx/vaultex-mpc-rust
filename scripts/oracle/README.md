@@ -11,13 +11,13 @@ A second implementation of the kernel RFCs, written from the RFC text alone, tha
 
 **Dependencies.** Only the Node standard library (Node ≥ 20). There is nothing to `npm install`.
 - `node:crypto` provides SHA-256, SHA-512 and Ed25519 signing.
-- Ed25519 verification follows `RECEIPT_V1` §6.3 step by step, with RFC 8032 §5.1 arithmetic written out in `BigInt`. A library call alone is not the RFC's rule: `node:crypto` verification accepts the small-order cases of vectors `R-010` and `R-011`, which §6.3 refuses. A self-test pins that difference.
+- Ed25519 verification follows `RECEIPT_V1` §6.3 step by step, with RFC 8032 §5.1 arithmetic written out in `BigInt`. A library call is not the RFC's rule, and library behaviour varies by version: `node:crypto` with OpenSSL 3.0 (Node 20) accepts the small-order cases of vectors `R-010` and `R-011`, while OpenSSL 3.5 (Node 24) refuses them. That is why the oracle does its own arithmetic. A self-test proves that the small-order check of step 3 is what refuses them.
 
 ## Run
 
 ```sh
-node scripts/oracle/run.mjs            # every vector + cross-file links; --verbose lists each one
-node --test scripts/oracle/            # self-tests of the oracle
+node scripts/oracle/run.mjs                  # every vector + cross-file links; --verbose lists each one
+node --test scripts/oracle/oracle.test.mjs   # self-tests of the oracle
 ```
 
 `run.mjs` exits `0` when every vector agrees, `1` on any disagreement, and `2` when a vector file is malformed. It accepts `--intent FILE` and `--receipt FILE` to point at other copies.

@@ -1,6 +1,6 @@
 // Self-tests of the oracle: RFC 8032 and RFC worked examples, the strict Ed25519 rule,
 // and proof that the harness cannot pass vacuously (KAT plan R10).
-// Run: node --test scripts/oracle/
+// Run: node --test scripts/oracle/oracle.test.mjs
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createPublicKey, verify as nodeVerify } from 'node:crypto';
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { L, decodePoint, keyFromSeed, signWith, verifyStrict } from './ed25519.mjs';
+import { L, decodePoint, equationHolds, keyFromSeed, signWith, verifyStrict } from './ed25519.mjs';
 import { OracleError, bcsStr, concat, fromHex, leToBig, toHex, u256, u64 } from './lib.mjs';
 import { INTENT_TAG, decodeTronV1, parseCtx, runIntentVectors } from './intent_v1.mjs';
 import { RECEIPT_TAG, bodyBcs, decodeReceipt, receiptDigest, runReceiptVectors } from './receipt_v1.mjs';
@@ -57,7 +57,7 @@ test('RECEIPT_V1 §6.3: S + L, a small-order R or A, and an unreduced y are refu
   assert.equal(decodePoint(fromHex('ed' + 'ff'.repeat(30) + '7f')), null);
 });
 
-test('the explicit small-order check is load-bearing: OpenSSL alone accepts R-010 and R-011', () => {
+test('the small-order check of §6.3 step 3 is load-bearing: alone it refuses R-010 and R-011', (t) => {
   const f = receiptFile();
   for (const id of ['RECEIPT_V1-R-010', 'RECEIPT_V1-R-011']) {
     const v = vec(f, id);
@@ -66,9 +66,12 @@ test('the explicit small-order check is load-bearing: OpenSSL alone accepts R-01
     for (let i = 0; i < Number(v.expect.invalid.index); i++) pos += 4 + log.readUInt32LE(pos);
     const rc = decodeReceipt(Uint8Array.from(log.subarray(pos + 4, pos + 4 + log.readUInt32LE(pos))));
     const msg = receiptDigest(rc.bodyBytes);
+    assert.equal(equationHolds(rc.body.signer_key, rc.signature, msg), true, `${id}: steps 1, 2, 4, 5 accept`);
+    assert.equal(verifyStrict(rc.body.signer_key, rc.signature, msg), false, `${id}: step 3 refuses`);
+    // Observation only: library behaviour on these cases varies with the bundled OpenSSL.
     const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(rc.body.signer_key).toString('base64url') }, format: 'jwk' });
-    assert.equal(nodeVerify(null, Buffer.from(msg), key, Buffer.from(rc.signature)), true, `${id}: cofactorless equation holds`);
-    assert.equal(verifyStrict(rc.body.signer_key, rc.signature, msg), false, `${id}: strict rule refuses`);
+    const lib = nodeVerify(null, Buffer.from(msg), key, Buffer.from(rc.signature));
+    t.diagnostic(`${id}: node:crypto (OpenSSL ${process.versions.openssl}) ${lib ? 'accepts' : 'refuses'}`);
   }
 });
 

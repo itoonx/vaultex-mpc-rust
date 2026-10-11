@@ -73,18 +73,37 @@ const BASE = decodePoint(Uint8Array.from(Buffer.from('58' + '66'.repeat(31), 'he
 const dbl = (Pt) => add(Pt, Pt);
 const smallOrder = (Pt) => isIdentity(dbl(dbl(dbl(Pt)))); // its order divides 8 iff [8]P is the identity
 
+// Splits the signature and runs steps 1 and 2. Returns null on refusal.
+function parse(pub, sig) {
+  if (pub.length !== 32 || sig.length !== 64) return null;
+  const Rb = sig.subarray(0, 32);
+  const S = leToBig(sig.subarray(32));
+  if (S >= L) return null; // step 1
+  const R = decodePoint(Rb), A = decodePoint(pub);
+  if (!R || !A) return null; // step 2
+  return { Rb, S, R, A };
+}
+
+// Steps 4 and 5 on parsed parts: k = SHA-512(R || A || M) mod L, then [S]B - [k]A must encode to R.
+function equation({ Rb, S, A }, pub, msg) {
+  const k = mod(leToBig(sha512(concat(Rb, pub, msg))), L); // step 4
+  const check = add(mul(S, BASE), neg(mul(k, A))); // step 5
+  return Buffer.from(encode(check)).equals(Buffer.from(Rb));
+}
+
+// RECEIPT_V1 §6.3 steps 1, 2, 4 and 5, without the small-order check of step 3.
+// Not a verifier: it exists so a self-test can show that step 3 alone refuses some vectors.
+export function equationHolds(pub, sig, msg) {
+  const p = parse(pub, sig);
+  return p !== null && equation(p, pub, msg);
+}
+
 // RECEIPT_V1 §6.3, steps 1-5, over the bytes as received. Returns true only on accept.
 export function verifyStrict(pub, sig, msg) {
-  if (pub.length !== 32 || sig.length !== 64) return false;
-  const Rb = sig.subarray(0, 32), Sb = sig.subarray(32);
-  const S = leToBig(Sb);
-  if (S >= L) return false; // step 1
-  const R = decodePoint(Rb), A = decodePoint(pub);
-  if (!R || !A) return false; // step 2
-  if (smallOrder(R) || smallOrder(A)) return false; // step 3
-  const k = mod(leToBig(sha512(concat(Rb, pub, msg))), L); // step 4
-  const check = add(mul(S, BASE), neg(mul(k, A))); // step 5: [S]B - [k]A
-  return Buffer.from(encode(check)).equals(Buffer.from(Rb));
+  const p = parse(pub, sig);
+  if (!p) return false;
+  if (smallOrder(p.R) || smallOrder(p.A)) return false; // step 3
+  return equation(p, pub, msg);
 }
 
 // node:crypto key from a 32-byte RFC 8032 seed (PKCS#8 wrapping of the raw seed).
