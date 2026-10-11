@@ -1,0 +1,53 @@
+name: SLOC
+
+# Production-SLOC report (ROADMAP §3.5 "Budget", M5 #9). scripts/ci/sloc.py counts non-blank,
+# non-comment Rust lines under crates/ and services/, excluding tests/, benches/, examples/, fuzz/
+# and in-file `#[cfg(test)] mod` blocks. It is stdlib Python: no toolchain, no build.
+# The report (Markdown + per-file JSON) is uploaded as the `sloc-report` artifact and shown in the
+# run summary. This job reports only; the budget gate on the default release build is a later task.
+# Pins follow ci.yml: actions by full commit SHA, read-only token, bash -euo pipefail.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  sloc:
+    name: Production SLOC
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+
+      - name: Test the counter
+        run: python3 -B -m unittest discover -s scripts/ci -p test_sloc.py
+
+      - name: Count production SLOC
+        run: |
+          python3 -B scripts/ci/sloc.py --json sloc-report.json > sloc-report.md
+          cat sloc-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (v4.6.2)
+        with:
+          name: sloc-report
+          path: |
+            sloc-report.md
+            sloc-report.json
+          if-no-files-found: error
+          retention-days: 90
