@@ -1,0 +1,30 @@
+schema = 1
+id = "01.chain.ethereum"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "Ethereum (ETH, ERC-20) on the Sepolia testnet: ERC-20 transfer calldata is byte-equal to a viem reference vector, and transactions were confirmed on Sepolia. They were signed with a hand-rolled threshold-ECDSA engine, which is experimental (limitation 1). Staged."
+text_zh = "Ethereum（ETH、ERC-20），Sepolia 测试网：ERC-20 转账的 calldata 与 viem 参考向量逐字节一致，交易已在 Sepolia 上确认。这些交易由自行实现的门限 ECDSA 引擎签名，该引擎为实验性（限制 1）。状态：预备。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Ethereum | Sepolia testnet | ETH, ERC-20 |"]
+quotes_zh = ["| Ethereum | Sepolia 测试网 | ETH、ERC-20 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::evm::erc20::tests::transfer_matches_viem_reference"
+path = "crates/mpc-wallet-chains/src/evm/erc20.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "tx"
+ref = "0x8de851d28d9a81c84a237f7e892911f773bd44cd5af9b4bee1303a15066ef66b"
+network = "ethereum:sepolia"
+note = "ETH transfer. Re-checked 2026-10-11 with the public Blockscout Sepolia API: status ok, block 10804711"
+
+[[evidence]]
+type = "tx"
+ref = "0x23ab51bde4db9e737f0f6039c21bf418f68147d230f9100119715643ceb090a9"
+network = "ethereum:sepolia"
+note = "ERC-20 transfer of testnet USDC. Re-checked 2026-10-11 with the public Blockscout Sepolia API: status ok, block 10824762"

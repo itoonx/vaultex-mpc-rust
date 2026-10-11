@@ -1,0 +1,24 @@
+schema = 1
+id = "01.withdrawn.test-count"
+kind = "metric"
+status = "withdrawn"
+text = '970 tests pass, plus 16 E2E tests.'
+surfaces = []
+observed = 2026-10-11
+
+[withdrawn]
+on = 2026-10-11
+reason = 'The count named no toolchain, features or crypto parameters, and the tests use test-size parameters. A CI-generated count that names its instrument will replace it.'
+replaced_by = "01.tests.test-parameters"
+
+[[evidence]]
+type = "report"
+ref = "README.md"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Where the claim was stated before the README rewrite"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W13"

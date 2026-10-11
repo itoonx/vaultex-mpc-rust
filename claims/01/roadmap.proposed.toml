@@ -1,0 +1,29 @@
+schema = 1
+id = "01.roadmap.proposed"
+kind = "process"
+status = "verified"
+text = "The roadmap (docs/ROADMAP.md) and the task backlog (docs/TASKS.md) are proposals awaiting owner decisions. The proposed first supported scope is a TRON (TRX and TRC-20) signer on an adopted, pinned threshold-ECDSA library, in which every node verifies what it signs. The banner changes only when a roadmap milestone closes on public evidence."
+text_zh = "路线图（docs/ROADMAP.md）和任务清单（docs/TASKS.md）是等待所有者决策的提议稿。提议中的首个支持范围是：基于一个经采用并锁定版本的门限 ECDSA 库的 TRON（TRX 与 TRC-20）签名器，其中每个节点都会验证自己所签署的内容。只有当路线图中的某个里程碑凭公开证据完成时，警示才会更改。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "**Where it is going:**",
+  "| Production roadmap (proposed) and an honest account of the current state |",
+]
+quotes_zh = [
+  "**后续方向：**",
+  "| 生产路线图（提议稿），以及对当前状态的如实说明 |",
+]
+observed = 2026-10-11
+expires = 2027-04-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#11-decisions-needed-from-the-owner-adr-candidates"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "ADR-04 (v1 support matrix) and ADR-07 (engine swap) are open; the roadmap ends \"PROPOSED TASKS — awaiting human approval\""
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#33-the-differentiator-precisely"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "The claims ladder: what may be said publicly at each milestone"

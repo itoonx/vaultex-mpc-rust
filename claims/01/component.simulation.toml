@@ -1,0 +1,22 @@
+schema = 1
+id = "01.component.simulation"
+kind = "capability"
+status = "verified"
+support = "experimental"
+text = "Transaction simulation and risk scoring exist as experimental library and CLI code. They have not been validated."
+text_zh = "交易模拟与风险评分以实验性的库代码和 CLI 代码形式存在，尚未经过验证。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Transaction simulation and risk scoring | Experimental |"]
+quotes_zh = ["| 交易模拟与风险评分 | 实验性 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "crates/mpc-wallet-chains/src/provider.rs::simulate_transaction"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "code"
+ref = "crates/mpc-wallet-cli/src/commands/simulate.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"

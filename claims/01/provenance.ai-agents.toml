@@ -1,0 +1,17 @@
+schema = 1
+id = "01.provenance.ai-agents"
+kind = "process"
+status = "verified"
+text = "Vaultex was built with Claude Code by a team of AI agents, as the co-author trailers in its git history show."
+text_zh = "Vaultex 由 Claude Code AI Agent 团队构建，其 git 历史中的共同作者标注可以表明这一点。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ['Built with <a href="https://claude.com/claude-code">Claude Code</a> by a team of AI agents.']
+quotes_zh = ['由 <a href="https://claude.com/claude-code">Claude Code</a> AI Agent 团队构建。']
+observed = 2026-10-11
+expires = 2027-04-09
+
+[[evidence]]
+type = "command"
+ref = "git log --format='%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)' <commit> | grep -ci claude"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+result = "274 of the 565 commits carry a Claude co-author trailer"

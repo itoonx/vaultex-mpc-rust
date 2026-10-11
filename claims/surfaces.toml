@@ -1,0 +1,38 @@
+# claims/surfaces.toml: the public documents whose claims the ledger covers.
+#
+# Owned by WS-01. `claims.py check` requires every claim-bearing line of each
+# surface to contain a quote of a live claim that lists the surface (rule R7 in
+# claims/schema.toml). A line that states nothing checkable (navigation, a
+# definition, an instruction to the reader) is listed under `exempt`, verbatim,
+# with the reason. An exempt line that no longer occurs fails the check, so the
+# list cannot go stale.
+
+[[surface]]
+path = "README.md"
+lang = "en"
+exempt = [
+  { line = '[![CI](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml)', reason = "Live badge drawn by GitHub from the latest CI run; it states no result itself" },
+  { line = '[English](README.md) | [中文](README.zh-CN.md)', reason = "Language switch" },
+  { line = 'This matrix describes the code at HEAD.', reason = "Scope of the support matrix; the rows are claims" },
+  { line = '| **Staged** | Implemented and exercised end to end on a public testnet. Testnet only. A candidate for support once the limitations that affect it are fixed. |', reason = "Definition of a support status" },
+  { line = '| **Experimental** | Present in the code, but unverified, unsound or incomplete. Do not rely on it, and do not send funds to any address it shows. |', reason = "Definition of a support status" },
+  { line = '| [Task backlog](docs/TASKS.md) | Tasks that execute the roadmap |', reason = "Navigation link" },
+  { line = '| [Standards](specs/STANDARDS.md) | Standards and references cited by the code |', reason = "Navigation link" },
+  { line = '| [Contributing](docs/CONTRIBUTING.md) | Contribution guide |', reason = "Navigation link" },
+  { line = '| [Changelog](CHANGELOG.md) | Change history |', reason = "Navigation link" },
+]
+
+[[surface]]
+path = "README.zh-CN.md"
+lang = "zh"
+exempt = [
+  { line = '[![CI](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/itoonx/vaultex-mpc-rust/actions/workflows/ci.yml)', reason = "Live badge drawn by GitHub from the latest CI run; it states no result itself" },
+  { line = '[English](README.md) | [中文](README.zh-CN.md)', reason = "Language switch" },
+  { line = '本矩阵描述的是 HEAD 中的代码。', reason = "Scope of the support matrix; the rows are claims" },
+  { line = '| **预备（Staged）** | 已实现，并已在公共测试网上端到端运行过。仅限测试网。待影响它的限制修复后，可作为支持候选。 |', reason = "Definition of a support status" },
+  { line = '| **实验性（Experimental）** | 代码中存在，但未经验证、不安全或不完整。请勿依赖，也不要向它显示的任何地址转入资金。 |', reason = "Definition of a support status" },
+  { line = '| [任务清单](docs/TASKS.md) | 执行路线图的任务 |', reason = "Navigation link" },
+  { line = '| [标准](specs/STANDARDS.md) | 代码引用的标准与参考文献 |', reason = "Navigation link" },
+  { line = '| [贡献指南](docs/CONTRIBUTING.md) | 贡献说明 |', reason = "Navigation link" },
+  { line = '| [更新日志](CHANGELOG.md) | 变更历史 |', reason = "Navigation link" },
+]

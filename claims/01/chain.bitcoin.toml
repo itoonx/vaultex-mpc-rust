@@ -1,0 +1,24 @@
+schema = 1
+id = "01.chain.bitcoin"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "Bitcoin testnet, P2WPKH (BTC): a transaction built by the encoder was confirmed on the Bitcoin testnet; no SDK reference vector exists for it. It was signed with a hand-rolled threshold-ECDSA engine, which is experimental (limitation 1). P2WPKH addresses shown for FROST-TR wallets may be unspendable (limitation 5). Staged."
+text_zh = "Bitcoin 测试网，P2WPKH（BTC）：由编码器构建的交易已在 Bitcoin 测试网上确认；该链没有 SDK 参考向量。交易由自行实现的门限 ECDSA 引擎签名，该引擎为实验性（限制 1）。为 FROST-TR 钱包显示的 P2WPKH 地址可能无法花费（限制 5）。状态：预备。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Bitcoin | Testnet, P2WPKH | BTC |"]
+quotes_zh = ["| Bitcoin | 测试网，P2WPKH | BTC |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "S4: encoders pinned to official SDKs, with real testnet sends on six chains"
+
+[[evidence]]
+type = "report"
+ref = "retro/sessions/SESSION_RETRO_S52_REFACTOR_E2E_GATE.md"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Records a P2WPKH testnet broadcast; the transaction id is truncated, and the full id is not recorded in the public repository"

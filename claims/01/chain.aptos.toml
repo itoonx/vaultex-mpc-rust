@@ -1,0 +1,42 @@
+schema = 1
+id = "01.chain.aptos"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "Aptos (APT, coins, fungible assets) on testnet: transaction bytes are byte-equal to @aptos-labs/ts-sdk reference vectors, and transactions signed with FROST Ed25519 were confirmed on the Aptos testnet at the time. The Aptos testnet has since been reset, so those transactions can no longer be retrieved. Staged."
+text_zh = "Aptos（APT、Coin、Fungible Asset），测试网：交易字节与 @aptos-labs/ts-sdk 参考向量逐字节一致，使用 FROST Ed25519 签名的交易当时已在 Aptos 测试网上确认。Aptos 测试网此后已重置，这些交易已无法检索。状态：预备。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Aptos | Testnet | APT, coins, fungible assets |"]
+quotes_zh = ["| Aptos | 测试网 | APT、Coin、Fungible Asset |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::aptos::types::tests::bcs_matches_aptos_sdk_reference"
+path = "crates/mpc-wallet-chains/src/aptos/types.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::aptos::types::tests::bcs_matches_aptos_sdk_coin_reference"
+path = "crates/mpc-wallet-chains/src/aptos/types.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::aptos::types::tests::bcs_matches_aptos_sdk_fa_reference"
+path = "crates/mpc-wallet-chains/src/aptos/types.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "tx"
+ref = "0x72c2e3b599d55a0df9d15d55e7b77022f2163e9120acc3ca9d60c8c7adbe7892"
+network = "aptos:testnet"
+note = "Coin transfer, recorded in CHANGELOG.md at the pinned commit. Re-checked 2026-10-11 with the public Aptos testnet API: not found (HTTP 404), and the ledger's oldest retained version is 34369, consistent with a testnet reset"
+
+[[evidence]]
+type = "tx"
+ref = "0xb3a41e3339db31111b8613442d895ffe2fc15615bd8624a821d52bc72b8f76f8"
+network = "aptos:testnet"
+note = "Fungible-asset transfer, recorded in CHANGELOG.md at the pinned commit. Re-checked 2026-10-11 with the public Aptos testnet API: not found (HTTP 404)"

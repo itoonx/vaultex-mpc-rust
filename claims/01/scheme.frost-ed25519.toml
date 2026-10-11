@@ -1,0 +1,24 @@
+schema = 1
+id = "01.scheme.frost-ed25519"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "FROST Ed25519 wraps the Zcash Foundation frost-ed25519 crate (version 2.1) and signed the Solana, Sui and Aptos testnet transactions. It is staged, and it is affected by limitations 2 to 4."
+text_zh = "FROST Ed25519 封装了 Zcash Foundation 的 frost-ed25519 crate（2.1 版），并为 Solana、Sui 和 Aptos 的测试网交易签名。状态为预备，受限制 2–4 影响。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| FROST Ed25519 | Wraps the ZF `frost-ed25519` crate | Staged |"]
+quotes_zh = ["| FROST Ed25519 | 封装 ZF 的 `frost-ed25519` crate | 预备 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "Cargo.toml"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Workspace dependency frost-ed25519 2.1"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "S5: ZF FROST is the only scheme that signs on the production path, with its caveats"

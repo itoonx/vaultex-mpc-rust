@@ -1,0 +1,30 @@
+schema = 1
+id = "01.encoders.staged"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "The chain transaction encoders work for six chains: TRON, Ethereum, Bitcoin, Solana, Sui and Aptos. Where an official SDK reference exists, nine reference-vector tests pin their output byte-for-byte to it, and the encoders have produced confirmed transactions on public testnets. They are staged: testnet only."
+text_zh = "链交易编码器适用于六条链：TRON、Ethereum、Bitcoin、Solana、Sui 和 Aptos。在有官方 SDK 参考实现的情况下，九个参考向量测试将其输出与之逐字节锁定；这些编码器已在公共测试网上产生经确认的交易。状态为预备：仅限测试网。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "**What works:** the chain transaction encoders.",
+  "| Chain transaction encoders (the six staged chains) | Staged |",
+]
+quotes_zh = [
+  "**可用的部分：** 链交易编码器。",
+  "| 链交易编码器（上述六条预备链） | 预备 |",
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "command"
+ref = "git grep -nE 'fn [a-z0-9_]+_reference\\(' <commit> -- crates/mpc-wallet-chains"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+result = "9 reference-vector tests: tronweb (2), viem (1), @solana/spl-token (1), @mysten/sui (2), @aptos-labs/ts-sdk (3)"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "S4: encoders pinned to official SDKs, with testnet sends on six chains; this proves encoding, not distributed custody"

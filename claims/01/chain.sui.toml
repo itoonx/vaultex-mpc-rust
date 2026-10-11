@@ -1,0 +1,36 @@
+schema = 1
+id = "01.chain.sui"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "Sui (SUI, Coin<T>) on testnet: transaction bytes are byte-equal to @mysten/sui reference vectors, and transactions signed with FROST Ed25519 were confirmed on the Sui testnet. Staged."
+text_zh = "Sui（SUI、Coin<T>），测试网：交易字节与 @mysten/sui 参考向量逐字节一致，使用 FROST Ed25519 签名的交易已在 Sui 测试网上确认。状态：预备。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Sui | Testnet | SUI, `Coin<T>` |"]
+quotes_zh = ["| Sui | 测试网 | SUI、`Coin<T>` |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::sui::types::tests::bcs_matches_mysten_sdk_reference"
+path = "crates/mpc-wallet-chains/src/sui/types.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "test"
+ref = "mpc_wallet_chains::sui::types::tests::bcs_matches_mysten_sdk_coin_reference"
+path = "crates/mpc-wallet-chains/src/sui/types.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "tx"
+ref = "C9pp3etLRF2TUVcPv6LHCR1aQ4H8raA59JpSbNLu3ay1"
+network = "sui:testnet"
+note = "SUI transfer, recorded in retro/lessons/L-015_sui-bcs-must-match-upstream-shape.md at the pinned commit; not re-checked in this pass"
+
+[[evidence]]
+type = "tx"
+ref = "DFQmfoEbdiF5NJhXBomcCnm5uwbHK2WF7eFAUSnzPeM2"
+network = "sui:testnet"
+note = "Coin<T> transfer of testnet USDC, recorded in CLAUDE.md at the pinned commit; not re-checked in this pass"

@@ -1,0 +1,30 @@
+schema = 1
+id = "01.chain.solana"
+kind = "capability"
+status = "verified"
+support = "staged"
+text = "Solana (SOL, SPL tokens) on devnet: the SPL token transfer message is byte-equal to an @solana/spl-token reference vector, and transactions signed with FROST Ed25519 were confirmed on devnet. Staged."
+text_zh = "Solana（SOL、SPL 代币），devnet：SPL 代币转账消息与 @solana/spl-token 参考向量逐字节一致，使用 FROST Ed25519 签名的交易已在 devnet 上确认。状态：预备。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| Solana | Devnet | SOL, SPL tokens |"]
+quotes_zh = ["| Solana | Devnet | SOL、SPL 代币 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "test"
+ref = "chain_solana_integration::spl_message_matches_spl_token_sdk_reference"
+path = "crates/mpc-wallet-chains/tests/chain_solana_integration.rs"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+
+[[evidence]]
+type = "tx"
+ref = "XgVHGK2ct5bjD6nWoVvm9BmWpjYCqNJtjuDWigzRdJCsxgDfXZzM9DSFdsMyTgBoH1RHjSMFhmn6taokWBnghGL"
+network = "solana:devnet"
+note = "SOL transfer, recorded in retro/sessions/SESSION_RETRO_S38_S39_LIVE_TESTNET.md at the pinned commit; not re-checked in this pass"
+
+[[evidence]]
+type = "tx"
+ref = "4556JgY7Z6Cc1ucQckBHqAXfSWpgiksA1KT96tB4ZcdKMHsjRL3LDYu9YgiFaRZj2cawLpAiDsXn8FLrHweSfHRw"
+network = "solana:devnet"
+note = "SPL transfer of devnet USDC, recorded in CHANGELOG.md at the pinned commit; not re-checked in this pass"

@@ -1,0 +1,24 @@
+schema = 1
+id = "01.component.kms-hsm-tee"
+kind = "limitation"
+status = "limitation"
+support = "not-implemented"
+text = "KMS, HSM and SGX/TEE support is not implemented: the code has interfaces, a KMS signer stub and a mock enclave only."
+text_zh = "KMS、HSM 与 SGX/TEE 支持尚未实现：代码中仅有接口、一个 KMS 签名器桩代码和一个模拟 enclave。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| KMS, HSM, SGX/TEE | Not implemented |"]
+quotes_zh = ["| KMS、HSM、SGX/TEE | 未实现 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "services/api-gateway/src/auth/kms_signer.rs::KmsSigner"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Stub"
+
+[[evidence]]
+type = "code"
+ref = "crates/mpc-wallet-core/src/enclave/mock.rs::MockEnclaveProvider"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Mock only"

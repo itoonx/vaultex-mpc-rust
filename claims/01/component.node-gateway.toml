@@ -1,0 +1,24 @@
+schema = 1
+id = "01.component.node-gateway"
+kind = "limitation"
+status = "limitation"
+support = "experimental"
+text = "The MPC node and gateway services are experimental: they are affected by limitations 2 to 4, no working multi-host deployment exists, and the gateway keeps its wallet registry in memory only."
+text_zh = "MPC 节点与网关服务属于实验性：受限制 2–4 影响，没有可用的多主机部署，且网关的钱包注册表仅保存在内存中。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = ["| MPC node and gateway (`services/`) | Experimental |"]
+quotes_zh = ["| MPC 节点与网关（`services/`） | 实验性 |"]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "W3, W4, W5, W9 and W16"
+
+[[evidence]]
+type = "report"
+ref = "SECURITY_STATUS.md#known-limitations"
+commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+note = "Categories 2, 3, 4 and 9"

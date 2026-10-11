@@ -1,0 +1,30 @@
+schema = 1
+id = "01.scheme.sr25519-bls"
+kind = "limitation"
+status = "limitation"
+support = "experimental"
+text = "Sr25519 signing (via schnorrkel) and BLS12-381 signing (via blst) are not threshold signing (limitation 1). Both are experimental and will be deleted or quarantined."
+text_zh = "Sr25519 签名（使用 schnorrkel）与 BLS12-381 签名（使用 blst）并非门限签名（限制 1）。两者均属于实验性，将被删除或隔离。"
+surfaces = ["README.md", "README.zh-CN.md"]
+quotes = [
+  "| Sr25519 | Uses `schnorrkel` |",
+  "| BLS12-381 | Uses `blst` |",
+]
+quotes_zh = [
+  "| Sr25519 | 使用 `schnorrkel` |",
+  "| BLS12-381 | 使用 `blst` |",
+]
+observed = 2026-10-11
+expires = 2027-01-09
+
+[[evidence]]
+type = "code"
+ref = "Cargo.toml"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Workspace dependencies schnorrkel 0.11 and blst 0.3"
+
+[[evidence]]
+type = "report"
+ref = "docs/ROADMAP.md#m5-contain-cut-and-licence-phase-1"
+commit = "26fd974608adca177ebfcab239ed8aef3de8a6a3"
+note = "Banner item (1): Sr25519/BLS signing is not threshold"
