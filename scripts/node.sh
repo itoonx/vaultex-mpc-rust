@@ -9,9 +9,11 @@
 # Flags (init): --party N (required)
 #               --external-nats <url>   connect to an existing NATS (default: bundled)
 #               --bundle-nats           co-locate a NATS container (default)
-#               --keys <hostpath>       bind-mount existing key shares (default: named volume)
 #               --env <file>            env-file path (default: infra/node/node.env)
 #               --force                 overwrite an existing node.env
+#
+# Key shares live only in a docker-managed volume that the node fills by DKG.
+# The wrapper never mounts a host keystore (see infra/node/README.md).
 # ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -29,7 +31,7 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m!\033[0m %s\n' "$*" >&2; }
 
-# Compose wrapper: always pass --env-file so ${HEALTH_PORT}/${KEYS_MOUNT} interpolate.
+# Compose wrapper: always pass --env-file so ${HEALTH_PORT} interpolates.
 dc() { docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"; }
 
 # set_env KEY VALUE — idempotently upsert KEY=VALUE in the env-file.
@@ -58,13 +60,15 @@ profile_args() {
 }
 
 cmd_init() {
-  local party="" nats_mode="bundled" nats_url="nats://nats:4222" keys="" force=0
+  local party="" nats_mode="bundled" nats_url="nats://nats:4222" force=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --party)         party="$2"; shift 2 ;;
       --external-nats) nats_mode="external"; nats_url="$2"; shift 2 ;;
       --bundle-nats)   nats_mode="bundled"; nats_url="nats://nats:4222"; shift 1 ;;
-      --keys)          keys="$2"; shift 2 ;;
+      # ponytail: removed outright, not "validate the dir holds one party's share";
+      # a reviewed share-import path can come later if a node ever needs one.
+      --keys)          die "--keys was removed: the boot node never mounts a host keystore. A CLI keystore holds every party's share, so it must not be given to a node; the node receives its own share by DKG (see infra/node/README.md)" ;;
       --env)           ENV_FILE="$2"; shift 2 ;;
       --force)         force=1; shift 1 ;;
       *) die "unknown init flag: $1" ;;
@@ -108,14 +112,8 @@ cmd_init() {
     info "minted GATEWAY keypair (pubkey → env, private → $GATEWAY_KEY_FILE)"
   fi
 
-  # Persist run-mode state for `up`/`down`.
-  local keys_mount="boot-node-keys"
-  if [[ -n "$keys" ]]; then
-    [[ -d "$keys" ]] || die "--keys path does not exist: $keys"
-    keys_mount="$(cd "$keys" && pwd)"   # absolute → bind mount
-    info "will bind-mount existing shares from $keys_mount"
-  fi
-  { echo "NATS_MODE=$nats_mode"; echo "KEYS_MOUNT=$keys_mount"; } > "$STATE_FILE"
+  # Persist run-mode state for `up`/`down` (rewriting it also clears a legacy KEYS_MOUNT).
+  echo "NATS_MODE=$nats_mode" > "$STATE_FILE"
 
   info "init complete — review $ENV_FILE, then: scripts/node.sh up"
 }
@@ -127,9 +125,12 @@ preflight() {
     [[ -n "$(get_env "$v")" ]] || missing+=("$v")
   done
   [[ ${#missing[@]} -eq 0 ]] || die "missing mandatory vars in $ENV_FILE: ${missing[*]}"
-  # External NATS reachability probe (best-effort).
   if [[ -f "$STATE_FILE" ]]; then
-    local NATS_MODE="bundled"; . "$STATE_FILE"
+    local NATS_MODE="bundled" KEYS_MOUNT=""; . "$STATE_FILE"
+    # Fail closed on state left by an older wrapper that bind-mounted a host keystore.
+    [[ -z "$KEYS_MOUNT" || "$KEYS_MOUNT" == "boot-node-keys" ]] \
+      || die "$STATE_FILE asks for a host keystore mount, which is no longer supported; re-run: scripts/node.sh init --party $(get_env PARTY_ID) (plus your NATS flags, without --keys)"
+    # External NATS reachability probe (best-effort).
     if [[ "${NATS_MODE:-bundled}" == "external" ]]; then
       local hp; hp="$(get_env NATS_URL | sed -E 's#^nats://##; s#/.*##')"
       local host="${hp%%:*}" port="${hp##*:}"
@@ -142,10 +143,10 @@ preflight() {
 
 cmd_up() {
   preflight
-  local NATS_MODE="bundled" KEYS_MOUNT="boot-node-keys"
+  local NATS_MODE="bundled"
   [[ -f "$STATE_FILE" ]] && . "$STATE_FILE"
   info "building + starting boot node (party $(get_env PARTY_ID), NATS=${NATS_MODE:-bundled})"
-  KEYS_MOUNT="${KEYS_MOUNT:-boot-node-keys}" dc $(profile_args) up -d --build
+  dc $(profile_args) up -d --build
   info "started — check: scripts/node.sh status"
 }
 
@@ -166,7 +167,7 @@ cmd_status() {
 }
 
 usage() {
-  sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 main() {
