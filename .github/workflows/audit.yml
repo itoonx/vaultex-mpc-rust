@@ -1,0 +1,62 @@
+name: Dependency audit
+
+# Daily RustSec scan of Cargo.lock (ROADMAP M5 #7). The per-push "Security audit" job in ci.yml
+# (rustsec/audit-check) annotates findings but does not fail its job. This run gates on cargo-audit's
+# exit code, and fails on:
+#   - vulnerable, unmaintained, unsound and yanked crates (`cargo audit --deny warnings`);
+#   - any exception in .cargo/audit.toml or deny.toml whose "expires YYYY-MM-DD" date has passed.
+# It only reads the repository. It opens no issues and posts no comments; findings are in the run log.
+# Pins follow ci.yml: actions by full commit SHA, cargo-audit by exact version.
+
+on:
+  schedule:
+    - cron: "23 4 * * *" # daily, 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  CARGO_AUDIT_VERSION: "0.22.1"
+
+jobs:
+  audit:
+    name: Daily dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (v4.4.0)
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"
+
+      - name: Audit Cargo.lock (vulnerable, unmaintained, unsound, yanked)
+        run: cargo audit --deny warnings
+
+      # Runs even when the audit failed, so one run reports both problems.
+      - name: Fail on expired advisory exceptions
+        if: ${{ !cancelled() }}
+        run: |
+          awk -v today="$(date -u +%F)" '
+            match($0, /expires [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
+              d = substr($0, RSTART + 8, 10)
+              if (d < today) { print FILENAME ":" FNR ": exception expired on " d; bad = 1 }
+            }
+            END { exit bad }
+          ' .cargo/audit.toml deny.toml

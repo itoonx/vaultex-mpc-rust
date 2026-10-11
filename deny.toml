@@ -1,0 +1,72 @@
+# cargo-deny policy: DRAFT (ROADMAP M5 #7, M7 #6). T02-11 finalises it and runs it in CI. It has not
+# been run locally yet, because cargo-deny is not installed on the development machine (Q-RUN-2).
+# Format: cargo-deny >= 0.18.2.
+#
+# The advisory exceptions mirror .cargo/audit.toml, which also has the reachability notes. Every
+# exception is PENDING OWNER SIGN-OFF and states "expires YYYY-MM-DD" in its reason. The daily audit
+# workflow fails once that date has passed.
+# ponytail: the calendar expiry lives in the reason text. cargo-deny's own `expiry` field counts from
+# an advisory's publish date and has not been released yet; switch to it once it ships.
+
+[graph]
+# The platforms we build and ship for. Dependencies for other targets are left out of the checks.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+ignore = [
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102 via async-nats 0.38; UNREACHED (rustls 0.23 verifies with patched webpki 0.103); fix: async-nats >= 0.47; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102 via async-nats 0.38; UNREACHED (rustls 0.23 verifies with patched webpki 0.103); fix: async-nats >= 0.47; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102 via async-nats 0.38; UNREACHED (rustls 0.23 verifies with patched webpki 0.103); fix: async-nats >= 0.47; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102 via async-nats 0.38; UNREACHED (rustls 0.23 verifies with patched webpki 0.103); fix: async-nats >= 0.47; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2024-0437", reason = "protobuf 2 via prometheus 0.13; UNREACHED (metrics are text-encoded, protobuf is never parsed); fix: prometheus without default features; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained; IN USE for NATS mTLS PEM files; fix: rustls-pki-types PEM decoder + async-nats >= 0.46; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; BUILD-TIME proc-macro via alloy-primitives; upstream fix only; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill unmaintained; NOT COMPILED for shipped targets; upstream fix only; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained; NOT COMPILED (lockfile-only optional dep of ruint); upstream fix only; pending owner sign-off; expires 2026-12-14" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained; NOT COMPILED (lockfile-only, alloy-sol-macro); upstream fix only; pending owner sign-off; expires 2026-12-14" },
+]
+
+[licenses]
+# Permissive licences found in today's dependency graph. The project licence itself is ADR-02.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+# Per-crate exceptions, pending owner sign-off. MPL-2.0 is file-level copyleft; MITNFA is MIT plus a
+# no-false-attribution clause.
+exceptions = [
+    { allow = ["MPL-2.0"], crate = "option-ext" }, # via dirs (CLI)
+    { allow = ["MPL-2.0"], crate = "fastrlp" },    # lockfile-only optional dep of ruint
+    { allow = ["MITNFA"], crate = "hex_lit" },     # via bitcoin
+]
+
+[bans]
+# Many duplicate majors today (alloy, ark-*, rand); tighten after the M5 cut shrinks the graph.
+multiple-versions = "warn"
+wildcards = "deny"
+# Exempts the workspace's own path dependencies, but only once the crates are `publish = false`
+# (requested from WS-03; it also blocks an accidental crates.io publish before ADR-12).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
