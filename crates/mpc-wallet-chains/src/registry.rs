@@ -2,16 +2,21 @@
 //!
 //! Centralizes provider instantiation so CLI commands and services
 //! don't need to know about per-chain constructor patterns.
+//!
+//! Also home of chain gating ([`ChainRegistry::derive_address`]): the only
+//! path from a wallet's group key to an address shown to a user.
 
 use serde::{Deserialize, Serialize};
 
 use mpc_wallet_core::error::CoreError;
+use mpc_wallet_core::protocol::GroupPublicKey;
 use mpc_wallet_core::types::CryptoScheme;
 
 use crate::aptos::AptosProvider;
 use crate::bitcoin::BitcoinProvider;
 use crate::cosmos::CosmosProvider;
 use crate::evm::EvmProvider;
+use crate::metadata::metadata_for;
 use crate::monero::MoneroProvider;
 use crate::provider::{Chain, ChainProvider, SignedTransaction};
 use crate::rpc::RpcRegistry;
@@ -143,6 +148,36 @@ impl ChainRegistry {
             Chain::Sui => Box::new(SuiProvider::new()),
         };
         Ok(provider)
+    }
+
+    /// Chain gating: the address to show a user for a wallet with `scheme` and
+    /// `group_pubkey` on `chain`.
+    ///
+    /// An address is served only when the chain has a `CHAIN_METADATA` entry (its
+    /// address derivation was verified end to end) and `scheme` is one of that
+    /// entry's `compatible_schemes` (its signatures can spend from the address).
+    /// Every other pair gets a refusal, never a placeholder or unspendable address;
+    /// in particular a FROST-Secp256k1-TR wallet never gets a P2WPKH address.
+    ///
+    /// Use this, not `ChainProvider::derive_address`, for any address a user may
+    /// fund.
+    pub fn derive_address(
+        &self,
+        chain: Chain,
+        scheme: CryptoScheme,
+        group_pubkey: &GroupPublicKey,
+    ) -> Result<String, CoreError> {
+        let Some(meta) = metadata_for(chain) else {
+            return Err(CoreError::InvalidInput(format!(
+                "chain gating: no address is served for chain '{chain}' (address derivation not verified)"
+            )));
+        };
+        if !meta.compatible_schemes.contains(&scheme) {
+            return Err(CoreError::InvalidInput(format!(
+                "chain gating: no '{chain}' address is served for a {scheme} wallet (its signatures cannot spend from it)"
+            )));
+        }
+        self.provider(chain)?.derive_address(group_pubkey)
     }
 
     /// List all supported chains.
@@ -434,5 +469,155 @@ mod tests {
         // Bitcoin live entry is the testnet variant; access via testnet registry.
         let p = testnet.provider(Chain::BitcoinTestnet).unwrap();
         assert_eq!(p.metadata().chain, Chain::BitcoinTestnet);
+    }
+
+    // ── Chain gating ────────────────────────────────────────────────────
+
+    const ALL_SCHEMES: [CryptoScheme; 7] = [
+        CryptoScheme::Gg20Ecdsa,
+        CryptoScheme::Cggmp21Secp256k1,
+        CryptoScheme::FrostSecp256k1Tr,
+        CryptoScheme::FrostEd25519,
+        CryptoScheme::Sr25519Threshold,
+        CryptoScheme::StarkThreshold,
+        CryptoScheme::Bls12_381Threshold,
+    ];
+
+    /// A well-formed group key of the kind `scheme` produces.
+    fn key_for(scheme: CryptoScheme) -> GroupPublicKey {
+        match scheme {
+            CryptoScheme::Gg20Ecdsa
+            | CryptoScheme::Cggmp21Secp256k1
+            | CryptoScheme::FrostSecp256k1Tr => GroupPublicKey::Secp256k1(
+                // secp256k1 generator, compressed
+                hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                    .unwrap(),
+            ),
+            // Ed25519 base point, compressed
+            CryptoScheme::FrostEd25519 => {
+                let mut b = vec![0x66; 32];
+                b[0] = 0x58;
+                GroupPublicKey::Ed25519(b)
+            }
+            CryptoScheme::Sr25519Threshold => GroupPublicKey::Sr25519(vec![0x42; 32]),
+            CryptoScheme::StarkThreshold => GroupPublicKey::StarkCurve(vec![0x42; 32]),
+            CryptoScheme::Bls12_381Threshold => GroupPublicKey::Bls12_381(vec![0x42; 48]),
+        }
+    }
+
+    fn assert_gated(result: Result<String, CoreError>, chain: Chain, scheme: CryptoScheme) {
+        match result {
+            Err(CoreError::InvalidInput(msg)) if msg.starts_with("chain gating: ") => {}
+            other => panic!("{chain} / {scheme}: expected a chain-gating refusal, got {other:?}"),
+        }
+    }
+
+    /// The full chain x scheme matrix: only the 9 pairs proven by live testnet
+    /// broadcasts get an address; every other pair is refused. Before chain
+    /// gating, 44 of these chains answered with an address, some built from
+    /// placeholder data, and none of them was ever verified to be spendable.
+    #[test]
+    fn chain_gating_serves_only_verified_chain_scheme_pairs() {
+        use CryptoScheme::*;
+        let served = [
+            (Chain::Ethereum, Gg20Ecdsa),
+            (Chain::Ethereum, Cggmp21Secp256k1),
+            (Chain::BitcoinTestnet, Gg20Ecdsa),
+            (Chain::BitcoinTestnet, Cggmp21Secp256k1),
+            (Chain::Solana, FrostEd25519),
+            (Chain::Sui, FrostEd25519),
+            (Chain::Aptos, FrostEd25519),
+            (Chain::Tron, Gg20Ecdsa),
+            (Chain::Tron, Cggmp21Secp256k1),
+        ];
+        for registry in [
+            ChainRegistry::default_mainnet(),
+            ChainRegistry::default_testnet(),
+        ] {
+            let mut refused_chains = 0;
+            for chain in ChainRegistry::supported_chains() {
+                let mut any_served = false;
+                for scheme in ALL_SCHEMES {
+                    let key = key_for(scheme);
+                    let result = registry.derive_address(chain, scheme, &key);
+                    if served.contains(&(chain, scheme)) {
+                        let expected = registry
+                            .provider(chain)
+                            .unwrap()
+                            .derive_address(&key)
+                            .unwrap();
+                        assert_eq!(result.unwrap(), expected, "{chain} / {scheme}");
+                        any_served = true;
+                    } else {
+                        assert_gated(result, chain, scheme);
+                    }
+                }
+                if !any_served {
+                    refused_chains += 1;
+                }
+            }
+            assert_eq!(
+                refused_chains, 44,
+                "every unverified chain serves no address"
+            );
+        }
+    }
+
+    /// Named check for the chains whose derivation was a placeholder or never
+    /// verified: TON and Starknet (placeholder contract data), Monero, Substrate,
+    /// Cosmos, other UTXO chains, Movement, EVM chains other than Ethereum, and
+    /// Bitcoin mainnet. Each is refused for the scheme it used to serve.
+    #[test]
+    fn chain_gating_refuses_previously_placeholder_chains() {
+        let registry = ChainRegistry::default_mainnet();
+        for chain in ChainRegistry::supported_chains() {
+            if metadata_for(chain).is_some() {
+                continue;
+            }
+            for scheme in ChainRegistry::compatible_schemes(chain) {
+                assert_gated(
+                    registry.derive_address(chain, scheme, &key_for(scheme)),
+                    chain,
+                    scheme,
+                );
+            }
+        }
+        for chain in [
+            Chain::Ton,
+            Chain::Starknet,
+            Chain::Monero,
+            Chain::Polkadot,
+            Chain::CosmosHub,
+            Chain::Litecoin,
+            Chain::Movement,
+            Chain::Polygon,
+            Chain::BitcoinMainnet,
+        ] {
+            assert!(metadata_for(chain).is_none(), "{chain} must stay gated");
+        }
+    }
+
+    /// FROST-Secp256k1-TR signatures can spend neither a P2WPKH output nor (without
+    /// a BIP-341 tweak) a Taproot one, so such a wallet gets no Bitcoin address.
+    #[test]
+    fn chain_gating_never_gives_frost_tr_a_p2wpkh_address() {
+        let key = key_for(CryptoScheme::FrostSecp256k1Tr);
+        for registry in [
+            ChainRegistry::default_mainnet(),
+            ChainRegistry::default_testnet(),
+        ] {
+            for chain in ChainRegistry::supported_chains() {
+                assert_gated(
+                    registry.derive_address(chain, CryptoScheme::FrostSecp256k1Tr, &key),
+                    chain,
+                    CryptoScheme::FrostSecp256k1Tr,
+                );
+            }
+            // The same group key under an ECDSA scheme does get its P2WPKH address.
+            let addr = registry
+                .derive_address(Chain::BitcoinTestnet, CryptoScheme::Gg20Ecdsa, &key)
+                .unwrap();
+            assert!(addr.starts_with("tb1q"), "{addr}");
+        }
     }
 }
