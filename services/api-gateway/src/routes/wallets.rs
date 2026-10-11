@@ -2,6 +2,10 @@
 //!
 //! Production architecture (DEC-015): Gateway delegates to distributed MPC nodes via NATS.
 //! Gateway holds ZERO key shares. Each MPC node holds exactly 1 share.
+//!
+//! Also home of the gateway's release freeze (ROADMAP M5 #5), shared with `transactions.rs`.
+
+use std::fmt::Display;
 
 use axum::{
     extract::{Path, State},
@@ -9,9 +13,11 @@ use axum::{
     Extension, Json,
 };
 
+use mpc_wallet_chains::provider::Chain;
 use mpc_wallet_core::protocol::sign_authorization::{AuthorizationPayload, SignAuthorization};
 use mpc_wallet_core::protocol::MpcSignature;
 use mpc_wallet_core::rbac::{ApiRole, AuthContext, Permissions};
+use mpc_wallet_core::types::CryptoScheme;
 use sha2::{Digest, Sha256};
 
 use crate::errors::{ApiError, ErrorBody, ErrorCode};
@@ -21,6 +27,69 @@ use crate::models::response::{
     WalletResponse,
 };
 use crate::state::AppState;
+
+// ── Release freeze (ROADMAP M5 #5) ─────────────────────────────────
+//
+// Until the full independent audit (M10-F) closes, the gateway refuses key
+// generation, raw-digest signing, every legacy scheme and any network other
+// than testnet/devnet. Every build is frozen by default; only a debug build may
+// opt out, with the `dev-unfreeze` feature, for testnet development. The MPC
+// nodes enforce the same refusals independently.
+
+/// `true` unless this is a debug build with the `dev-unfreeze` feature.
+const FROZEN: bool = !cfg!(feature = "dev-unfreeze");
+
+#[cfg(all(feature = "dev-unfreeze", not(debug_assertions)))]
+compile_error!(
+    "`dev-unfreeze` is for debug builds only: release builds stay frozen until M10-F (ROADMAP M5 #5)"
+);
+
+/// Refuse `what` when the build is frozen.
+pub(crate) fn refuse_if_frozen(what: impl Display) -> Result<(), ApiError> {
+    if FROZEN {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            ErrorCode::PolicyDenied,
+            format!("release freeze: {what} is refused in this build"),
+        ));
+    }
+    Ok(())
+}
+
+/// Only testnet and devnet are allowed; anything else fails closed.
+pub(crate) fn check_network(network: &str) -> Result<(), ApiError> {
+    if matches!(network, "testnet" | "devnet") {
+        return Ok(());
+    }
+    refuse_if_frozen(format_args!("network '{network}'"))
+}
+
+/// Refuse chains that are mainnet whatever the configured network.
+pub(crate) fn check_chain(chain: Chain) -> Result<(), ApiError> {
+    if matches!(chain, Chain::BitcoinMainnet) {
+        return refuse_if_frozen(format_args!("mainnet chain '{chain}'"));
+    }
+    Ok(())
+}
+
+/// Refuse every legacy scheme.
+pub(crate) fn check_scheme(scheme: CryptoScheme) -> Result<(), ApiError> {
+    // Exhaustive on purpose: a new scheme does not compile until it is classified here.
+    // ponytail: same table as mpc-node's freeze.rs; one copy once WS-03 lands shared types.
+    let legacy = match scheme {
+        CryptoScheme::Gg20Ecdsa
+        | CryptoScheme::Cggmp21Secp256k1
+        | CryptoScheme::FrostEd25519
+        | CryptoScheme::FrostSecp256k1Tr
+        | CryptoScheme::Sr25519Threshold
+        | CryptoScheme::StarkThreshold
+        | CryptoScheme::Bls12_381Threshold => true,
+    };
+    if legacy {
+        return refuse_if_frozen(format_args!("legacy scheme '{scheme}'"));
+    }
+    Ok(())
+}
 
 fn require_roles(ctx: &AuthContext, roles: &[ApiRole]) -> Result<(), ApiError> {
     Permissions::require_role(ctx, roles).map_err(|e| {
@@ -47,7 +116,7 @@ fn require_admin_mfa(ctx: &AuthContext) -> Result<(), ApiError> {
     responses(
         (status = 201, description = "Wallet created", body = ApiResponse<WalletResponse>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 403, description = "Admin+MFA required", body = ErrorBody)
+        (status = 403, description = "Admin+MFA required, or refused by the release freeze", body = ErrorBody)
     )
 )]
 pub async fn create_wallet(
@@ -56,6 +125,7 @@ pub async fn create_wallet(
     Json(req): Json<CreateWalletRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<WalletResponse>>), ApiError> {
     require_admin_mfa(&ctx)?;
+    refuse_if_frozen("key generation")?;
 
     let scheme: mpc_wallet_core::types::CryptoScheme = req
         .scheme
@@ -145,6 +215,7 @@ pub async fn list_wallets(
     security(("session_token" = [])),
     responses(
         (status = 200, description = "Wallet details", body = ApiResponse<WalletDetailResponse>),
+        (status = 403, description = "Refused by the release freeze (non-test network)", body = ErrorBody),
         (status = 404, description = "Wallet not found", body = ErrorBody)
     )
 )]
@@ -162,6 +233,8 @@ pub async fn get_wallet(
             ApiRole::Admin,
         ],
     )?;
+    // Addresses below are derived for the configured network.
+    check_network(&state.network)?;
 
     let m = state
         .orchestrator
@@ -169,24 +242,8 @@ pub async fn get_wallet(
         .await
         .ok_or_else(|| ApiError::not_found(format!("wallet {wallet_id} not found")))?;
 
-    // Derive addresses for common chains matching the wallet's signing scheme.
-    use mpc_wallet_chains::provider::Chain;
-    let chains_to_derive: Vec<Chain> = match m.scheme {
-        mpc_wallet_core::types::CryptoScheme::Gg20Ecdsa
-        | mpc_wallet_core::types::CryptoScheme::Cggmp21Secp256k1 => {
-            vec![Chain::Ethereum, Chain::Polygon, Chain::Bsc, Chain::Arbitrum]
-        }
-        mpc_wallet_core::types::CryptoScheme::FrostEd25519 => {
-            vec![Chain::Solana, Chain::Sui, Chain::Aptos]
-        }
-        mpc_wallet_core::types::CryptoScheme::FrostSecp256k1Tr => {
-            vec![Chain::BitcoinTestnet, Chain::BitcoinMainnet]
-        }
-        _ => vec![],
-    };
-
     let mut addresses = Vec::new();
-    for chain in chains_to_derive {
+    for chain in address_chains(m.scheme) {
         if let Ok(provider) = state.chain_registry.provider(chain) {
             if let Ok(addr) = provider.derive_address(&m.group_public_key) {
                 addresses.push(AddressEntry {
@@ -208,6 +265,21 @@ pub async fn get_wallet(
     })))
 }
 
+/// Chains to derive display addresses for, given the wallet's signing scheme.
+/// A frozen build never serves a mainnet-only chain's address.
+fn address_chains(scheme: CryptoScheme) -> Vec<Chain> {
+    let mut chains = match scheme {
+        CryptoScheme::Gg20Ecdsa | CryptoScheme::Cggmp21Secp256k1 => {
+            vec![Chain::Ethereum, Chain::Polygon, Chain::Bsc, Chain::Arbitrum]
+        }
+        CryptoScheme::FrostEd25519 => vec![Chain::Solana, Chain::Sui, Chain::Aptos],
+        CryptoScheme::FrostSecp256k1Tr => vec![Chain::BitcoinTestnet, Chain::BitcoinMainnet],
+        _ => vec![],
+    };
+    chains.retain(|&chain| check_chain(chain).is_ok());
+    chains
+}
+
 /// `POST /v1/wallets/:id/sign` — distributed MPC sign.
 #[utoipa::path(post, path = "/v1/wallets/{id}/sign", tag = "Wallets",
     params(("id" = String, Path, description = "Wallet ID")),
@@ -215,6 +287,7 @@ pub async fn get_wallet(
     security(("session_token" = [])),
     responses(
         (status = 200, description = "Signature result", body = ApiResponse<SignResponse>),
+        (status = 403, description = "Refused by the release freeze", body = ErrorBody),
         (status = 404, description = "Wallet not found", body = ErrorBody)
     )
 )]
@@ -227,6 +300,8 @@ pub async fn sign_message(
     require_roles(&ctx, &[ApiRole::Initiator, ApiRole::Admin])?;
     Permissions::check_risk_tier_for_signing(&ctx)
         .map_err(|e| ApiError::forbidden(e.to_string()))?;
+    // The caller supplies an opaque digest with no transaction context.
+    refuse_if_frozen("raw-digest signing")?;
 
     let message_bytes = hex::decode(&req.message).map_err(|e| {
         ApiError::bad_request(ErrorCode::InvalidInput, format!("invalid hex message: {e}"))
@@ -368,4 +443,121 @@ pub async fn unfreeze_wallet(
     Ok(Json(ApiResponse::ok(
         serde_json::json!({"wallet_id": wallet_id, "status": "active"}),
     )))
+}
+
+#[cfg(all(test, not(feature = "dev-unfreeze")))]
+pub(crate) mod freeze_tests {
+    use super::*;
+
+    pub(crate) async fn state_on(network: &str) -> AppState {
+        let mut config = crate::config::AppConfig::for_test();
+        config.network = network.into();
+        AppState::from_config(&config).await
+    }
+
+    /// Admin with MFA and Initiator: passes every RBAC check on these routes.
+    pub(crate) fn privileged_ctx() -> AuthContext {
+        let mut ctx = AuthContext::new("freeze-test", vec![ApiRole::Admin, ApiRole::Initiator]);
+        ctx.mfa_verified = true;
+        ctx
+    }
+
+    pub(crate) fn assert_frozen<T>(result: Result<T, ApiError>, what: &str) {
+        let Err(err) = result else {
+            panic!("expected a release-freeze refusal of {what}, got Ok");
+        };
+        assert_eq!(err.status, StatusCode::FORBIDDEN);
+        assert!(matches!(err.code, ErrorCode::PolicyDenied));
+        assert!(
+            err.message.starts_with("release freeze: ") && err.message.contains(what),
+            "expected a release-freeze refusal of {what}, got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn freeze_refuses_keygen() {
+        let state = state_on("testnet").await;
+        let req = CreateWalletRequest {
+            label: "freeze".into(),
+            scheme: "frost-ed25519".into(),
+            threshold: 2,
+            total_parties: 3,
+        };
+        let result = create_wallet(State(state), Extension(privileged_ctx()), Json(req)).await;
+        assert_frozen(result, "key generation");
+    }
+
+    #[tokio::test]
+    async fn freeze_refuses_raw_sign() {
+        let state = state_on("testnet").await;
+        let req = SignRequest {
+            message: "deadbeef".into(),
+        };
+        let result = sign_message(
+            State(state),
+            Extension(privileged_ctx()),
+            Path("any-wallet".into()),
+            Json(req),
+        )
+        .await;
+        assert_frozen(result, "raw-digest signing");
+    }
+
+    #[test]
+    fn freeze_refuses_legacy_schemes() {
+        for scheme in [
+            CryptoScheme::Gg20Ecdsa,
+            CryptoScheme::Cggmp21Secp256k1,
+            CryptoScheme::FrostEd25519,
+            CryptoScheme::FrostSecp256k1Tr,
+            CryptoScheme::Sr25519Threshold,
+            CryptoScheme::StarkThreshold,
+            CryptoScheme::Bls12_381Threshold,
+        ] {
+            assert_frozen(check_scheme(scheme), "legacy scheme");
+        }
+    }
+
+    #[tokio::test]
+    async fn freeze_refuses_mainnet_network_wallet_addresses() {
+        // Refused before the wallet lookup: a mainnet gateway serves no addresses.
+        let state = state_on("mainnet").await;
+        let result = get_wallet(
+            State(state),
+            Extension(privileged_ctx()),
+            Path("any-wallet".into()),
+        )
+        .await;
+        assert_frozen(result, "network 'mainnet'");
+    }
+
+    #[test]
+    fn freeze_refuses_mainnet_chain_addresses() {
+        assert_frozen(check_chain(Chain::BitcoinMainnet), "mainnet chain");
+        for scheme in [
+            CryptoScheme::Gg20Ecdsa,
+            CryptoScheme::Cggmp21Secp256k1,
+            CryptoScheme::FrostEd25519,
+            CryptoScheme::FrostSecp256k1Tr,
+        ] {
+            let chains = address_chains(scheme);
+            assert!(
+                !chains.contains(&Chain::BitcoinMainnet),
+                "{scheme} must not derive a mainnet-only address: {chains:?}"
+            );
+        }
+        assert_eq!(
+            address_chains(CryptoScheme::FrostSecp256k1Tr),
+            vec![Chain::BitcoinTestnet]
+        );
+    }
+
+    #[test]
+    fn freeze_refuses_unknown_network_but_allows_test_networks() {
+        assert_frozen(check_network(""), "network");
+        assert_frozen(check_network("Mainnet"), "network");
+        assert!(check_network("testnet").is_ok());
+        assert!(check_network("devnet").is_ok());
+    }
 }

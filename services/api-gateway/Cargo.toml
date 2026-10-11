@@ -74,6 +74,10 @@ default = []
 # Enable when aws-sdk-kms is added for real KMS integration.
 # Currently defines the interface with stub implementations.
 aws-kms = []
+# Debug builds only: lift the release freeze (keygen, raw-digest signing, legacy
+# schemes, non-test networks) for testnet development. A release build with this
+# feature fails to compile; see routes/wallets.rs (ROADMAP M5 #5).
+dev-unfreeze = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

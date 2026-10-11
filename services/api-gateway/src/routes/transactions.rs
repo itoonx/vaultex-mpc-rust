@@ -19,6 +19,7 @@ use mpc_wallet_core::rbac::{ApiRole, AuthContext, Permissions};
 use crate::errors::{ApiError, ErrorBody, ErrorCode};
 use crate::models::request::{SimulateRequest, TransactionRequest};
 use crate::models::response::{ApiResponse, SimulationResponse, TransactionResponse};
+use crate::routes::wallets::{check_chain, check_network, check_scheme};
 use crate::state::AppState;
 
 /// Explorer URL for a transaction hash, network-aware.
@@ -93,6 +94,7 @@ fn resolve_evm_rpc(state: &AppState, chain: Chain) -> Result<String, ApiError> {
     security(("session_token" = [])),
     responses(
         (status = 200, description = "Transaction broadcast", body = ApiResponse<TransactionResponse>),
+        (status = 403, description = "Refused by the release freeze (mainnet or legacy scheme)", body = ErrorBody),
         (status = 404, description = "Wallet not found", body = ErrorBody)
     )
 )]
@@ -111,6 +113,9 @@ pub async fn create_transaction(
         .chain
         .parse()
         .map_err(|e: String| ApiError::bad_request(ErrorCode::InvalidInput, e))?;
+
+    check_network(&state.network)?;
+    check_chain(chain)?;
 
     // Today only EVM chains have a wired build → MPC sign → broadcast path here.
     let is_evm = matches!(
@@ -137,6 +142,7 @@ pub async fn create_transaction(
         .get(&wallet_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("wallet {wallet_id} not found")))?;
+    check_scheme(metadata.scheme)?;
 
     let provider = state
         .chain_registry
@@ -336,5 +342,50 @@ mod tests {
         assert!(url.contains("mempool.space"));
 
         assert!(explorer_url(Chain::Monero, &NetworkEnv::Mainnet, "x").is_none());
+    }
+
+    #[cfg(not(feature = "dev-unfreeze"))]
+    fn tx_request(chain: &str) -> TransactionRequest {
+        TransactionRequest {
+            chain: chain.into(),
+            to: "0x1234567890123456789012345678901234567890".into(),
+            value: "1".into(),
+            data: None,
+            extra: None,
+        }
+    }
+
+    /// Refused before the wallet lookup and before any RPC call.
+    #[cfg(not(feature = "dev-unfreeze"))]
+    #[tokio::test]
+    async fn freeze_refuses_mainnet_network_transaction() {
+        use crate::routes::wallets::freeze_tests::{assert_frozen, privileged_ctx, state_on};
+
+        let state = state_on("mainnet").await;
+        let result = create_transaction(
+            State(state),
+            Extension(privileged_ctx()),
+            Path("any-wallet".into()),
+            Json(tx_request("ethereum")),
+        )
+        .await;
+        assert_frozen(result, "network 'mainnet'");
+    }
+
+    /// A mainnet-only chain is refused even on a testnet gateway.
+    #[cfg(not(feature = "dev-unfreeze"))]
+    #[tokio::test]
+    async fn freeze_refuses_mainnet_chain_transaction() {
+        use crate::routes::wallets::freeze_tests::{assert_frozen, privileged_ctx, state_on};
+
+        let state = state_on("testnet").await;
+        let result = create_transaction(
+            State(state),
+            Extension(privileged_ctx()),
+            Path("any-wallet".into()),
+            Json(tx_request("bitcoin")),
+        )
+        .await;
+        assert_frozen(result, "mainnet chain 'bitcoin-mainnet'");
     }
 }
