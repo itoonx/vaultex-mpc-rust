@@ -9,18 +9,19 @@ WS = "path+file:///w/crates/mpc-wallet-core#0.1.0"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index#tokio@1.0.0"
 
 
-def artifact(package_id, target, features, executable=None):
+def artifact(package_id, target, features, executable=None, debug_assertions=False, kind="lib"):
     return json.dumps({
         "reason": "compiler-artifact",
         "package_id": package_id,
-        "target": {"name": target},
+        "target": {"name": target, "kind": [kind]},
+        "profile": {"debug_assertions": debug_assertions},
         "features": features,
         "executable": executable,
     })
 
 
 def check(*lines):
-    features, executables = shipped_build.parse(lines)
+    features, executables, _ = shipped_build.parse(lines)
     return shipped_build.forbidden(features), executables
 
 
@@ -60,6 +61,16 @@ class Check(unittest.TestCase):
         )
         self.assertEqual(flagged, [])
         self.assertEqual(executables, {"mpc-node": "/t/release/mpc-node"})
+
+    def test_debug_assertions_on_a_workspace_target_are_flagged(self):
+        # The release freeze keys on cfg(debug_assertions); build scripts and registry crates don't count.
+        _, _, debug = shipped_build.parse([
+            artifact(WS, "mpc-node", [], debug_assertions=True, kind="bin"),
+            artifact(WS, "build_script_build", [], debug_assertions=True, kind="custom-build"),
+            artifact(REGISTRY, "tokio", [], debug_assertions=True),
+            artifact(WS, "mpc_wallet_core", []),
+        ])
+        self.assertEqual(debug, {"mpc-node"})
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
 
       - name: No async runtime, network, MPC or transport crate in the kernel tree
         run: |

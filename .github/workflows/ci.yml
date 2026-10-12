@@ -52,7 +52,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -67,7 +67,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
@@ -98,7 +98,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
       - name: Test the checker
         run: python3 -B -m unittest discover -s scripts/ci -p test_shipped_build.py
       - name: Build as shipped and check linked features
@@ -163,7 +163,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           shared-key: "rust-workspace"
@@ -239,7 +239,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           shared-key: "rust-workspace"
@@ -271,7 +271,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.93.1 # = the locally verified toolchain; a moving "stable" broke clippy (1.99 lints)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (v2.9.2)
         with:
           prefix-key: "bench-"
