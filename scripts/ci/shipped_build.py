@@ -38,8 +38,8 @@ GUARD_MARKER = "shipped-build guard:"  # printed by the startup guard in both ma
 
 def parse(lines):
     """From `cargo build --message-format=json` output, return ({target: features} for workspace
-    crates, {executable file name: path})."""
-    features, executables = {}, {}
+    crates, {executable file name: path}, {workspace targets built with debug assertions})."""
+    features, executables, debug = {}, {}, set()
     for line in lines:
         if not line.startswith("{"):
             continue
@@ -51,7 +51,11 @@ def parse(lines):
         # Workspace members are path packages; registry and git crates' feature names are not ours.
         if "path+file://" in msg["package_id"]:
             features.setdefault(msg["target"]["name"], set()).update(msg["features"])
-    return features, executables
+            # The release freeze keys on cfg(debug_assertions): a release build with them on
+            # (e.g. CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true) is an unfrozen build.
+            if msg["profile"]["debug_assertions"] and "custom-build" not in msg["target"]["kind"]:
+                debug.add(msg["target"]["name"])
+    return features, executables, debug
 
 
 def forbidden(features):
@@ -95,7 +99,7 @@ def main():
     failures = []
 
     if not args.no_canary:
-        features, executables = build("--features", CANARY_FEATURE)
+        features, executables, _ = build("--features", CANARY_FEATURE)
         if CANARY_FLAG not in forbidden(features):
             failures.append(f"canary: the feature check did not flag {CANARY_FEATURE}")
         for name in BINARIES:
@@ -103,11 +107,12 @@ def main():
                 failures.append(f"canary: {name} built with test parameters did not refuse to start")
         print(f"canary: {'FAILED' if failures else 'ok (flagged, both binaries refused to start)'}")
 
-    features, executables = build()
+    features, executables, debug = build()
     for name in BINARIES:
         if name not in executables:
             failures.append(f"shipped build did not produce {name}")
     failures += [f"shipped build links forbidden feature {f}" for f in forbidden(features)]
+    failures += [f"shipped build has debug assertions on in {t}" for t in sorted(debug)]
 
     print("Workspace crates in the shipped build and their features:")
     for target in sorted(features):

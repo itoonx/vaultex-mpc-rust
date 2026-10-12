@@ -191,8 +191,14 @@ fn parse_provider(s: &str) -> Result<(String, String), String> {
             "provider name {name:?}: use letters, digits, '-' or '_'"
         ));
     }
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err(format!("provider URL {url:?}: must start with https://"));
+    // Plain http only for a provider on this machine (local node, tests).
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("provider URL {url:?}: {e}"))?;
+    let local_http = parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    if !(parsed.scheme() == "https" || local_http) {
+        return Err(format!(
+            "provider URL {url:?}: must start with https:// (http:// only for localhost)"
+        ));
     }
     Ok((name.to_owned(), url.to_owned()))
 }
@@ -622,6 +628,16 @@ mod tests {
             "b=http://127.0.0.1:8090",
         ]);
         assert_eq!(resolve_providers(&ok.unwrap()).unwrap().len(), 2);
+        // Remote providers must use https; plain http only for this machine.
+        for url in [
+            "http://b.example",
+            "http://127.0.0.1.evil.example",
+            "ftp://b.example",
+        ] {
+            let provider = format!("b={url}");
+            assert!(parse_provider(&provider).is_err(), "{url}");
+        }
+        assert!(parse_provider("b=http://localhost:8090").is_ok());
         for bad in [
             vec!["--provider", "a=https://a.example"],
             vec![

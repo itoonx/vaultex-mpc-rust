@@ -1,0 +1,2 @@
+- Chain gating now also covers wallet details (`GET /v1/wallets/{id}` lists only verified chains whose address the wallet's scheme can spend from) and the CLI sender address; the CLI refuses `--network mainnet`.
+- Monitor: provider responses are capped at 4 MiB and remote providers must use https. Shipped-build guard: fails if a shipped binary was built with debug assertions on (which would lift the release freeze). SECURITY_STATUS.md marks the partly fixed categories "In progress".

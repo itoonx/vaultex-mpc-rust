@@ -160,8 +160,9 @@ pub async fn run(args: SendArgs, format: OutputFormat) -> anyhow::Result<()> {
         _ => ChainRegistry::default_testnet(),
     };
     let provider = registry.provider(chain).map_err(|e| anyhow::anyhow!(e))?;
-    let sender = provider
-        .derive_address(&group_pubkey)
+    // Chain gating (T04-4): never print a sender address the scheme cannot spend from.
+    let sender = registry
+        .derive_address(chain, scheme, &group_pubkey)
         .map_err(|e| anyhow::anyhow!(e))?;
     eprintln!("✓ Sender: {}", sender);
 
@@ -494,7 +495,10 @@ async fn load_wallet(
 
 fn parse_network(s: &str) -> anyhow::Result<NetworkEnv> {
     match s.to_lowercase().as_str() {
-        "mainnet" => Ok(NetworkEnv::Mainnet),
+        // Pre-alpha: no mainnet on any chain (README support matrix, SECURITY_STATUS.md).
+        "mainnet" => Err(anyhow::anyhow!(
+            "release freeze: mainnet is refused; use testnet or devnet"
+        )),
         "testnet" => Ok(NetworkEnv::Testnet),
         "devnet" => Ok(NetworkEnv::Devnet),
         other => Err(anyhow::anyhow!("invalid network '{other}'")),
@@ -900,6 +904,16 @@ fn explorer_url(chain: Chain, network: &NetworkEnv, tx_hash: &str) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn freeze_refuses_mainnet_network() {
+        for s in ["mainnet", "Mainnet", "MAINNET"] {
+            let err = parse_network(s).unwrap_err().to_string();
+            assert!(err.contains("release freeze"), "{s}: {err}");
+        }
+        assert!(matches!(parse_network("testnet"), Ok(NetworkEnv::Testnet)));
+        assert!(matches!(parse_network("devnet"), Ok(NetworkEnv::Devnet)));
+    }
 
     #[test]
     fn test_merge_extras_user_wins() {
