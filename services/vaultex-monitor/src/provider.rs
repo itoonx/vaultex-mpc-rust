@@ -138,6 +138,9 @@ impl<P: Provider> Provider for Arc<P> {
     }
 }
 
+/// Largest provider response read (a mainnet block is ~0.5 MB).
+const MAX_BODY: usize = 4 << 20;
+
 /// A java-tron HTTP endpoint, used without an API key.
 pub struct HttpProvider {
     name: String,
@@ -153,8 +156,6 @@ impl HttpProvider {
     pub fn new(name: &str, base_url: &str, min_interval: Duration) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
-            // ponytail: the total timeout also bounds how much a provider can make us read
-            // (a mainnet block is ~0.5 MB); no separate body-size cap.
             .timeout(Duration::from_secs(20))
             .user_agent(concat!("vaultex-monitor/", env!("CARGO_PKG_VERSION")))
             .build()?;
@@ -177,7 +178,7 @@ impl HttpProvider {
             }
             *last = Some(Instant::now());
         }
-        let resp = self
+        let mut resp = self
             .client
             .post(format!("{}{path}", self.base_url))
             .json(&body)
@@ -201,11 +202,23 @@ impl HttpProvider {
         if !status.is_success() {
             return Err(ProviderError::Unavailable(format!("HTTP {status}")));
         }
-        let bytes = resp
-            .bytes()
+        // One hostile provider must not exhaust memory for every watcher in this process.
+        let too_large = || ProviderError::Unavailable(format!("response over {MAX_BODY} bytes"));
+        if resp.content_length().is_some_and(|n| n > MAX_BODY as u64) {
+            return Err(too_large());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map_err(|e| ProviderError::Unavailable(e.without_url().to_string()))?;
-        Ok(bytes.to_vec())
+            .map_err(|e| ProviderError::Unavailable(e.without_url().to_string()))?
+        {
+            if body.len() + chunk.len() > MAX_BODY {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
     }
 }
 
@@ -787,6 +800,19 @@ mod tests {
             "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n{body}",
             body.len()
         )
+    }
+
+    #[tokio::test]
+    async fn refuses_oversized_responses() {
+        let (url, _server) = mock_server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 99999999\r\nConnection: close\r\n\r\n{}".into(),
+        ])
+        .await;
+        let p = HttpProvider::new("mock", &url, Duration::ZERO).unwrap();
+        assert!(matches!(
+            p.solid_height().await,
+            Err(ProviderError::Unavailable(e)) if e.contains("response over")
+        ));
     }
 
     #[tokio::test]

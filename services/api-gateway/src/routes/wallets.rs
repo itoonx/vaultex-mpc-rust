@@ -272,17 +272,20 @@ pub async fn get_wallet(
         .await
         .ok_or_else(|| ApiError::not_found(format!("wallet {wallet_id} not found")))?;
 
-    let mut addresses = Vec::new();
-    for chain in address_chains(m.scheme) {
-        if let Ok(provider) = state.chain_registry.provider(chain) {
-            if let Ok(addr) = provider.derive_address(&m.group_public_key) {
-                addresses.push(AddressEntry {
-                    chain: chain.to_string(),
-                    address: addr,
-                });
-            }
-        }
-    }
+    // Chain gating (T04-4): same rule as GET /v1/chains/{chain}/address/{id}.
+    let addresses = address_chains(m.scheme)
+        .into_iter()
+        .filter_map(|chain| {
+            let address = state
+                .chain_registry
+                .derive_address(chain, m.scheme, &m.group_public_key)
+                .ok()?;
+            Some(AddressEntry {
+                chain: chain.to_string(),
+                address,
+            })
+        })
+        .collect();
 
     Ok(Json(ApiResponse::ok(WalletDetailResponse {
         id: m.group_id,
@@ -295,17 +298,14 @@ pub async fn get_wallet(
     })))
 }
 
-/// Chains to derive display addresses for, given the wallet's signing scheme.
-/// Never a mainnet-only chain (see `check_chain`).
+/// Chains to derive display addresses for: the verified chains (CHAIN_METADATA)
+/// whose default address this scheme can spend from. Never a mainnet-only chain.
 fn address_chains(scheme: CryptoScheme) -> Vec<Chain> {
-    match scheme {
-        CryptoScheme::Gg20Ecdsa | CryptoScheme::Cggmp21Secp256k1 => {
-            vec![Chain::Ethereum, Chain::Polygon, Chain::Bsc, Chain::Arbitrum]
-        }
-        CryptoScheme::FrostEd25519 => vec![Chain::Solana, Chain::Sui, Chain::Aptos],
-        CryptoScheme::FrostSecp256k1Tr => vec![Chain::BitcoinTestnet],
-        _ => vec![],
-    }
+    mpc_wallet_chains::metadata::CHAIN_METADATA
+        .iter()
+        .filter(|m| m.compatible_schemes.contains(&scheme))
+        .map(|m| m.chain)
+        .collect()
 }
 
 /// `POST /v1/wallets/:id/sign` — distributed MPC sign.
@@ -479,6 +479,7 @@ pub async fn unfreeze_wallet(
 #[cfg(test)]
 pub(crate) mod freeze_tests {
     use super::*;
+    use mpc_wallet_core::protocol::GroupPublicKey;
 
     pub(crate) async fn state_on(network: &str) -> AppState {
         let mut config = crate::config::AppConfig::for_test();
@@ -609,10 +610,37 @@ pub(crate) mod freeze_tests {
                 "{scheme} must not derive a mainnet-only address: {chains:?}"
             );
         }
-        assert_eq!(
-            address_chains(CryptoScheme::FrostSecp256k1Tr),
-            vec![Chain::BitcoinTestnet]
+        // No verified chain accepts FROST-TR signatures at its default address,
+        // so a FROST-TR wallet is shown no address (never a P2WPKH it cannot spend).
+        assert!(address_chains(CryptoScheme::FrostSecp256k1Tr).is_empty());
+    }
+
+    /// get_wallet lists only chains that chain gating serves for the scheme.
+    #[tokio::test]
+    async fn wallet_addresses_pass_chain_gating() {
+        let state = state_on("testnet").await;
+        let secp = GroupPublicKey::Secp256k1(
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap(),
         );
+        let ed25519 = GroupPublicKey::Ed25519(vec![0x42; 32]);
+        for (scheme, key) in [
+            (CryptoScheme::Gg20Ecdsa, &secp),
+            (CryptoScheme::Cggmp21Secp256k1, &secp),
+            (CryptoScheme::FrostEd25519, &ed25519),
+        ] {
+            let chains = address_chains(scheme);
+            assert!(!chains.is_empty(), "{scheme}");
+            for chain in chains {
+                assert!(
+                    state
+                        .chain_registry
+                        .derive_address(chain, scheme, key)
+                        .is_ok(),
+                    "{chain} / {scheme} listed but refused by chain gating"
+                );
+            }
+        }
     }
 
     #[test]
