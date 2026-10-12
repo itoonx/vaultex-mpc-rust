@@ -15,9 +15,8 @@
 #   UNREACHED     compiled, but the affected code path is never called.
 #   IN USE        compiled and called. Used only for "unmaintained" notices with no known vulnerability.
 #
-# Open and NOT suppressed: RUSTSEC-2026-0220 (ruint < 1.20, compiled via alloy-primitives). The fix is
-# a lockfile-only bump (`cargo update -p ruint --precise 1.20.1`). It waits for approval because it
-# also locks new optional entries that are never compiled.
+# RUSTSEC-2026-0220 (ruint < 1.20, compiled via alloy-primitives) is fixed by the lockfile-only bump to
+# ruint 1.20.1 (owner-approved 2026-10-13). The ark-* 0.6 entries it locks are never compiled.
 
 [advisories]
 ignore = [
