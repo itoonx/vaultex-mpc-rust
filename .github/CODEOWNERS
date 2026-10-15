@@ -1,11 +1,9 @@
 # CODEOWNERS: human review on Vaultex trust paths (ROADMAP §9.2, M5 exit criterion 6).
 #
-# @OWNER is a placeholder for the maintainer's GitHub handle(s), set once the owner answers
-# Q-RUN-4 (docs/TASKS.md §3). Until then no code owner is assigned: GitHub ignores an owner
-# that does not exist or has no write access to the repository.
+# Owner handle from Q-RUN-4 (docs/TASKS.md §3, answered 2026-10-16).
 #
 # This file only names reviewers. Review is enforced once branch protection on `main` and
-# `dev` turns on "Require review from Code Owners"; replace the placeholder first.
+# `dev` turns on "Require review from Code Owners".
 #
 # How GitHub reads it: from the pull request's base branch, so a PR cannot re-route its own
 # review. Patterns follow .gitignore syntax (so no `{a,b}` braces), minus `!` negation and
@@ -19,37 +17,37 @@
 
 # Crypto: MPC protocols, Paillier and its proofs, key storage, enclave attestation,
 # recovery (planned crate).
-/crates/mpc-wallet-core/src/protocol/   @OWNER
-/crates/mpc-wallet-core/src/paillier/   @OWNER
-/crates/mpc-wallet-core/src/key_store/  @OWNER
-/crates/mpc-wallet-core/src/enclave/    @OWNER
-/crates/vaultex-recovery/               @OWNER
+/crates/mpc-wallet-core/src/protocol/   @itoonx
+/crates/mpc-wallet-core/src/paillier/   @itoonx
+/crates/mpc-wallet-core/src/key_store/  @itoonx
+/crates/mpc-wallet-core/src/enclave/    @itoonx
+/crates/vaultex-recovery/               @itoonx
 
 # Transport and control plane.
-/crates/mpc-wallet-core/src/transport/  @OWNER
-/crates/mpc-wallet-core/src/rpc/        @OWNER
+/crates/mpc-wallet-core/src/transport/  @itoonx
+/crates/mpc-wallet-core/src/rpc/        @itoonx
 
 # Services: MPC node, gateway, Guard, outflow monitor.
-/services/                              @OWNER
+/services/                              @itoonx
 
 # Kernel: the verifier, the contract types it decides on, and the admin and approver CLIs.
-/crates/vaultex-verify/                 @OWNER
-/crates/vaultex-types/                  @OWNER
-/crates/vaultex-cli-admin/              @OWNER
+/crates/vaultex-verify/                 @itoonx
+/crates/vaultex-types/                  @itoonx
+/crates/vaultex-cli-admin/              @itoonx
 
 # CI and gates: workflows, Dependabot, this file, CI scripts, the adversarial harness.
-/.github/                               @OWNER
-/scripts/ci/                            @OWNER
-/crates/vaultex-redteam/                @OWNER
+/.github/                               @itoonx
+/scripts/ci/                            @itoonx
+/crates/vaultex-redteam/                @itoonx
 
 # Supply chain: every dependency manifest and lockfile, container build recipes, the
 # toolchain pin, advisory and vetting policy. Kept last so that a manifest anywhere in
 # the tree (including inside a block above) goes to these owners.
-Cargo.toml                              @OWNER
-Cargo.lock                              @OWNER
-package*.json                           @OWNER
-Dockerfile*                             @OWNER
-/rust-toolchain.toml                    @OWNER
-/deny.toml                              @OWNER
-/.cargo/                                @OWNER
-/supply-chain/                          @OWNER
+Cargo.toml                              @itoonx
+Cargo.lock                              @itoonx
+package*.json                           @itoonx
+Dockerfile*                             @itoonx
+/rust-toolchain.toml                    @itoonx
+/deny.toml                              @itoonx
+/.cargo/                                @itoonx
+/supply-chain/                          @itoonx
