@@ -1,6 +1,6 @@
 # ADR-14: Callback-adapter vendor
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: After D1
 - Unblocks: T16-1
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ยอมรับตามคำแนะนำทั้งหมด (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Only the vendor D1 names (answered ahead of its due date).
 
 ## Consequences
 
-_Recorded with the decision._
+T16-1 starts after D1 names a vendor.

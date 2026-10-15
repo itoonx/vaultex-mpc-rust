@@ -1,6 +1,6 @@
 # ADR-05: Real-funds rule
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Day 7
 - Unblocks: T06-8, M7 Rung 2
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) RF-1..RF-4 + float ของโปรเจกต์ (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Adopt RF-1..RF-4.
 
 ## Consequences
 
-_Recorded with the decision._
+Unblocks T06-8 and M7 Rung 2 planning, together with ADR-06.

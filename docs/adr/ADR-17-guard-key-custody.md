@@ -1,6 +1,6 @@
 # ADR-17: Guard key custody for Rung 2
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Before M7
 - Unblocks: T06-5, T07-6
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ตามคำแนะนำ (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: As recommended by T06-1: on testnet an encrypted key file sealed to the host TPM; on mainnet Rung 2 a non-exportable AWS KMS secp256k1 key in an AWS account dedicated to the Guard; YubiHSM 2 documented for self-hosters.
 
 ## Consequences
 
-_Recorded with the decision._
+Unblocks T06-5 and T07-6.

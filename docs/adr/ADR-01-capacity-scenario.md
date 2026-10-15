@@ -1,6 +1,6 @@
 # ADR-01: Capacity scenario
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Day 14
 - Unblocks: T00-17, G-MPC path, T12-2
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ข) + applied cryptographer แบบสัญญาจ้าง (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: (b): solo + agents plus a contract applied cryptographer.
 
 ## Consequences
 
-_Recorded with the decision._
+Start the search and collect quotes now; choose the engagement shape (evaluation-only, retainer, 0.3 or 0.5 FTE) from the quotes. Unblocks T00-17 and the G-MPC path.

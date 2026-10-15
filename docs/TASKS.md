@@ -83,34 +83,44 @@ These are the defaults chosen so that **nothing irreversible or outward-facing h
 
 Answer in any form, for example "ADR-03: delete". Each row lists the tasks it unblocks. Recommendations come from ROADMAP §11, or are new and marked ★.
 
-| ID | Question | Options | Recommendation | Unblocks | By |
-|---|---|---|---|---|---|
-| **ADR-01** | Capacity scenario | (a) solo + agents · (b) + contract applied cryptographer · (c) team of 3 | (b) at minimum | T00-17, G-MPC path, T12-2 | Day 14 |
-| **ADR-02** | Licence | MIT OR Apache-2.0 · Apache-2.0 · AGPL/BSL | MIT OR Apache-2.0 + NOTICE, after author consent (T00-5) | T01-5, T01-11b | Day 3 |
-| **ADR-03** | Legacy hand-rolled crypto | Delete · Quarantine | Delete in M5 (after pre-cut tag, balance check, crypto-shred) | T04-6, T04-7, T04-8, T14-3 | Day 7 |
-| **ADR-04** | v1 support matrix | TRON-only · TRON + EVM · multi-chain · FROST/Solana first | TRON (TRX + TRC-20) on pinned `cggmp24`; others quarantined | T04-7, scope of WS-05 beyond TRON | Day 7 |
-| **ADR-05** | Real-funds rule | RF-1..RF-4 · audit before any funds · other | Adopt RF-1..RF-4 | T06-8, M7 Rung 2 | Day 7 |
-| **ADR-06** | First-funds host for Rung 2 | Project-owned float · other float with counsel clearance · none until audit | Project-owned float | T06-8, M7 Rung 2 | Day 7 |
-| **ADR-07** | MPC engine swap | Always · conditional on G-MPC · never (kernel-only) | Conditional on G-MPC | T03-4, T08-2, T09-2, T10-2 | wk 16 |
-| **ADR-08** | Audit sourcing and timing | Book now with deposit · RFQ now, pay on commitment · none | RFQ now; pay on a committed user; split firms | T00-13, T14-5 | wk 2 |
-| **ADR-09** | Gateway authentication | Keep custom handshake · quarantine · replace | Replace with rustls mTLS + node-verified signatures | T11-2 | G-MPC |
-| **ADR-10** | Gateway persistence | Postgres · SQLite cache · nodes as source of truth | Nodes as source of truth | T10-2, T11-2 | G-MPC |
-| **ADR-11** | Policy distribution | Unsigned static file · quorum-signed bundle file · remote governance service | Quorum-signed bundle installed per signer as a file | T05-3, T05-4, T05-7b, T05-8, T06-5 | ≈ wk 5 (M6 start) |
-| **ADR-12** | Name and crate prefix | Keep "Vaultex" · rename | Decide after the desk search (T17-2); crate names stay working names until then | crate rename/publish, entity | Day 30 |
-| **ADR-13** | Disclosure posture | Category GHSA now · full advisory now · silence | Category-level GHSA now | T00-9, T00-10 | Day 7 |
-| **ADR-14** | Callback-adapter vendor | Fireblocks · Cobo · none | Only the vendor D1 names | T16-1 | After D1 |
-| **ADR-15** | Decoder diversity | One kernel decoder · a second independent decoder at ≥ 1 node | Cost it during WS-05 design | second decoder | Before M10-F freeze |
-| **ADR-16** | Status and IDs | Hand-edited docs · CI-generated status + GitHub issue IDs | CI-generated status; issue numbers as IDs | T02-8, final ADR file names | M5 |
-| **ADR-17** ★ | Guard key custody for Rung 2 | Cloud-KMS secp256k1 · HSM · encrypted passphrase file | Decide after T06-1 costs the options | T06-5, T07-6 | Before M7 |
-| **D-AGENTS** ★ | Remove vendored `.agents/**` (74 files) + `skills-lock.json` from the repo? They may be part of your local agent setup | Remove · keep (and document licences) | Remove from the repo; keep a local copy outside git if you use them | T01-6 | With ADR-02 |
-| **D-RETRO** ★ | Which accounts may Rung-0 retro-shadow analyse? | Project-owned only · plus your own business accounts (results private) · none yet | Your call; raw data stays private either way | T06-4 | Before M6 |
-| **Q-RUN-1** ★ | Where may the long run land work? | Local `integration/phase1` only (default) · also merge to `dev` after gates · also push | Default: local integration branch, no push | all merges | Any time |
-| **Q-RUN-2** ★ | May the run install dev tools? (`cargo-deny`, `cargo-vet`, `cargo-mutants`, `cargo-fuzz` + nightly toolchain) | Yes · CI-only checks (default) | Yes (needed for M6 evidence) | T05-10, local runs of T02-4/T02-11 checks | Any time |
-| **Q-RUN-3** ★ | Compute budget for fuzzing on this machine (M6 asks ≥ 24 CPU-h per decoder) | Smoke only (default, ≤ 15 min) · full campaign locally · cloud box | Full campaign, overnight | T05-10 | Before M6 exit |
-| **Q-RUN-4** ★ | CODEOWNERS handle(s): which GitHub account(s) are yours? | — | — | final value in T02-10 (draft uses `@OWNER`) | Day 1 |
-| **Q-RUN-5** ★ | New crates not yet in `Cargo.lock`: approve per request | Approve list · deny | Reviewed per request in the run log | any task the run log lists as dep-blocked | Rolling |
+| ID | Question | Options | Recommendation | Unblocks | By | Owner answer (2026-10-16) |
+|---|---|---|---|---|---|---|
+| **ADR-01** | Capacity scenario | (a) solo + agents · (b) + contract applied cryptographer · (c) team of 3 | (b) at minimum | T00-17, G-MPC path, T12-2 | Day 14 | (b) + contract applied cryptographer |
+| **ADR-02** | Licence | MIT OR Apache-2.0 · Apache-2.0 · AGPL/BSL | MIT OR Apache-2.0 + NOTICE, after author consent (T00-5) | T01-5, T01-11b | Day 3 | MIT OR Apache-2.0 + NOTICE (after T00-5) |
+| **ADR-03** | Legacy hand-rolled crypto | Delete · Quarantine | Delete in M5 (after pre-cut tag, balance check, crypto-shred) | T04-6, T04-7, T04-8, T14-3 | Day 7 | Delete in M5 |
+| **ADR-04** | v1 support matrix | TRON-only · TRON + EVM · multi-chain · FROST/Solana first | TRON (TRX + TRC-20) on pinned `cggmp24`; others quarantined | T04-7, scope of WS-05 beyond TRON | Day 7 | Provisional: TRON on `cggmp24`; re-confirm after the TKeeper teardown |
+| **ADR-05** | Real-funds rule | RF-1..RF-4 · audit before any funds · other | Adopt RF-1..RF-4 | T06-8, M7 Rung 2 | Day 7 | Adopt RF-1..RF-4 |
+| **ADR-06** | First-funds host for Rung 2 | Project-owned float · other float with counsel clearance · none until audit | Project-owned float | T06-8, M7 Rung 2 | Day 7 | Project-owned float |
+| **ADR-07** | MPC engine swap | Always · conditional on G-MPC · never (kernel-only) | Conditional on G-MPC | T03-4, T08-2, T09-2, T10-2 | wk 16 | Conditional on G-MPC |
+| **ADR-08** | Audit sourcing and timing | Book now with deposit · RFQ now, pay on commitment · none | RFQ now; pay on a committed user; split firms | T00-13, T14-5 | wk 2 | RFQ now, no deposit |
+| **ADR-09** | Gateway authentication | Keep custom handshake · quarantine · replace | Replace with rustls mTLS + node-verified signatures | T11-2 | G-MPC | Replace (rustls mTLS + node-verified signatures) |
+| **ADR-10** | Gateway persistence | Postgres · SQLite cache · nodes as source of truth | Nodes as source of truth | T10-2, T11-2 | G-MPC | Nodes as source of truth |
+| **ADR-11** | Policy distribution | Unsigned static file · quorum-signed bundle file · remote governance service | Quorum-signed bundle installed per signer as a file | T05-3, T05-4, T05-7b, T05-8, T06-5 | ≈ wk 5 (M6 start) | Quorum-signed bundle file per signer |
+| **ADR-12** | Name and crate prefix | Keep "Vaultex" · rename | Decide after the desk search (T17-2); crate names stay working names until then | crate rename/publish, entity | Day 30 | Rename now (name to be chosen) |
+| **ADR-13** | Disclosure posture | Category GHSA now · full advisory now · silence | Category-level GHSA now | T00-9, T00-10 | Day 7 | Category-level GHSA now |
+| **ADR-14** | Callback-adapter vendor | Fireblocks · Cobo · none | Only the vendor D1 names | T16-1 | After D1 | Only the vendor D1 names |
+| **ADR-15** | Decoder diversity | One kernel decoder · a second independent decoder at ≥ 1 node | Cost it during WS-05 design | second decoder | Before M10-F freeze | D0 at M6; D1 decided before M10-F |
+| **ADR-16** | Status and IDs | Hand-edited docs · CI-generated status + GitHub issue IDs | CI-generated status; issue numbers as IDs | T02-8, final ADR file names | M5 | CI-generated status + issue IDs |
+| **ADR-17** ★ | Guard key custody for Rung 2 | Cloud-KMS secp256k1 · HSM · encrypted passphrase file | Decide after T06-1 costs the options | T06-5, T07-6 | Before M7 | TPM-sealed key file (testnet); non-exportable AWS KMS key (mainnet Rung 2) |
+| **D-AGENTS** ★ | Remove vendored `.agents/**` (74 files) + `skills-lock.json` from the repo? They may be part of your local agent setup | Remove · keep (and document licences) | Remove from the repo; keep a local copy outside git if you use them | T01-6 | With ADR-02 | Remove from the repo (local copy kept) |
+| **D-RETRO** ★ | Which accounts may Rung-0 retro-shadow analyse? | Project-owned only · plus your own business accounts (results private) · none yet | Your call; raw data stays private either way | T06-4 | Before M6 | Project-owned accounts only |
+| **Q-RUN-1** ★ | Where may the long run land work? | Local `integration/phase1` only (default) · also merge to `dev` after gates · also push | Default: local integration branch, no push | all merges | Any time | Merge to `dev` and push after the gates; `main` only by PR with owner approval |
+| **Q-RUN-2** ★ | May the run install dev tools? (`cargo-deny`, `cargo-vet`, `cargo-mutants`, `cargo-fuzz` + nightly toolchain) | Yes · CI-only checks (default) | Yes (needed for M6 evidence) | T05-10, local runs of T02-4/T02-11 checks | Any time | Yes |
+| **Q-RUN-3** ★ | Compute budget for fuzzing on this machine (M6 asks ≥ 24 CPU-h per decoder) | Smoke only (default, ≤ 15 min) · full campaign locally · cloud box | Full campaign, overnight | T05-10 | Before M6 exit | Cloud box, about 40 CPU-h |
+| **Q-RUN-4** ★ | CODEOWNERS handle(s): which GitHub account(s) are yours? | — | — | final value in T02-10 (draft uses `@OWNER`) | Day 1 | @itoonx |
+| **Q-RUN-5** ★ | New crates not yet in `Cargo.lock`: approve per request | Approve list · deny | Reviewed per request in the run log | any task the run log lists as dep-blocked | Rolling | Approved: async-nats 0.47 (+ tokio-stream), libfuzzer-sys + arbitrary (fuzz workspace only), prometheus without default features; advisory and licence exceptions signed off |
 
-Private decisions (business and owner-only, D-1..D-11) are in `~/vaultex-private/TASKS_PRIVATE.md`.
+Answered in the Claude Code session of 2026-10-16. Accepted ADRs quote the answers in `docs/adr/`; ADR-04 stays OPEN until the TKeeper teardown is done.
+
+Other decisions from the same session:
+- Competitor watch DN-1 (TKeeper vs kill criterion K9): an agent does a teardown of at most 1 day (code reading, no build) before ADR-04 is confirmed.
+- Kernel defaults: refuse native TRX amounts above 2^53−1 sun; the Guard co-signs only while the monitor heartbeat is fresh (TH45); velocity bound rounded up, with the tighter WS-05 bound once R1 has proved it; signed encoding BCS + tagged SHA-256, never JSON.
+- Legacy docs: remove `docs/SECURITY_FINDINGS.md`, `docs/CVE_SECURITY_REPORT.md` and `docs/CVE_2025_66016_VERIFICATION.md` from the tree (git history keeps them); `retro/**` stays in place with banners.
+- T13-1: rerun with a narrowed scope (oracle, CI and process design only).
+- Monitor providers: keyless public providers on testnet; choose providers and create keys before Rung 2.
+- T00-8 canary PR: the orchestrator may push a throwaway branch and open, then close, the canary PR.
+
+Private decisions (business and owner-only, D-1..D-11) are in the private task list.
 
 ---
 
@@ -165,29 +175,29 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T00-6 | Decision day: answer the Decision Inbox | — | M5 | O | OWNER | S |
 | T00-7 | Capacity log + day-14 gate (ADR-01) | — | M5 | O | OWNER | S |
 | T00-8 | Push the integration work; verify the CI canary turns red, then main green | 02 | M5 | O | OWNER · push done 2026-10-13; canary PR pending | S |
-| T00-9 | Publish the category-level GHSA | 01 | M5 | O | OWNER · BLOCKED:ADR-13 · WAIT:T01-4,T04-3 | S |
+| T00-9 | Publish the category-level GHSA | 01 | M5 | O | OWNER (ready) | S |
 | T00-10 | Notify the fork owners privately (list in private notes) | 01 | M5 | O | OWNER · WAIT:T00-9 | S |
 | T00-11 | Crypto-shred legacy testnet shares; optional sweep to plain testnet wallets | 04 | M5 | O | OWNER · WAIT:T04-1 (runbook) | S |
 | T00-12 | Fund the Nile spike accounts from a faucet | 06 | M6 | O | OWNER (T06-2 done) | S |
-| T00-13 | Send RFQs (no deposit) | 14 | M10 | O | OWNER · BLOCKED:ADR-08 · WAIT:T14-1 | S |
-| T00-14 | Upstream asks: Lockness delta review / co-funding; ZF FROST audit status; OSTIF intake | 14 | M10 | O | OWNER · WAIT:T14-1 | S |
-| T00-15 | Counsel quotes for the three roadmap §3.7 questions | 17 | — | O | OWNER · WAIT:T17-1 | S |
-| T00-16 | D1 interviews (≥ 12 + ≥ 3 integrators), then D2 LOI | 15 | D1/D2 | O | OWNER · WAIT:T15-1 | L |
-| T00-17 | Engage the contract applied cryptographer; find a second operator | 17 | G-MPC | O | OWNER · BLOCKED:ADR-01 · WAIT:T17-1 | L |
+| T00-13 | Send RFQs (no deposit) | 14 | M10 | O | OWNER (ready) | S |
+| T00-14 | Upstream asks: Lockness delta review / co-funding; ZF FROST audit status; OSTIF intake | 14 | M10 | O | OWNER (ready) | S |
+| T00-15 | Counsel quotes for the three roadmap §3.7 questions | 17 | — | O | OWNER (ready) | S |
+| T00-16 | D1 interviews (≥ 12 + ≥ 3 integrators), then D2 LOI | 15 | D1/D2 | O | OWNER (ready) | L |
+| T00-17 | Engage the contract applied cryptographer; find a second operator | 17 | G-MPC | O | OWNER (ready) | L |
 | T00-18 | Agent-process hygiene (private notes §3.2); encrypt the private research archive | — | M5 | O | OWNER | S |
-| T00-19 | Name decision (ADR-12) | 17 | — | O | OWNER · WAIT:T17-2 | S |
+| T00-19 | Name decision (ADR-12) | 17 | — | O | OWNER (ready) | S |
 | T01-1 | Deep-dive: truth infrastructure, claims inventory, docs to archive vs rewrite | 01 | M5 | R | DONE 2026-10-11 | M |
 | T01-2 | README truth banner (canonical M5 #1 text) + support matrix + overclaim removal, EN + zh-CN | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-3 | One security policy (`SECURITY.md`): supported versions, 90-day disclosure; `SECURITY_STATUS.md` (category + fix) | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-4 | Draft the category-level GHSA text with re-key guidance (private draft) | 01 | M5 | A→O | DONE 2026-10-11 | S |
-| T01-5 | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`; manifests `MIT OR Apache-2.0` | 01 | M5 | A | BLOCKED:ADR-02 · WAIT:T00-5 | S |
-| T01-6 | Remove `.agents/**` and `skills-lock.json` | 01 | M5 | A | BLOCKED:D-AGENTS | S |
+| T01-5 | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`; manifests `MIT OR Apache-2.0` | 01 | M5 | A | WAIT:T00-5 | S |
+| T01-6 | Remove `.agents/**` and `skills-lock.json` | 01 | M5 | A | READY | S |
 | T01-7 | Claims ledger: `claims/schema.toml`, per-WS fragments, rendered `CLAIMS.md` | 01 | M5 | A | DONE 2026-10-11 | M |
 | T01-8 | Archive stale planning docs with a "superseded" banner; publish the M1–M4 re-baseline | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-9 | Slim `CLAUDE.md` to stable agent rules (history → archive) | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-10 | Role charters (ROADMAP §9.1): `docs/AGENTS.md` + `.claude/agents/*`; track the R8–R10 files | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-11a | `CODE_OF_CONDUCT.md` | 01 | M5 | A | DONE 2026-10-11 | S |
-| T01-11b | `CONTRIBUTING.md` (DCO vs CLA) | 01 | M5 | A | BLOCKED:ADR-02 | S |
+| T01-11b | `CONTRIBUTING.md` (DCO vs CLA) | 01 | M5 | A | READY | S |
 | T01-12 | `GOVERNANCE.md` + docs site | 01 | M13 | A | GATED:M13 | M |
 | T02-1 | Deep-dive: CI and release integrity plan | 02 | M5 | R | DONE 2026-10-11 | M |
 | T02-2 | CI integrity: bash + pipefail, exit-code gating, SHA-pinned actions, least-privilege `permissions:`, concurrency; canary procedure | 02 | M5 | A | DONE 2026-10-11 | S |
@@ -196,7 +206,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T02-5 | Shipped-build guard: build node + gateway as shipped; fail if test parameters or experimental features are linked | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-6 | Production-SLOC job + report (`sloc.yml`) | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-7 | Claims-lint CI job | 02 | M5 | A | DONE 2026-10-11 | S |
-| T02-8 | Status generator → `docs/status/` | 02 | M5 | A | BLOCKED:ADR-16 | S |
+| T02-8 | Status generator → `docs/status/` | 02 | M5 | A | READY | S |
 | T02-9 | `rust-toolchain.toml` (installed 1.93.1) + MSRV note + `dependabot.yml` | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-10 | `CODEOWNERS` for trust paths (handle placeholder `@OWNER`) | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-11 | `cargo-deny` / `cargo-vet` config for crypto crates (`supply-chain/**`) | 02 | M5 | A | DONE 2026-10-11 | S |
@@ -205,18 +215,18 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T03-1 | Deep-dive: contracts v0/v2, encodings (BCS vs JCS), file-split plan | 03 | M5 | R | DONE 2026-10-11 | M |
 | T03-2 | ADR + RFC process: `docs/adr/` and `docs/rfcs/` templates; ADR-01..17 stubs with status OPEN | 03 | M5 | A | DONE 2026-10-11 | S |
 | T03-3 | Phase-1 scaffolding + `vaultex-types` v0; CI assertion that `vaultex-verify` has no tokio/network deps | 03 | M5 | A | DONE 2026-10-11 | M |
-| T03-4 | Contracts v2, hotspot splits, Phase-2 scaffolding | 03 | M8 | A | GATED:G-MPC · BLOCKED:ADR-07 | M |
+| T03-4 | Contracts v2, hotspot splits, Phase-2 scaffolding | 03 | M8 | A | GATED:G-MPC | M |
 | T04-1 | Deep-dive: executable cut plan, SLOC inventory, crypto-shred template, balance-check procedure | 04 | M5 | R | DONE 2026-10-11 | M |
 | T04-2 | Mainnet-balance check of every legacy derived address (read-only public RPC; results PRIVATE) | 04 | M5 | A | DONE 2026-10-11 (6 of 14 groups) · OWNER: offline check of the other 8 | S |
 | T04-3 | Runtime freeze switch: release builds refuse keygen, raw `/sign`, legacy schemes, mainnet; a named test per refusal | 04 | M5 | A | DONE 2026-10-11 | M |
 | T04-4 | Chain gating: never serve placeholder or unspendable addresses (CLI + REST) | 04 | M5 | A | DONE 2026-10-11 | S |
 | T04-5 | Boot-node wrapper never mounts a multi-party keystore | 04 | M5 | A | DONE 2026-10-11 | S |
-| T04-6 | Local `pre-cut-2026-10` tag | 04 | M5 | A | BLOCKED:ADR-03 · WAIT:T04-2,T00-11 | S |
-| T04-7 | Deletion and quarantine PR series (ROADMAP §3.5) | 04 | M5 | A | BLOCKED:ADR-03,ADR-04 · WAIT:T04-1,T04-3,T04-6 | L |
-| T04-8 | SLOC report + ≤ 10k gate on the default release build | 04 | M5 | A | WAIT:T04-7,T02-6 | S |
+| T04-6 | Local `pre-cut-2026-10` tag | 04 | M5 | A | WAIT:T00-11 · OWNER: offline balance check of the other 8 key groups | S |
+| T04-7 | Deletion and quarantine PR series (ROADMAP §3.5) | 04 | M5 | A | BLOCKED:ADR-04 · WAIT:T04-6 | L |
+| T04-8 | SLOC report + ≤ 10k gate on the default release build | 04 | M5 | A | WAIT:T04-7 | S |
 | T05-1 | Deep-dive: kernel design (decoder grammar, bundle, approvals, velocity, receipts, test plan, decoder-diversity option) | 05 | M6 | R | DONE 2026-10-11 | M |
 | T05-2 | Port the TRON strict decoder (private G4 prototype) into `vaultex-verify` + negative tests + fuzz target skeleton | 05 | M6 | A | DONE 2026-10-11 | M |
-| T05-3 | Policy bundle v1 + vectors | 05 | M6 | A | BLOCKED:ADR-11 · WAIT:T03-3,T05-1 | M |
+| T05-3 | Policy bundle v1 + vectors | 05 | M6 | A | READY | M |
 | T05-4 | Approvals v1 + vectors | 05 | M6 | A | WAIT:T05-3 | M |
 | T05-5 | Velocity store + breaker (fsync'd reservation, calibration helper, auto-pause, `kill -9` tests) | 05 | M6 | A | DONE 2026-10-11 | M |
 | T05-6 | Receipts v1 (signed, hash-chained, accept + refuse) + offline verifier | 05 | M6 | A | DONE 2026-10-11 | S |
@@ -224,33 +234,33 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T05-7b | RFC draft `POLICY_BUNDLE_V1` | 05 | M6 | A | WAIT:T05-3 | S |
 | T05-8 | Admin CLIs `vaultex-approve` (local decode + render) and `vaultex-policy` | 05 | M6 | A | WAIT:T05-4 | M |
 | T05-9 | Evidence part 1: incident-replay suite + tronweb differential (≥ 10k mutated inputs) | 05 | M6 | A | DONE 2026-10-11 | M |
-| T05-10 | Evidence part 2: mutation check + fuzzing ≥ 24 CPU-h per decoder | 05 | M6 | A | WAIT:T05-2 · BLOCKED:Q-RUN-2,Q-RUN-3 | M |
+| T05-10 | Evidence part 2: mutation check + fuzzing ≥ 24 CPU-h per decoder | 05 | M6 | A | READY | M |
 | T05-11 | Single source for the TRON encoder and decoder | 05 | M6+ | A | GATED:M6 | S |
 | T06-1 | Deep-dive: Guard design, key-custody options with costs, K-alt fallback | 06 | M7 | R | DONE 2026-10-11 | M |
 | T06-2 | Nile spike, part 1: testnet keys + spike script (2-of-3 owner, 2-of-2 active, ops {1,31}) | 06 | M6 | A | DONE 2026-10-11 | S |
-| T06-3 | Nile spike, part 2: run, record `Permission_id` behaviour and fees; go / no-go | 06 | M6 | A | WAIT:T06-2,T00-12 | S |
-| T06-4 | Retro-shadow tool (Rung 0) + report (raw data private) | 06 | M6 | A | WAIT:T05-2 · BLOCKED:D-RETRO | M |
-| T06-5 | Guard service v0 | 06 | M7 | A | WAIT:T05-3..T05-6 · BLOCKED:ADR-11,ADR-17 | L |
+| T06-3 | Nile spike, part 2: run, record `Permission_id` behaviour and fees; go / no-go | 06 | M6 | A | WAIT:T00-12 | S |
+| T06-4 | Retro-shadow tool (Rung 0) + report (raw data private) | 06 | M6 | A | READY | M |
+| T06-5 | Guard service v0 | 06 | M7 | A | WAIT:T05-3..T05-6 | L |
 | T06-6 | Operator-side TS submitter | 06 | M7 | A | WAIT:T06-5 | S |
 | T06-7 | Testnet: ≥ 50 co-signed TRC-20 transfers, key rotation, Guard-down overflow | 06 | M7 | A | WAIT:T06-5,T06-6,T06-3 | M |
-| T06-8 | Live shadow (Rung 1) ≥ 14 days | 06 | M7 | A→O | GATED:M7 · BLOCKED:ADR-05,ADR-06 | M |
+| T06-8 | Live shadow (Rung 1) ≥ 14 days | 06 | M7 | A→O | GATED:M7 | M |
 | T06-9 | K-alt veto-hook interface (only if Nile = no-go) | 06 | M7 | A | WAIT:T06-3 | S |
 | T07-1 | Deep-dive: outflow monitor + Guard ops | 07 | M7 | R | DONE 2026-10-11 | M |
 | T07-2 | Chain watcher on ≥ 2 public TRON RPC providers | 07 | M7 | A | DONE 2026-10-11 | M |
 | T07-3 | Receipt matching, caps, new-destination checks, `Approval`/allowance alerts | 07 | M7 | A | DONE 2026-10-11 | M |
-| T07-4 | Soft-freeze path + ≤ 60 s auto-freeze drill (testnet) | 07 | M7 | A | WAIT:T07-3,T06-5 | S |
+| T07-4 | Soft-freeze path + ≤ 60 s auto-freeze drill (testnet) | 07 | M7 | A | WAIT:T06-5 | S |
 | T07-5 | Ops docs: host baseline, ceremony + recovery runbooks, evidence-pack format | 07 | M7 | A | DONE 2026-10-11 | S |
-| T07-6 | Real ceremonies and drills | 07 | M7 | O | OWNER · GATED:M7 · BLOCKED:ADR-17 | M |
+| T07-6 | Real ceremonies and drills | 07 | M7 | O | OWNER · GATED:M7 | M |
 | T08-1 | Deep-dive: `cggmp24` engine integration | 08 | M8 | R | DONE 2026-10-11 | M |
-| T08-2 | Engine implementation (M8 #1–3, #7) | 08 | M8 | A | GATED:G-MPC · BLOCKED:ADR-07 | L |
+| T08-2 | Engine implementation (M8 #1–3, #7) | 08 | M8 | A | GATED:G-MPC | L |
 | T09-1 | Deep-dive: transport v2 + control plane v2 | 09 | M8 | R | DONE 2026-10-11 | M |
-| T09-2 | Transport v2 + control plane v2 implementation (M8 #4–6) | 09 | M8 | A | GATED:G-MPC · BLOCKED:ADR-07 | L |
+| T09-2 | Transport v2 + control plane v2 implementation (M8 #4–6) | 09 | M8 | A | GATED:G-MPC | L |
 | T10-1 | Deep-dive: verifying node, node state, key store v2 | 10 | M9 | R | DONE 2026-10-11 | M |
-| T10-2 | Verifying node implementation (M9 #1–3) | 10 | M9 | A | GATED:G-MPC · BLOCKED:ADR-07,ADR-10 | L |
+| T10-2 | Verifying node implementation (M9 #1–3) | 10 | M9 | A | GATED:G-MPC | L |
 | T11-1 | Deep-dive: gateway relay (with ADR-09/10 options) | 11 | M9 | R | DONE 2026-10-11 | M |
-| T11-2 | Gateway relay implementation (M9 #4) | 11 | M9 | A | GATED:G-MPC · BLOCKED:ADR-09,ADR-10 | L |
+| T11-2 | Gateway relay implementation (M9 #4) | 11 | M9 | A | GATED:G-MPC | L |
 | T12-1 | Deep-dive: operator-grade reference deployment | 12 | M11 | R | DONE 2026-10-11 | M |
-| T12-2 | Reference deployment implementation (M11) | 12 | M11 | A | GATED:M9 · BLOCKED:ADR-01 | L |
+| T12-2 | Reference deployment implementation (M11) | 12 | M11 | A | GATED:M9 | L |
 | T13-1 | Deep-dive: adversarial verification program | 13 | M6–M9 | R | READY · re-scope first (2026-10-11 output stopped by a safety filter; oracle/CI/process scope only) | M |
 | T13-2 | Independent JS vector oracle (a different agent from the WS-05 implementer) | 13 | M6 | A | DONE 2026-10-11 | M |
 | T13-3 | Incident catalogue → TRON test cases + fixtures | 13 | M6 | A | DONE 2026-10-11 | S |
@@ -261,11 +271,11 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T14-2 | Threat model v2 (category level, public) | 14 | M10 | A | DONE 2026-10-11 | M |
 | T14-3 | Audit-scope manifest v0 | 14 | M5 | A | WAIT:T04-8 | S |
 | T14-4 | Known-issues list + KAT plan | 14 | M10 | A | DONE 2026-10-11 | S |
-| T14-5 | Bookings, on commitment | 14 | M10 | O | OWNER · BLOCKED:ADR-08 | — |
+| T14-5 | Bookings, on commitment | 14 | M10 | O | OWNER (ready) | — |
 | T15-1 | D1 discovery kit (guide, rubric, outreach plan with names private, LOI template, revenue-model structure) | 15 | D1 | R | DONE 2026-10-11 | M |
 | T15-2 | Competitor watch (weekly): Fystack/Cosigner, Dfns Validation Gate, others | 15 | — | R | DONE 2026-10-11 | S |
 | T15-3 | `docs/positioning/**` public-safe synthesis | 15 | D1 | A | GATED:D1 | S |
-| T16-1 | Callback-gate adapter for the vendor D1 names | 16 | M6+ | R→A | GATED:D1 · BLOCKED:ADR-14 | M |
+| T16-1 | Callback-gate adapter for the vendor D1 names | 16 | M6+ | R→A | GATED:D1 | M |
 | T17-1 | People & counsel pack (cryptographer JD + rate survey, second-operator role, 3-question counsel brief, entity/KYB checklist) | 17 | — | R | DONE 2026-10-11 | S |
 | T17-2 | Name/trademark desk search (WebSearch only; registries needing a browser marked UNVERIFIABLE) | 17 | — | R | DONE 2026-10-11 | S |
 | M7-RF | M7 Rung 2 real funds (RF-1 memo, Phase A/B, mainnet drills, canary report) | 06/07 | M7 | A→O | GATED:M7 · BLOCKED:ADR-05,ADR-06 | — |

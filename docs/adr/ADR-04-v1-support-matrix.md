@@ -8,6 +8,8 @@
 
 ## Context
 
+Provisional owner answer, 2026-10-16: "ก) TRON (TRX + TRC-20) บน cggmp24 (Recommended)", to be re-confirmed after the TKeeper teardown (competitor watch DN-1). Status stays OPEN until then.
+
 Owner decision from the Decision Inbox (`docs/TASKS.md` §3). Tasks under *Unblocks* stay skipped until it is decided.
 
 ## Options

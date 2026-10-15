@@ -1,6 +1,6 @@
 # ADR-08: Audit sourcing and timing
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: wk 2
 - Unblocks: T00-13, T14-5
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) RFQ ตอนนี้ ไม่มัดจำ (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: RFQ now with no deposit; pay on a committed user; split firms.
 
 ## Consequences
 
-_Recorded with the decision._
+Unblocks T00-13 (owner sends RFQs) and T14-5.

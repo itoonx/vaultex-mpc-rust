@@ -1,6 +1,6 @@
 # ADR-11: Policy distribution
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: ≈ wk 5 (M6 start)
 - Unblocks: T05-3, T05-4, T05-7b, T05-8, T06-5
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) bundle ที่ quorum เซ็น ติดตั้งเป็นไฟล์ที่ signer ทุกตัว (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Quorum-signed policy bundle, installed per signer as a file.
 
 ## Consequences
 
-_Recorded with the decision._
+Unblocks T05-3, T05-4, T05-7b, T05-8 and T06-5.

@@ -1,6 +1,6 @@
 # ADR-07: MPC engine swap
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: wk 16
 - Unblocks: T03-4, T08-2, T09-2, T10-2
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ยอมรับตามคำแนะนำทั้งหมด (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Conditional on G-MPC (answered ahead of its due date, as part of a batch accepting the recommendations for ADR-07, -09, -10, -14 and -15).
 
 ## Consequences
 
-_Recorded with the decision._
+T03-4, T08-2, T09-2 and T10-2 proceed only if G-MPC passes.

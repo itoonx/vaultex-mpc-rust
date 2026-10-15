@@ -1,6 +1,6 @@
 # ADR-03: Legacy hand-rolled crypto
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Day 7
 - Unblocks: T04-6, T04-7, T04-8, T14-3
@@ -23,8 +23,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) ลบใน M5 (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Delete in M5, after the pre-cut tag, the legacy balance check and the crypto-shred of the legacy testnet shares.
 
 ## Consequences
 
-_Recorded with the decision._
+T04-6, T04-7, T04-8 and T14-3 are unblocked, gated on their prerequisites: the balance check of the remaining key groups (owner) and T00-11.

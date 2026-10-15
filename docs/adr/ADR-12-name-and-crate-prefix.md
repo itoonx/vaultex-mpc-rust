@@ -1,6 +1,6 @@
 # ADR-12: Name and crate prefix
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Day 30
 - Unblocks: crate rename/publish, entity
@@ -23,8 +23,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ข) เปลี่ยนชื่อตอนนี้ (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Rename now. The new name is not chosen yet: candidates go through the desk-search recipe, then counsel clearance on the winner. No registry publication or name reservation before that.
 
 ## Consequences
 
-_Recorded with the decision._
+Crate names, domain tags and the repo transfer wait for the chosen name.

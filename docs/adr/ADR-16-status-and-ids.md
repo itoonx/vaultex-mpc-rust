@@ -1,6 +1,6 @@
 # ADR-16: Status and IDs
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: M5
 - Unblocks: T02-8, final ADR file names
@@ -23,8 +23,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) สถานะสร้างจาก CI + เลข GitHub issue เป็น ID (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: CI-generated status; GitHub issue numbers as IDs.
 
 ## Consequences
 
-_Recorded with the decision._
+Unblocks T02-8; ADR files move to `ADR-<issue>.md` names when issues exist.

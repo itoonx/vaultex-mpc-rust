@@ -1,6 +1,6 @@
 # ADR-13: Disclosure posture
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Day 7
 - Unblocks: T00-9, T00-10
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) GHSA ระดับหมวดตอนนี้ (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: Category-level GHSA now.
 
 ## Consequences
 
-_Recorded with the decision._
+Unblocks T00-9 (owner publishes the advisory) and T00-10.

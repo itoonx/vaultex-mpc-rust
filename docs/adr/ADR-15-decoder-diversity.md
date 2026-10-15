@@ -1,6 +1,6 @@
 # ADR-15: Decoder diversity
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Before M10-F freeze
 - Unblocks: second decoder
@@ -23,8 +23,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ยอมรับตามคำแนะนำทั้งหมด (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: One kernel decoder (D0) at M6; decide on a second independent decoder (D1) before the M10-F freeze (answered ahead of its due date).
 
 ## Consequences
 
-_Recorded with the decision._
+No task changes now.

@@ -1,6 +1,6 @@
 # ADR-02: Licence
 
-- Status: OPEN
+- Status: ACCEPTED
 - Decider: owner
 - Decide by: Day 3
 - Unblocks: T01-5, T01-11b
@@ -24,8 +24,10 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 ## Decision
 
-_Blank until the owner decides._
+"ก) MIT OR Apache-2.0 + ลบ .agents (Recommended)"
+
+Source: owner's answer in the Claude Code session of 2026-10-16 (option selected in the Decision Inbox walk-through). Meaning: MIT OR Apache-2.0 + NOTICE, after consent from every author identity (T00-5). D-AGENTS answered in the same choice: remove `.agents/**` and `skills-lock.json` from the repo.
 
 ## Consequences
 
-_Recorded with the decision._
+T01-5 (licence files and manifests) waits only for the author consents (T00-5). T01-11b (CONTRIBUTING, DCO) and T01-6 are unblocked.
