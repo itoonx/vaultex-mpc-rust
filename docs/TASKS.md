@@ -174,7 +174,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T00-5 | Licence consent from all author identities (or day-30 fallback) | 01 | M5 | O | OWNER | S |
 | T00-6 | Decision day: answer the Decision Inbox | — | M5 | O | OWNER | S |
 | T00-7 | Capacity log + day-14 gate (ADR-01) | — | M5 | O | OWNER | S |
-| T00-8 | Push the integration work; verify the CI canary turns red, then main green | 02 | M5 | O | OWNER · push done 2026-10-13; canary PR pending | S |
+| T00-8 | Push the integration work; verify the CI canary turns red, then main green | 02 | M5 | O | OWNER · push done 2026-10-13; canary red on push and PR runs 2026-10-16 (#26, runs 38825841936 and 38825847332); main green waits for a dev→main PR, which first needs main's release squash recorded in dev history | S |
 | T00-9 | Publish the category-level GHSA | 01 | M5 | O | OWNER (ready) | S |
 | T00-10 | Notify the fork owners privately (list in private notes) | 01 | M5 | O | OWNER · WAIT:T00-9 | S |
 | T00-11 | Crypto-shred legacy testnet shares; optional sweep to plain testnet wallets | 04 | M5 | O | OWNER · WAIT:T04-1 (runbook) | S |
