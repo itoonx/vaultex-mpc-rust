@@ -21,3 +21,7 @@ infra/node/node.env
 infra/node/gateway.key
 infra/node/.boot-node.state
 infra/node/keys/
+
+# Local agent tooling (D-AGENTS, 2026-10-16): kept outside version control
+.agents/
+skills-lock.json

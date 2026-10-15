@@ -191,7 +191,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T01-3 | One security policy (`SECURITY.md`): supported versions, 90-day disclosure; `SECURITY_STATUS.md` (category + fix) | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-4 | Draft the category-level GHSA text with re-key guidance (private draft) | 01 | M5 | A→O | DONE 2026-10-11 | S |
 | T01-5 | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`; manifests `MIT OR Apache-2.0` | 01 | M5 | A | WAIT:T00-5 | S |
-| T01-6 | Remove `.agents/**` and `skills-lock.json` | 01 | M5 | A | READY | S |
+| T01-6 | Remove `.agents/**` and `skills-lock.json` | 01 | M5 | A | DONE 2026-10-16 | S |
 | T01-7 | Claims ledger: `claims/schema.toml`, per-WS fragments, rendered `CLAIMS.md` | 01 | M5 | A | DONE 2026-10-11 | M |
 | T01-8 | Archive stale planning docs with a "superseded" banner; publish the M1–M4 re-baseline | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-9 | Slim `CLAUDE.md` to stable agent rules (history → archive) | 01 | M5 | A | DONE 2026-10-11 | S |
