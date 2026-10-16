@@ -2,13 +2,13 @@ schema = 1
 id = "01.security-notes-not-audits"
 kind = "security-posture"
 status = "limitation"
-text = "The older internal security notes (docs/SECURITY_FINDINGS.md and docs/SECURITY_AUDIT_AUTH.md) were written by AI agents during development. They are not independent audits, and their \"resolved\" statuses do not cover the limitations in the banner."
-text_zh = "较早的内部安全记录（docs/SECURITY_FINDINGS.md 与 docs/SECURITY_AUDIT_AUTH.md）由 AI Agent 在开发过程中编写。它们并非独立审计，其中的“已解决”状态并不涵盖警示中的限制。"
+text = "The older internal security notes were written by AI agents during development. They were never independent audits, and their \"resolved\" statuses do not cover the limitations in the banner. The findings log and two CVE reports among them were removed from the tree on 2026-10-16 and remain in git history; the auth review (docs/SECURITY_AUDIT_AUTH.md) is archived with its conclusions withdrawn. SECURITY_STATUS.md is the current list of known weaknesses, by category."
+text_zh = "较早的内部安全记录由 AI Agent 在开发过程中编写，并非独立审计，其中的“已解决”状态并不涵盖警示中的限制。这些记录中的发现日志和两份 CVE 报告已于 2026-10-16 从代码树中移除，仍保留在 git 历史中；认证审查（docs/SECURITY_AUDIT_AUTH.md）已归档，其结论已撤回。SECURITY_STATUS.md 是当前按类别列出的已知弱点清单。"
 surfaces = ["README.md", "README.zh-CN.md"]
 quotes = ["The security notes were written by AI agents during development."]
 quotes_zh = ["这些安全记录由 AI Agent 在开发过程中编写，并非独立审计"]
-observed = 2026-10-11
-expires = 2027-01-09
+observed = 2026-10-16
+expires = 2027-01-14
 
 [[evidence]]
 type = "report"
@@ -20,3 +20,9 @@ note = "W14: the public claims and the internal security record cannot be relied
 type = "report"
 ref = "SECURITY_STATUS.md#assurance"
 commit = "00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608"
+
+[[evidence]]
+type = "report"
+ref = "docs/TASKS.md#3-decision-inbox-owner-answers-the-run-skips-anything-that-depends-on-these"
+commit = "9d255225d89da5bf09db6c4503d06ac0e9dc48c8"
+note = "Owner decision of 2026-10-16 (Other decisions, Legacy docs): remove the findings log and the two CVE reports from the tree; git history keeps them"

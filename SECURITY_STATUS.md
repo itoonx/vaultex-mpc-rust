@@ -45,7 +45,7 @@ Milestone numbers refer to [docs/ROADMAP.md §4.3](docs/ROADMAP.md#43-milestone-
 ## Assurance
 
 - No independent audit, penetration test or external review of Vaultex has taken place. The `v0.1.0-audit` tag marks an internal audit-preparation snapshot.
-- [docs/SECURITY_FINDINGS.md](docs/SECURITY_FINDINGS.md) and [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md) are internal notes written by AI agents during development. Their "resolved" statuses do not cover the categories above.
+- The older internal security notes were written by AI agents during development and were never independent audits. Their "resolved" statuses do not cover the categories above. The findings log and two CVE reports among them were removed from the tree on 2026-10-16 and remain in git history; the auth review, [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md), is archived with its conclusions withdrawn. This page is the current list, by category.
 - The roadmap proposes paid limited evaluations at M6 and M7, then an independent audit and penetration test at M10, paid for only once a user has committed (decision ADR-08).
 
 ---

@@ -134,7 +134,7 @@ The tests use test-size cryptographic parameters. Passing tests do not show that
 | [Contributing](docs/CONTRIBUTING.md) | Contribution guide |
 | [Changelog](CHANGELOG.md) | Change history |
 
-Older documents predate the roadmap. They include the internal security notes in [docs/SECURITY_FINDINGS.md](docs/SECURITY_FINDINGS.md) and [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md) and the chain plan in [specs/CHAIN_ROADMAP.md](specs/CHAIN_ROADMAP.md). The security notes were written by AI agents during development. They are not independent audits, and their "resolved" statuses do not cover the limitations in the banner. Stale documents are being archived (ROADMAP M5 #10).
+Older documents predate the roadmap. They include the chain plan in [specs/CHAIN_ROADMAP.md](specs/CHAIN_ROADMAP.md) and the internal security notes. The security notes were written by AI agents during development. They were never independent audits, and their "resolved" statuses do not cover the limitations in the banner. The findings log and two CVE reports among them were removed from the tree on 2026-10-16 and remain in git history; the auth review is archived with its conclusions withdrawn ([docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md)). [SECURITY_STATUS.md](SECURITY_STATUS.md) is the current list of known weaknesses, by category. Stale documents are being archived (ROADMAP M5 #10).
 
 ---
 
