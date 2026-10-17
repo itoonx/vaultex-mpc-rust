@@ -8,7 +8,7 @@
 
 ## Context
 
-Provisional owner answer, 2026-10-16: "ก) TRON (TRX + TRC-20) บน cggmp24 (Recommended)", to be re-confirmed after the TKeeper teardown (competitor watch DN-1). The teardown was done on 2026-10-17: kill criterion K9 has substantially fired (an OSI-licensed project ships most of the every-signer combination), while an assured engine lineage, a mandatory policy quorum with versioning and per-signer receipts are still open ground.
+Provisional owner answer, 2026-10-16: "ก) TRON (TRX + TRC-20) บน cggmp24 (Recommended)", to be re-confirmed after the TKeeper teardown (competitor watch DN-1). The teardown was done on 2026-10-17: kill criterion K9 has substantially fired. Its details stay in the private competitor watch.
 
 Owner decision from the Decision Inbox (`docs/TASKS.md` §3). Tasks under *Unblocks* stay skipped until it is decided.
 
@@ -31,7 +31,7 @@ _Advisory, copied from `docs/TASKS.md` §3._
 
 Source: owner's answer in the Claude Code session of 2026-10-17. Meaning: confirm TRON (TRX + TRC-20) on pinned `cggmp24`, with these changes:
 
-1. **Rationale.** The bet is "assured, spec-first and fail-closed by default", not "the combination may be unoccupied".
+1. **Rationale.** The bet is to be assured, spec-first and fail-closed by default, not that the combination may be unoccupied.
 2. **Spec-first M6.** Publish `INTENT_V1`, `RECEIPT_V1` and `POLICY_BUNDLE_V1` with vectors as early as the comment window allows.
 3. **Interop.** Prepare a TRON test-vector exchange; the owner decides when to send it.
 4. **K9 at G-MPC.** A K9 re-score against OSI entrants becomes an input to G-MPC (wk 16). If K9 has fully fired by then, contribute the kernel and specs instead of racing the full-stack MPC phase. Phase 1 (M5–M7) proceeds either way.
