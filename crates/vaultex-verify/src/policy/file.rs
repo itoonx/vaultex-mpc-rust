@@ -1,0 +1,118 @@
+//! [`PolicyStore`]: the installed policy of one signer, in one file (ADR-11).
+//!
+//! # Durability
+//!
+//! - **Offer:** the new state is computed in memory ([`PolicyState::offer`]), written whole to
+//!   `<path>.tmp`, synced, renamed over `path`, and the directory entry synced; only then does the
+//!   offer answer and the new state apply. After a crash the file holds the old or the new state.
+//! - **One process:** `<path>.lock` is locked exclusively while the store is open.
+//! - **Open:** no file means nothing is installed (every request refuses `NO_POLICY`). A file is
+//!   decoded strictly and re-checked as the [module docs](super#limits) say; a file that fails
+//!   refuses to open. It must be restored, not repaired.
+
+use std::fs::{self, File};
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use vaultex_types::{from_canonical_strict, to_canonical};
+
+use super::{
+    AdminSetV1, Offer, Pending, PolicyRefusal, PolicyState, SignedPolicyBundleV1, VerifiedBundle,
+};
+use crate::durable::{self, io_err};
+use crate::velocity::StoreError;
+
+/// The installed file: BCS of this. `received_at_ms` is this signer's own record of when it
+/// received the pending bundle.
+#[derive(Serialize, Deserialize)]
+struct InstalledV1 {
+    active: SignedPolicyBundleV1,
+    pending: Option<(SignedPolicyBundleV1, u64)>,
+}
+
+/// The installed policy of one signer: a [`PolicyState`] kept in a file. See the
+/// [module docs](super) for the checks and the states.
+#[derive(Debug)]
+pub struct PolicyStore {
+    path: PathBuf,
+    genesis: AdminSetV1,
+    state: PolicyState,
+    _lock: File,
+}
+
+impl PolicyStore {
+    /// Opens the policy installed at `path` (none if the file does not exist yet) and locks it.
+    /// `genesis` is the admin set pinned at setup; it judges the first bundle only.
+    pub fn open(path: impl AsRef<Path>, genesis: AdminSetV1) -> Result<Self, PolicyRefusal> {
+        let path = path.as_ref().to_path_buf();
+        let lock = durable::open_locked(&durable::sibling(&path, ".lock"))
+            .map_err(PolicyRefusal::Store)?;
+        let state = match fs::read(&path) {
+            Ok(bytes) => load(&bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => PolicyState::default(),
+            Err(e) => return Err(PolicyRefusal::Store(io_err(e))),
+        };
+        Ok(Self {
+            path,
+            genesis,
+            state,
+            _lock: lock,
+        })
+    }
+
+    /// Offers the signed bundle `bytes`, received at `now_ms` (this signer's clock): checks it,
+    /// records the new state durably, and only then answers. A refusal changes nothing.
+    pub fn offer(&mut self, bytes: &[u8], now_ms: u64) -> Result<Offer, PolicyRefusal> {
+        let (next, offer) = self.state.offer(&self.genesis, bytes, now_ms)?;
+        durable::replace(&self.path, &save(&next)?).map_err(|e| PolicyRefusal::Store(io_err(e)))?;
+        self.state = next;
+        Ok(offer)
+    }
+
+    /// The installed state: what requests go by.
+    pub fn state(&self) -> &PolicyState {
+        &self.state
+    }
+}
+
+fn save(state: &PolicyState) -> Result<Vec<u8>, PolicyRefusal> {
+    // An offer always leaves an active bundle.
+    let active = state.active.as_ref().ok_or(PolicyRefusal::NoPolicy)?;
+    let file = InstalledV1 {
+        active: active.signed.clone(),
+        pending: state
+            .pending
+            .as_ref()
+            .map(|p| (p.bundle.signed.clone(), p.received_at_ms)),
+    };
+    to_canonical(&file).map_err(|_| PolicyRefusal::Store(StoreError::TooLarge))
+}
+
+/// Decodes the installed file: both bundles pass step 2, and the pending one, always a loosening,
+/// passes steps 3, 6 and 7 against the active one's admins again.
+fn load(bytes: &[u8]) -> Result<PolicyState, PolicyRefusal> {
+    let file = from_canonical_strict::<InstalledV1>(bytes).map_err(|_| PolicyRefusal::Malformed)?;
+    let active = VerifiedBundle::check(file.active)?;
+    let pending = match file.pending {
+        None => None,
+        Some((signed, received_at_ms)) => {
+            let bundle = VerifiedBundle::check(signed)?;
+            if bundle.version() <= active.version() {
+                return Err(PolicyRefusal::Rollback);
+            }
+            let admins = &active.body().admins;
+            if bundle.signers(admins)? < usize::from(admins.threshold) {
+                return Err(PolicyRefusal::Quorum);
+            }
+            Some(Pending {
+                bundle,
+                received_at_ms,
+            })
+        }
+    };
+    Ok(PolicyState {
+        active: Some(active),
+        pending,
+    })
+}

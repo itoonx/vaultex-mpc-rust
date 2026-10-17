@@ -14,13 +14,17 @@
 //! - [`receipt`]: Ed25519-signed, hash-chained receipts for accepts and refusals, an fsync'd
 //!   receipt log ([`receipt::ReceiptLog`]), and the offline log verifier
 //!   ([`receipt::verify_log`], also the `vaultex-receipts` binary) (M6 #6). Implemented.
-//! - Policy bundle and approvals: not implemented yet.
+//! - [`policy`]: the quorum-signed policy bundle v1 (M6 #3): BCS body under a tagged SHA-256
+//!   digest, M-of-N pinned admin keys, anti-rollback, 1-of-N tightening and time-locked
+//!   loosening, deny-by-default asset rules, the decoder's view, and the installed file
+//!   ([`policy::PolicyStore`]).
+//! - Approvals: not implemented yet.
 //!
 //! Boundary (ROADMAP M6 #1): this crate depends only on `vaultex-types` and pure crates. No MPC,
 //! transport, async-runtime or network crate may appear in its dependency tree
 //! (`.github/workflows/kernel.yml` checks with `cargo tree`), and its `clippy.toml` bans clock,
 //! environment and socket access: time is a parameter, and storage is a local file
-//! ([`velocity::FileStore`], [`receipt::ReceiptLog`]).
+//! ([`velocity::FileStore`], [`receipt::ReceiptLog`], [`policy::PolicyStore`]).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -28,6 +32,7 @@
 mod amount;
 pub mod breaker;
 mod durable;
+pub mod policy;
 pub mod receipt;
 pub mod tron;
 pub mod velocity;
