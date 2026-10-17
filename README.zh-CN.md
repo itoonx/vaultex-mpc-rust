@@ -136,7 +136,7 @@ cargo test --workspace --features local-transport
 | [贡献指南](docs/CONTRIBUTING.md) | 贡献说明 |
 | [更新日志](CHANGELOG.md) | 变更历史 |
 
-较早的文档早于路线图，其中包括 [docs/SECURITY_FINDINGS.md](docs/SECURITY_FINDINGS.md) 和 [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md) 中的内部安全记录，以及 [specs/CHAIN_ROADMAP.md](specs/CHAIN_ROADMAP.md) 中的链计划。这些安全记录由 AI Agent 在开发过程中编写，并非独立审计，其中的“已解决”状态并不涵盖上方警示中的限制。过时文档正在归档（ROADMAP M5 #10）。
+较早的文档早于路线图，其中包括 [specs/CHAIN_ROADMAP.md](specs/CHAIN_ROADMAP.md) 中的链计划和内部安全记录。这些安全记录由 AI Agent 在开发过程中编写，并非独立审计，其中的“已解决”状态并不涵盖上方警示中的限制。这些记录中的发现日志和两份 CVE 报告已于 2026-10-16 从代码树中移除，仍保留在 git 历史中；认证审查已归档，其结论已撤回（[docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md)）。[SECURITY_STATUS.md](SECURITY_STATUS.md) 是当前按类别列出的已知弱点清单。过时文档正在归档（ROADMAP M5 #10）。
 
 ---
 

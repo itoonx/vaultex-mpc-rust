@@ -59,7 +59,7 @@ Each claim is one file, `claims/<workstream>/<slug>.toml`, with the ID `<workstr
 | [`01.scheme.frost-secp256k1-tr`](#01schemefrost-secp256k1-tr) | limitation | limitation | experimental | 2027-01-09 |
 | [`01.scheme.hand-rolled-ecdsa`](#01schemehand-rolled-ecdsa) | limitation | limitation | experimental | 2027-01-09 |
 | [`01.scheme.sr25519-bls`](#01schemesr25519-bls) | limitation | limitation | experimental | 2027-01-09 |
-| [`01.security-notes-not-audits`](#01security-notes-not-audits) | security-posture | limitation | — | 2027-01-09 |
+| [`01.security-notes-not-audits`](#01security-notes-not-audits) | security-posture | limitation | — | 2027-01-14 |
 | [`01.security.reporting`](#01securityreporting) | process | verified | — | 2027-04-09 |
 | [`01.support.none-supported`](#01supportnone-supported) | limitation | limitation | — | 2027-01-09 |
 | [`01.tests.test-parameters`](#01teststest-parameters) | limitation | limitation | — | 2027-01-09 |
@@ -527,18 +527,19 @@ Evidence:
 
 ### `01.security-notes-not-audits`
 
-The older internal security notes (docs/SECURITY_FINDINGS.md and docs/SECURITY_AUDIT_AUTH.md) were written by AI agents during development. They are not independent audits, and their "resolved" statuses do not cover the limitations in the banner.
+The older internal security notes were written by AI agents during development. They were never independent audits, and their "resolved" statuses do not cover the limitations in the banner. The findings log and two CVE reports among them were removed from the tree on 2026-10-16 and remain in git history; the auth review (docs/SECURITY_AUDIT_AUTH.md) is archived with its conclusions withdrawn. SECURITY_STATUS.md is the current list of known weaknesses, by category.
 
-中文：较早的内部安全记录（docs/SECURITY_FINDINGS.md 与 docs/SECURITY_AUDIT_AUTH.md）由 AI Agent 在开发过程中编写。它们并非独立审计，其中的“已解决”状态并不涵盖警示中的限制。
+中文：较早的内部安全记录由 AI Agent 在开发过程中编写，并非独立审计，其中的“已解决”状态并不涵盖警示中的限制。这些记录中的发现日志和两份 CVE 报告已于 2026-10-16 从代码树中移除，仍保留在 git 历史中；认证审查（docs/SECURITY_AUDIT_AUTH.md）已归档，其结论已撤回。SECURITY_STATUS.md 是当前按类别列出的已知弱点清单。
 
 - **Status:** limitation · **kind:** security-posture · **owner:** WS-01
-- **Observed:** 2026-10-11 · **expires:** 2027-01-09
+- **Observed:** 2026-10-16 · **expires:** 2027-01-14
 - **Appears in:** [README.md](README.md), [README.zh-CN.md](README.zh-CN.md)
 
 Evidence:
 
 - document [`docs/ROADMAP.md`](https://github.com/itoonx/vaultex-mpc-rust/blob/26fd974608adca177ebfcab239ed8aef3de8a6a3/docs/ROADMAP.md#appendix-a-verified-claims-ledger-round-2-summary-with-final-status) at [`26fd97460`](https://github.com/itoonx/vaultex-mpc-rust/commit/26fd974608adca177ebfcab239ed8aef3de8a6a3). W14: the public claims and the internal security record cannot be relied on; W6: no independent review
 - document [`SECURITY_STATUS.md`](https://github.com/itoonx/vaultex-mpc-rust/blob/00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608/SECURITY_STATUS.md#assurance) at [`00f7dc47c`](https://github.com/itoonx/vaultex-mpc-rust/commit/00f7dc47c2b0d9f9252df52d1ba3a2a61f8dc608)
+- document [`docs/TASKS.md`](https://github.com/itoonx/vaultex-mpc-rust/blob/9d255225d89da5bf09db6c4503d06ac0e9dc48c8/docs/TASKS.md#3-decision-inbox-owner-answers-the-run-skips-anything-that-depends-on-these) at [`9d255225d`](https://github.com/itoonx/vaultex-mpc-rust/commit/9d255225d89da5bf09db6c4503d06ac0e9dc48c8). Owner decision of 2026-10-16 (Other decisions, Legacy docs): remove the findings log and the two CVE reports from the tree; git history keeps them
 
 ## Process claims
 

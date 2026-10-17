@@ -93,4 +93,4 @@ We will not take legal action against anyone who researches and reports in good 
 
 - **Current status:** [SECURITY_STATUS.md](SECURITY_STATUS.md), by category and fix.
 - **Design target:** [docs/ROADMAP.md §3.3](docs/ROADMAP.md#33-the-differentiator-precisely) (proposed). It describes where the project is going, not the code at HEAD.
-- **Internal notes:** [docs/SECURITY_FINDINGS.md](docs/SECURITY_FINDINGS.md) and [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md) were written by AI agents during development. They are not independent audits, and their "resolved" statuses do not cover the categories in [SECURITY_STATUS.md](SECURITY_STATUS.md).
+- **Internal notes:** the older security notes were written by AI agents during development. They were never independent audits, and their "resolved" statuses do not cover the categories in [SECURITY_STATUS.md](SECURITY_STATUS.md). The findings log and two CVE reports among them were removed from the tree on 2026-10-16 and remain in git history; the auth review, [docs/SECURITY_AUDIT_AUTH.md](docs/SECURITY_AUDIT_AUTH.md), is archived with its conclusions withdrawn.

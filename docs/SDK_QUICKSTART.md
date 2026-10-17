@@ -331,5 +331,5 @@ curl -H "X-Session-Token: <jwt>" https://GATEWAY/v1/metrics
 - [DEPLOYMENT.md](DEPLOYMENT.md) -- Production deployment with NATS, Redis, Vault
 - [ERROR_CODES.md](ERROR_CODES.md) -- Complete error code reference
 - [API_REFERENCE.md](API_REFERENCE.md) -- Full API endpoint documentation
-- [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) -- Security audit status
+- [SECURITY_STATUS.md](../SECURITY_STATUS.md) -- Known security weaknesses, by category and fix
 - [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md) -- Protocol implementation details
