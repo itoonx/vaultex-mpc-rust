@@ -88,7 +88,7 @@ Answer in any form, for example "ADR-03: delete". Each row lists the tasks it un
 | **ADR-01** | Capacity scenario | (a) solo + agents · (b) + contract applied cryptographer · (c) team of 3 | (b) at minimum | T00-17, G-MPC path, T12-2 | Day 14 | (b) + contract applied cryptographer |
 | **ADR-02** | Licence | MIT OR Apache-2.0 · Apache-2.0 · AGPL/BSL | MIT OR Apache-2.0 + NOTICE, after author consent (T00-5) | T01-5, T01-11b | Day 3 | MIT OR Apache-2.0 + NOTICE (after T00-5) |
 | **ADR-03** | Legacy hand-rolled crypto | Delete · Quarantine | Delete in M5 (after pre-cut tag, balance check, crypto-shred) | T04-6, T04-7, T04-8, T14-3 | Day 7 | Delete in M5 |
-| **ADR-04** | v1 support matrix | TRON-only · TRON + EVM · multi-chain · FROST/Solana first | TRON (TRX + TRC-20) on pinned `cggmp24`; others quarantined | T04-7, scope of WS-05 beyond TRON | Day 7 | Provisional: TRON on `cggmp24`; re-confirm after the TKeeper teardown |
+| **ADR-04** | v1 support matrix | TRON-only · TRON + EVM · multi-chain · FROST/Solana first | TRON (TRX + TRC-20) on pinned `cggmp24`; others quarantined | T04-7, scope of WS-05 beyond TRON | Day 7 | Provisional: TRON on `cggmp24`; re-confirm after the TKeeper teardown (teardown done 2026-10-17; owner to confirm) |
 | **ADR-05** | Real-funds rule | RF-1..RF-4 · audit before any funds · other | Adopt RF-1..RF-4 | T06-8, M7 Rung 2 | Day 7 | Adopt RF-1..RF-4 |
 | **ADR-06** | First-funds host for Rung 2 | Project-owned float · other float with counsel clearance · none until audit | Project-owned float | T06-8, M7 Rung 2 | Day 7 | Project-owned float |
 | **ADR-07** | MPC engine swap | Always · conditional on G-MPC · never (kernel-only) | Conditional on G-MPC | T03-4, T08-2, T09-2, T10-2 | wk 16 | Conditional on G-MPC |
@@ -110,7 +110,7 @@ Answer in any form, for example "ADR-03: delete". Each row lists the tasks it un
 | **Q-RUN-4** ★ | CODEOWNERS handle(s): which GitHub account(s) are yours? | — | — | final value in T02-10 (draft uses `@OWNER`) | Day 1 | @itoonx |
 | **Q-RUN-5** ★ | New crates not yet in `Cargo.lock`: approve per request | Approve list · deny | Reviewed per request in the run log | any task the run log lists as dep-blocked | Rolling | Approved: async-nats 0.47 (+ tokio-stream), libfuzzer-sys + arbitrary (fuzz workspace only), prometheus without default features; advisory and licence exceptions signed off |
 
-Answered in the Claude Code session of 2026-10-16. Accepted ADRs quote the answers in `docs/adr/`; ADR-04 stays OPEN until the TKeeper teardown is done.
+Answered in the Claude Code session of 2026-10-16. Accepted ADRs quote the answers in `docs/adr/`; ADR-04 stays OPEN until the owner confirms it; the TKeeper teardown it waited for was done on 2026-10-17.
 
 Other decisions from the same session:
 - Competitor watch DN-1 (TKeeper vs kill criterion K9): an agent does a teardown of at most 1 day (code reading, no build) before ADR-04 is confirmed.
@@ -119,6 +119,11 @@ Other decisions from the same session:
 - T13-1: rerun with a narrowed scope (oracle, CI and process design only).
 - Monitor providers: keyless public providers on testnet; choose providers and create keys before Rung 2.
 - T00-8 canary PR: the orchestrator may push a throwaway branch and open, then close, the canary PR.
+
+Open for the owner (from the 2026-10-17 run; ADR-11 follow-ups):
+- Policy-bundle supersession: today a single admin can cancel a pending loosening, including an admin-set change that would remove that admin, by installing a 1-of-N tightening first ("tightening takes 1-of-N"). Keep this, or require M-of-N for any bundle that supersedes a pending one?
+- Confirm the ceiling on the loosening time lock (provisional: 30 days).
+- Version rule: strict `installed + 1` (current) or a bounded window `(h, h+K]` relying on the parent-digest link, so signers that missed a cancelled loosening do not diverge.
 
 Private decisions (business and owner-only, D-1..D-11) are in the private task list.
 
@@ -159,6 +164,17 @@ Then the run stops and reports: the remaining work is BLOCKED (Decision Inbox), 
 - WS-13: a tronweb vector with `permissionId: 2`; a narrowed T13-1 (oracle, CI and process design only).
 - WS-01: link `docs/assurance/THREAT_MODEL_V2.md` from `SECURITY_STATUS.md`; claims rule R9 compares bytes.
 
+**Run 2026-10-16/17 (wave 4):** T01-13, T02-4b, T05-2b, T05-3 and T09-F1 were merged after root checks and branch-level security and public-safety reviews; MEDIUM findings were fixed before the merge. Research DN-1 (TKeeper teardown), T00-19 name candidates and T13-1 (narrowed) were written to the private archive.
+
+**Wave 5 candidates** (from that run; R7 assigns IDs):
+- WS-13 + WS-05: the JS oracle implements the native-amount bound, then the INTENT_V1 vector file is regenerated in the same merge; a Rust test that reads the INTENT_V1 vector file; a CI job that runs the oracle on a supported Node LTS; CODEOWNERS for `scripts/oracle/` and `specs/`.
+- WS-05: T05-7b RFC with the policy-bundle open points; re-verify the active bundle on load and write install receipts; clock-rollback handling for the effective bundle.
+- WS-03: a dedicated amount-bound refusal code; a receipt kind for bundle installs; widen the `BUNDLE_INVALID` description.
+- WS-09: async-nats without default features; a test for ignoring cluster-advertised servers; an availability check of system-certificate loading.
+- WS-14: a known-issues row for host-level tampering with the installed policy file; align the threat model with the bundle's version and parent rules.
+- WS-01: link the archived auth review directly and delete its redirect stub.
+- WS-02: `sloc.py` counts inline test modules as production code; allowlist the TLS test fixtures when a secret scanner lands.
+
 ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner is in ROADMAP §4.2 and §7.
 
 ---
@@ -185,7 +201,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T00-16 | D1 interviews (≥ 12 + ≥ 3 integrators), then D2 LOI | 15 | D1/D2 | O | OWNER (ready) | L |
 | T00-17 | Engage the contract applied cryptographer; find a second operator | 17 | G-MPC | O | OWNER (ready) | L |
 | T00-18 | Agent-process hygiene (private notes §3.2); encrypt the private research archive | — | M5 | O | OWNER | S |
-| T00-19 | Name decision (ADR-12) | 17 | — | O | OWNER (ready) | S |
+| T00-19 | Name decision (ADR-12) | 17 | — | O | OWNER (ready; candidate names drafted 2026-10-17, private) | S |
 | T01-1 | Deep-dive: truth infrastructure, claims inventory, docs to archive vs rewrite | 01 | M5 | R | DONE 2026-10-11 | M |
 | T01-2 | README truth banner (canonical M5 #1 text) + support matrix + overclaim removal, EN + zh-CN | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-3 | One security policy (`SECURITY.md`): supported versions, 90-day disclosure; `SECURITY_STATUS.md` (category + fix) | 01 | M5 | A | DONE 2026-10-11 | S |
@@ -199,10 +215,12 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T01-11a | `CODE_OF_CONDUCT.md` | 01 | M5 | A | DONE 2026-10-11 | S |
 | T01-11b | `CONTRIBUTING.md` (DCO vs CLA) | 01 | M5 | A | READY | S |
 | T01-12 | `GOVERNANCE.md` + docs site | 01 | M13 | A | GATED:M13 | M |
+| T01-13 | Remove the three legacy security docs from the tree (git history keeps them) | 01 | M5 | A | DONE 2026-10-17 | S |
 | T02-1 | Deep-dive: CI and release integrity plan | 02 | M5 | R | DONE 2026-10-11 | M |
 | T02-2 | CI integrity: bash + pipefail, exit-code gating, SHA-pinned actions, least-privilege `permissions:`, concurrency; canary procedure | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-3 | Disable auto-release | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-4 | Dependency advisories: bump rustls/ruint/quinn-proto/crossbeam-epoch, `glass_pumpkin` 1.9.1, re-review the 9 suppressions, daily audit job, `deny.toml` draft | 02 | M5 | A | DONE 2026-10-11 | M |
+| T02-4b | async-nats 0.47, prometheus without default features; remaining advisory exceptions signed off | 02 | M5 | A | DONE 2026-10-17 | S |
 | T02-5 | Shipped-build guard: build node + gateway as shipped; fail if test parameters or experimental features are linked | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-6 | Production-SLOC job + report (`sloc.yml`) | 02 | M5 | A | DONE 2026-10-11 | S |
 | T02-7 | Claims-lint CI job | 02 | M5 | A | DONE 2026-10-11 | S |
@@ -226,12 +244,13 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T04-8 | SLOC report + ≤ 10k gate on the default release build | 04 | M5 | A | WAIT:T04-7 | S |
 | T05-1 | Deep-dive: kernel design (decoder grammar, bundle, approvals, velocity, receipts, test plan, decoder-diversity option) | 05 | M6 | R | DONE 2026-10-11 | M |
 | T05-2 | Port the TRON strict decoder (private G4 prototype) into `vaultex-verify` + negative tests + fuzz target skeleton | 05 | M6 | A | DONE 2026-10-11 | M |
-| T05-3 | Policy bundle v1 + vectors | 05 | M6 | A | READY | M |
-| T05-4 | Approvals v1 + vectors | 05 | M6 | A | WAIT:T05-3 | M |
+| T05-2b | Decoder refuses native TRX amounts above 2^53−1 sun (kernel default) | 05 | M6 | A | DONE 2026-10-17 | S |
+| T05-3 | Policy bundle v1 + vectors | 05 | M6 | A | DONE 2026-10-17 | M |
+| T05-4 | Approvals v1 + vectors | 05 | M6 | A | READY | M |
 | T05-5 | Velocity store + breaker (fsync'd reservation, calibration helper, auto-pause, `kill -9` tests) | 05 | M6 | A | DONE 2026-10-11 | M |
 | T05-6 | Receipts v1 (signed, hash-chained, accept + refuse) + offline verifier | 05 | M6 | A | DONE 2026-10-11 | S |
 | T05-7a | RFC drafts `INTENT_V1`, `RECEIPT_V1` | 05 | M6 | A | DONE 2026-10-11 | S |
-| T05-7b | RFC draft `POLICY_BUNDLE_V1` | 05 | M6 | A | WAIT:T05-3 | S |
+| T05-7b | RFC draft `POLICY_BUNDLE_V1` | 05 | M6 | A | READY | S |
 | T05-8 | Admin CLIs `vaultex-approve` (local decode + render) and `vaultex-policy` | 05 | M6 | A | WAIT:T05-4 | M |
 | T05-9 | Evidence part 1: incident-replay suite + tronweb differential (≥ 10k mutated inputs) | 05 | M6 | A | DONE 2026-10-11 | M |
 | T05-10 | Evidence part 2: mutation check + fuzzing ≥ 24 CPU-h per decoder | 05 | M6 | A | READY | M |
@@ -254,6 +273,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T08-1 | Deep-dive: `cggmp24` engine integration | 08 | M8 | R | DONE 2026-10-11 | M |
 | T08-2 | Engine implementation (M8 #1–3, #7) | 08 | M8 | A | GATED:G-MPC | L |
 | T09-1 | Deep-dive: transport v2 + control plane v2 | 09 | M8 | R | DONE 2026-10-11 | M |
+| T09-F1 | NATS mTLS connect: require TLS, ignore advertised servers, `tls://` only; PEM loader tests | 09 | M8 | A | DONE 2026-10-17 | S |
 | T09-2 | Transport v2 + control plane v2 implementation (M8 #4–6) | 09 | M8 | A | GATED:G-MPC | L |
 | T10-1 | Deep-dive: verifying node, node state, key store v2 | 10 | M9 | R | DONE 2026-10-11 | M |
 | T10-2 | Verifying node implementation (M9 #1–3) | 10 | M9 | A | GATED:G-MPC | L |
@@ -261,7 +281,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T11-2 | Gateway relay implementation (M9 #4) | 11 | M9 | A | GATED:G-MPC | L |
 | T12-1 | Deep-dive: operator-grade reference deployment | 12 | M11 | R | DONE 2026-10-11 | M |
 | T12-2 | Reference deployment implementation (M11) | 12 | M11 | A | GATED:M9 | L |
-| T13-1 | Deep-dive: adversarial verification program | 13 | M6–M9 | R | READY · re-scope first (2026-10-11 output stopped by a safety filter; oracle/CI/process scope only) | M |
+| T13-1 | Deep-dive: adversarial verification program | 13 | M6–M9 | R | DONE 2026-10-17 (narrowed: oracle, CI and process design) | M |
 | T13-2 | Independent JS vector oracle (a different agent from the WS-05 implementer) | 13 | M6 | A | DONE 2026-10-11 | M |
 | T13-3 | Incident catalogue → TRON test cases + fixtures | 13 | M6 | A | DONE 2026-10-11 | S |
 | T13-4 | Guard harness (≥ 20 scenarios) | 13 | M7 | A | WAIT:T06-5 | M |
