@@ -12,6 +12,8 @@ publish = false # working name until ADR-12
 vaultex-types = { path = "../vaultex-types" }
 # Receipt signatures (M6 #6). Already in Cargo.lock through vaultex-types' tests and the legacy crates.
 ed25519-dalek = { workspace = true }
+# BCS layout of the policy bundle (M6 #3), encoded through vaultex-types. Already in Cargo.lock.
+serde = { workspace = true }
 
 [dev-dependencies]
 # Reads the JSON vector files shared with the independent oracle (KAT plan R8).

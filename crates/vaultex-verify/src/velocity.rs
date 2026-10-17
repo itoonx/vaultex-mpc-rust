@@ -43,6 +43,7 @@ mod index;
 pub use file::FileStore;
 pub(crate) use index::Index;
 
+use serde::{Deserialize, Serialize};
 use vaultex_types::{AssetId, IntentDigest, Refusal, RefusalCode, WalletId, U256};
 
 use crate::amount::{checked_add, checked_mul_small, div_rem_small};
@@ -72,8 +73,9 @@ pub struct Charge {
     pub at_ms: u64,
 }
 
-/// The limits of one sliding window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The limits of one sliding window, as the policy bundle carries them per asset. Its field order
+/// is part of the `POLICY_BUNDLE_V1` layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowLimit {
     /// The window length, in milliseconds.
     pub window_ms: u64,
@@ -274,10 +276,11 @@ pub fn reserve(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rounding {
     /// `⌊t·G/n⌋`. With every signer enforcing, the group's total outflow per window is at most
-    /// `G`. Use this one.
+    /// `G`: the tighter bound, for use once its proof has been reviewed (R1).
     Floor,
-    /// `⌈t·G/n⌉`, the formula as ROADMAP M6 #5 writes it. The total can then exceed `G` by less
-    /// than `n/t` base units: negligible, but not `≤ G`.
+    /// `⌈t·G/n⌉`, the formula as ROADMAP M6 #5 writes it, and the one to use for now (owner
+    /// decision, 2026-10-16). The total can then exceed `G` by less than `n/t` base units:
+    /// negligible, but not `≤ G`.
     Ceil,
 }
 

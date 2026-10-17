@@ -27,12 +27,14 @@
     clippy::arithmetic_side_effects
 )]
 
+use serde::{Deserialize, Serialize};
 use vaultex_types::RefusalCode;
 
 use crate::velocity::{self, Charge, LimitRefusal, Record, Reserved, StoreError, VelocityStore};
 
-/// The breaker's settings (carried by the policy bundle once it exists).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The breaker's settings, carried by the policy bundle. Its field order is part of the
+/// `POLICY_BUNDLE_V1` layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BreakerConfig {
     /// T1: this many counted refusals within the window pause the signer (0 behaves as 1).
     pub refusal_threshold: u16,

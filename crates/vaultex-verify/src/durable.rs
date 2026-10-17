@@ -1,9 +1,11 @@
-//! Append-only local files, shared by the velocity store and the receipt log: created together
-//! with a synced directory entry, locked exclusively while open, and synced after every append.
+//! Local files. Append-only ones, shared by the velocity store and the receipt log: created
+//! together with a synced directory entry, locked exclusively while open, and synced after every
+//! append. Replaced ones (the installed policy): written whole to a synced sibling, then renamed.
 
-use std::fs::{File, OpenOptions, TryLockError};
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::velocity::StoreError;
 
@@ -41,6 +43,25 @@ pub(crate) fn append_synced(file: &mut File, bytes: &[u8]) -> io::Result<()> {
 pub(crate) fn truncate(file: &File, len: u64) -> Result<(), StoreError> {
     file.set_len(len).map_err(io_err)?;
     file.sync_all().map_err(io_err)
+}
+
+/// Replaces the file at `path` with `bytes` atomically and durably: they are written to
+/// `<path>.tmp` and synced, the temporary file is renamed over `path`, and the directory entry is
+/// synced. After a crash the file holds either the old or the new bytes.
+pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp = sibling(path, ".tmp");
+    let mut file = File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&tmp, path)?;
+    sync_parent_dir(path)
+}
+
+/// `path` with `suffix` appended to its file name.
+pub(crate) fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = OsString::from(path.as_os_str());
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 pub(crate) fn io_err(e: io::Error) -> StoreError {
