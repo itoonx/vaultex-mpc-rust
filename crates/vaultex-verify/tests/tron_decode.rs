@@ -11,7 +11,8 @@ use vaultex_types::{
     WalletId, U256,
 };
 use vaultex_verify::tron::{
-    decode, TronDecodeCtx, TronRefusal, MAX_FEE_LIMIT_SUN, MAX_RAW_BYTES, MAX_VALIDITY_MS,
+    decode, TronDecodeCtx, TronRefusal, MAX_FEE_LIMIT_SUN, MAX_NATIVE_AMOUNT_SUN, MAX_RAW_BYTES,
+    MAX_VALIDITY_MS,
 };
 
 // ───────────────────────────── vectors (synthetic addresses) ─────────────────────────────
@@ -341,6 +342,29 @@ fn token_amount_keeps_all_256_bits() {
 }
 
 #[test]
+fn accepts_native_amount_at_the_js_safe_bound() {
+    // 2^53 − 1 is JavaScript's `Number.MAX_SAFE_INTEGER`: the largest amount tronweb reads exactly.
+    assert_eq!(MAX_NATIVE_AMOUNT_SUN, (1 << 53) - 1);
+    assert_eq!(MAX_NATIVE_AMOUNT_SUN, 9_007_199_254_740_991);
+    let tx = Tx {
+        value: transfer_value(&OWNER, &RCPT, 9_007_199_254_740_991),
+        ..Tx::native()
+    };
+    let (intent, _) = accept(&tx.raw());
+    assert_eq!(intent.asset, AssetId::Native);
+    assert_eq!(intent.amount, U256::from(9_007_199_254_740_991));
+}
+
+#[test]
+fn token_amounts_are_not_bound_by_the_native_cap() {
+    for amount in [1 << 53, i64::MAX as u64, u64::MAX] {
+        let raw = Tx::trc20_with_data(&Tx::transfer_calldata(&RCPT[1..], amount)).raw();
+        let (intent, _) = accept(&raw);
+        assert_eq!(intent.amount, U256::from(amount));
+    }
+}
+
+#[test]
 fn accepts_bounds_exactly() {
     // `expiration == now + validity bound` and `fee_limit == bound` are inside.
     let raw = hex(TRC20_HEX);
@@ -380,6 +404,7 @@ fn every_refusal_has_a_registered_wire_code() {
         R::AddressShape,
         R::OwnerNotWallet,
         R::SelfTransfer,
+        R::NativeAmountOverBound,
         R::AmountZero,
         R::CalldataLength,
         R::SelectorNotTransfer,
@@ -401,6 +426,10 @@ fn every_refusal_has_a_registered_wire_code() {
         assert_eq!(r.refusal().rule_index, None);
     }
     assert_eq!(R::OwnerNotWallet.code(), RefusalCode::TX_SENDER_MISMATCH);
+    assert_eq!(
+        R::NativeAmountOverBound.code(),
+        RefusalCode::TX_VALUE_NOT_ALLOWED
+    );
     assert_eq!(
         R::SelectorNotTransfer.code(),
         RefusalCode::TX_SELECTOR_NOT_ALLOWED
@@ -839,6 +868,27 @@ fn refuses_self_transfer() {
         ..Tx::native()
     };
     assert_eq!(refuse(&tx.raw()), TronRefusal::SelfTransfer);
+}
+
+#[test]
+fn refuses_native_amount_over_bound() {
+    // 2^53, 2^53 + 1 and i64::MAX (2^63 − 1): valid `int64`s, above what JS tooling reads exactly.
+    for amount in [1 << 53, (1 << 53) + 1, i64::MAX as u64] {
+        let tx = Tx {
+            value: transfer_value(&OWNER, &RCPT, amount),
+            ..Tx::native()
+        };
+        let r = refuse(&tx.raw());
+        assert_eq!(r, TronRefusal::NativeAmountOverBound, "amount {amount}");
+        assert_eq!(r.refusal().code, RefusalCode::TX_VALUE_NOT_ALLOWED);
+    }
+    // Check order (type 1): a `fee_limit` on a native transfer is reported first.
+    let tx = Tx {
+        value: transfer_value(&OWNER, &RCPT, 1 << 53),
+        fee_limit: Some(1),
+        ..Tx::native()
+    };
+    assert_eq!(refuse(&tx.raw()), TronRefusal::FeeLimitOnNative);
 }
 
 #[test]

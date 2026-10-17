@@ -5,11 +5,12 @@
 //! For any input, under an owner-permission and an active-permission wallet: decoding never panics
 //! and is deterministic. If the input is accepted, it is at most `MAX_RAW_BYTES`, the intent's
 //! `tx_hash` is SHA-256 of the input, the sign input is exactly the input under SHA-256, the sender
-//! is the wallet, and the expiry and fee limit are within the decoder's hard ceilings.
+//! is the wallet, and the expiry, the fee limit and a native amount are within the decoder's hard
+//! ceilings.
 
-use vaultex_types::{Address, EcdsaHash, NetworkId, SignInput, TxHash, WalletId, U256};
+use vaultex_types::{Address, AssetId, EcdsaHash, NetworkId, SignInput, TxHash, WalletId, U256};
 use vaultex_verify::tron::{
-    decode, TronDecodeCtx, MAX_FEE_LIMIT_SUN, MAX_RAW_BYTES, MAX_VALIDITY_MS,
+    decode, TronDecodeCtx, MAX_FEE_LIMIT_SUN, MAX_NATIVE_AMOUNT_SUN, MAX_RAW_BYTES, MAX_VALIDITY_MS,
 };
 
 /// The wallet and token of the seed corpus (synthetic test addresses).
@@ -62,6 +63,9 @@ pub fn check(data: &[u8]) -> usize {
             assert!(intent.not_after_ms <= NOW_MS + MAX_VALIDITY_MS);
             assert!(intent.fee_cap <= U256::from(MAX_FEE_LIMIT_SUN));
             assert!(intent.amount > U256::from(0));
+            if intent.asset == AssetId::Native {
+                assert!(intent.amount <= U256::from(MAX_NATIVE_AMOUNT_SUN));
+            }
         }
     }
     accepted

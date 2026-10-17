@@ -4,7 +4,7 @@
 //! # Accepted shapes (everything else is refused)
 //!
 //! - **Native TRX transfer:** one `TransferContract` (type 1) from the wallet to another address,
-//!   with no `fee_limit`.
+//!   with no `fee_limit` and an amount of at most [`MAX_NATIVE_AMOUNT_SUN`] (2^53 − 1 sun).
 //! - **TRC-20 transfer:** one `TriggerSmartContract` (type 31) calling `transfer(address,uint256)`
 //!   on an allowlisted token contract, with no call value, no TRC-10 token fields, a non-zero
 //!   recipient and amount, and a `fee_limit`.
@@ -31,10 +31,10 @@
 //!      matching `type_url` (`AccountPermissionUpdate`, type 46, has its own refusal).
 //! 3. **Semantics:** a claimed txid equals `sha256(raw)`; reference-block shape; `Permission_id`
 //!    equals the wallet's (absent means 0, owner; 1, witness, is never accepted); address shape
-//!    `0x41 ‖ 20`; owner is the wallet; native: not to itself, no `fee_limit`; TRC-20: selector,
-//!    length, zero padding, recipient and amount non-zero, allowlisted token, `fee_limit` present
-//!    and within bound; `now < expiration ≤ now + validity bound`; `timestamp ≤ expiration` and
-//!    within `[now − validity bound, now + skew]`.
+//!    `0x41 ‖ 20`; owner is the wallet; native: not to itself, no `fee_limit`, amount at most
+//!    `2^53−1`; TRC-20: selector, length, zero padding, recipient and amount non-zero, allowlisted
+//!    token, `fee_limit` present and within bound; `now < expiration ≤ now + validity bound`;
+//!    `timestamp ≤ expiration` and within `[now − validity bound, now + skew]`.
 //! 4. **Canonical form:** re-encoding the decoded fields with an encoder written apart from the
 //!    reader must give back the input byte for byte. java-tron computes the txid over its own
 //!    re-serialisation of `raw`, so only canonical bytes have `sha256(raw)` equal to the chain txid.
@@ -70,6 +70,14 @@ pub const MAX_RAW_BYTES: usize = 512;
 pub const MAX_VALIDITY_MS: u64 = 86_400_000;
 /// Hard ceiling on `fee_limit`: 15,000 TRX in sun, the mainnet maximum.
 pub const MAX_FEE_LIMIT_SUN: u64 = 15_000_000_000;
+/// Hard ceiling on a native TRX `amount`: 2^53 − 1 sun (JavaScript's `Number.MAX_SAFE_INTEGER`,
+/// about 9.0 billion TRX). tronweb reads `int64` fields as JS numbers, which are exact only up to
+/// this value; above it, JS tooling (tronweb, approver tools, the JS oracle) would show a rounded
+/// amount while the kernel and the chain read the exact one. Refusing larger amounts keeps every
+/// reader on the same number (owner decision, 2026-10-16). TRC-20 amounts are 32-byte ABI words,
+/// which tronweb reads as hex, and are not bounded here. Not configurable: per-transaction amount
+/// caps belong to the policy bundle.
+pub const MAX_NATIVE_AMOUNT_SUN: u64 = 9_007_199_254_740_991; // 2^53 − 1
 
 /// What the decoder needs besides the bytes. Every field except `claimed_txid` comes from the
 /// verified policy bundle or the caller's own clock, never from the request being decided.
@@ -154,6 +162,8 @@ pub enum TronRefusal {
     OwnerNotWallet,
     /// A native transfer to the sender itself.
     SelfTransfer,
+    /// A native transfer of more than [`MAX_NATIVE_AMOUNT_SUN`].
+    NativeAmountOverBound,
     /// A token transfer of zero.
     AmountZero,
     /// Contract-call data shorter than a selector, or not 68 bytes.
@@ -211,9 +221,12 @@ impl TronRefusal {
             | R::RecipientZero
             | R::FeeLimitMissing
             | R::FeeLimitOnNative => RefusalCode::TX_SHAPE_NOT_ALLOWED,
-            R::CallValuePresent | R::Trc10FieldsPresent | R::AmountZero => {
-                RefusalCode::TX_VALUE_NOT_ALLOWED
-            }
+            // ponytail: the registry has no amount-bound code (the fee analogue is
+            // TX_FEE_OVER_BOUND); TX_VALUE_NOT_ALLOWED is the closest until WS-03 appends one.
+            R::CallValuePresent
+            | R::Trc10FieldsPresent
+            | R::AmountZero
+            | R::NativeAmountOverBound => RefusalCode::TX_VALUE_NOT_ALLOWED,
             R::CalldataLength | R::SelectorNotTransfer => RefusalCode::TX_SELECTOR_NOT_ALLOWED,
             R::TokenNotAllowlisted => RefusalCode::ASSET_NOT_ALLOWED,
             R::DigestMismatch => RefusalCode::TX_DIGEST_MISMATCH,
@@ -361,6 +374,9 @@ pub fn decode(raw: &[u8], ctx: &TronDecodeCtx<'_>) -> Result<(IntentV1, SignInpu
             }
             if fee_limit.is_some() {
                 return Err(R::FeeLimitOnNative);
+            }
+            if amount > MAX_NATIVE_AMOUNT_SUN {
+                return Err(R::NativeAmountOverBound);
             }
             (counterparty, AssetId::Native, U256::from(amount), 0)
         }

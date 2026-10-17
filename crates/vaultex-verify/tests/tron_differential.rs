@@ -21,10 +21,9 @@
 //! differs from the kernel's intent. The target is 0. Inputs the kernel refuses are counted, not
 //! judged: the kernel is meant to be stricter than tronweb.
 //!
-//! **Known class, open:** the kernel accepts native amounts up to `2^63 − 1` sun, and tronweb
-//! reports any amount above `2^53 − 1` rounded to a JS number. Those inputs are counted and printed
-//! separately ([`js_rounded_native_amount`]) until the kernel either refuses such amounts or the
-//! limit is documented as tronweb's.
+//! tronweb reads `int64` fields as JS numbers, so it reports a native amount above `2^53 − 1` sun
+//! rounded. The kernel refuses those amounts (`NativeAmountOverBound`), so an accepted amount is
+//! compared exactly, with no exception for that class.
 
 use std::io::Write;
 use std::path::Path;
@@ -335,7 +334,7 @@ fn vary(b: &mut Base, rng: &mut Rng) {
                 }
                 data[36..].copy_from_slice(&amount);
             } else {
-                b.amount = Some(rng.log_uniform(63));
+                b.amount = Some(rng.log_uniform(53)); // up to the kernel's 2^53 − 1 bound
             }
         }
         1 => {
@@ -703,7 +702,7 @@ fn kernel(input: &[u8]) -> Result<(IntentV1, u8), TronRefusal> {
 /// Every refusal the bytes alone can trigger. Not reachable from the bytes: `NetworkNotTron` and
 /// `DigestMismatch` (the context), and `NonCanonicalEncoding` (the reader refuses first; see its
 /// unit test).
-const REACHABLE: [&str; 33] = [
+const REACHABLE: [&str; 34] = [
     "Empty",
     "TooLarge",
     "PbMalformed",
@@ -726,6 +725,7 @@ const REACHABLE: [&str; 33] = [
     "AddressShape",
     "OwnerNotWallet",
     "SelfTransfer",
+    "NativeAmountOverBound",
     "AmountZero",
     "CalldataLength",
     "SelectorNotTransfer",
@@ -911,22 +911,6 @@ fn disagreements(input: &[u8], intent: &IntentV1, permission: u8, o: &Value) -> 
         .collect()
 }
 
-/// The one known class of accept-disagreement: a native amount above 2^53 − 1 sun. tronweb reads
-/// `int64` fields as JS numbers, so it reports the amount rounded to the nearest double, while the
-/// kernel and the chain read it exactly. Everything else agrees, including the txid and the
-/// re-serialisation (the amount sits in the parameter's opaque bytes). True only when "amount" is
-/// the sole disagreement and tronweb's value is exactly the kernel's amount rounded to an `f64`.
-fn js_rounded_native_amount(intent: &IntentV1, o: &Value, d: &[&str]) -> bool {
-    let (low, high) = intent.amount.0.split_at(8);
-    let amount = u64::from_le_bytes(low.try_into().unwrap());
-    let tronweb = &o["tx"]["contract"][0]["parameter"]["value"]["amount"];
-    intent.asset == AssetId::Native
-        && d == ["amount"]
-        && high.iter().all(|b| *b == 0)
-        && amount > (1 << 53) - 1
-        && tronweb.as_f64() == Some(amount as f64)
-}
-
 #[test]
 #[ignore = "needs Node.js and `npm ci --ignore-scripts` in differential/"]
 fn tronweb_agrees_with_every_kernel_accept() {
@@ -935,7 +919,7 @@ fn tronweb_agrees_with_every_kernel_accept() {
     let (versions, readings) = tronweb(&inputs);
 
     let (mut accepted, mut stricter, mut both_refuse) = (0, 0, 0);
-    let (mut disagreeing, mut rounded) = (Vec::new(), 0);
+    let mut disagreeing = Vec::new();
     for (input, reading) in inputs.iter().zip(&readings) {
         match kernel(input) {
             Ok((intent, permission)) => {
@@ -951,15 +935,7 @@ fn tronweb_agrees_with_every_kernel_accept() {
                     assert!(!disagreements(input, &intent, permission ^ 2, reading).is_empty());
                 }
                 let d = disagreements(input, &intent, permission, reading);
-                if d.is_empty() {
-                    continue;
-                }
-                // ponytail: the known class stays counted and printed, but is kept out of the
-                // assertion until R3/R1 decide whether the kernel refuses native amounts above
-                // 2^53 − 1 (then this branch never fires) or documents the tronweb limit.
-                if js_rounded_native_amount(&intent, reading, &d) {
-                    rounded += 1;
-                } else {
+                if !d.is_empty() {
                     disagreeing.push((hex(input), d));
                 }
             }
@@ -974,8 +950,7 @@ fn tronweb_agrees_with_every_kernel_accept() {
     println!("  oracle: {versions}");
     println!("  kernel: vaultex-verify {}", env!("CARGO_PKG_VERSION"));
     println!(
-        "  kernel accepts: {accepted}; accept-disagreements: {} (+ {rounded} known: native amount \
-         above 2^53 - 1, which tronweb rounds to a JS number)",
+        "  kernel accepts: {accepted}; accept-disagreements: {}",
         disagreeing.len()
     );
     println!("  kernel refuses, tronweb parses (kernel stricter): {stricter}");
