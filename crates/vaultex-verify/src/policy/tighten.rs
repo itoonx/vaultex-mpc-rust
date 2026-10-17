@@ -10,7 +10,7 @@ use super::{AssetRuleV1, PolicyBundleV1, RecipientsV1, WalletV1};
 /// loosening, which needs M-of-N and waits out the time lock.
 pub fn tightens(old: &PolicyBundleV1, new: &PolicyBundleV1) -> bool {
     new.admins == old.admins
-        && new.loosen_delay_ms >= old.loosen_delay_ms
+        && new.loosen_delay_ms == old.loosen_delay_ms
         && subset(&new.initiators, &old.initiators)
         && subset(&new.approvers, &old.approvers)
         && breaker(&old.breaker, &new.breaker)

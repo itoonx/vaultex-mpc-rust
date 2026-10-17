@@ -122,7 +122,8 @@ fn window(window_ms: u64, max_amount: u64, max_count: u32, max_fee: u64) -> Wind
 /// recipients, and a TRC-20 to anyone.
 fn base() -> PolicyBundleV1 {
     PolicyBundleV1 {
-        version: 1,
+        epoch: 1,
+        seq: 0,
         parent: [0; 32],
         admins: admins(),
         loosen_delay_ms: DAY,
@@ -206,19 +207,43 @@ fn edited(from: PolicyBundleV1, edit: impl FnOnce(&mut PolicyBundleV1)) -> Polic
     b
 }
 
-/// The bundle that replaces `from` while `from` is in force: version `version`, parent `from`,
-/// with `edit` applied (which may re-point the parent).
-fn next(
-    from: PolicyBundleV1,
-    version: u64,
-    edit: impl FnOnce(&mut PolicyBundleV1),
-) -> PolicyBundleV1 {
+/// A step on `from` (in force): the same epoch, the next seq, parent `from`, then `edit`.
+fn step(from: &PolicyBundleV1, edit: impl FnOnce(&mut PolicyBundleV1)) -> PolicyBundleV1 {
     let parent = from.digest();
-    edited(from, |b| {
-        b.version = version;
+    edited(from.clone(), |b| {
+        b.seq += 1;
         b.parent = parent;
         edit(b);
     })
+}
+
+/// A quorum bundle starting `epoch`, anchored to `anchor`: `anchor`'s content, then `edit`.
+fn quorum(
+    anchor: &PolicyBundleV1,
+    epoch: u32,
+    edit: impl FnOnce(&mut PolicyBundleV1),
+) -> PolicyBundleV1 {
+    let parent = anchor.digest();
+    edited(anchor.clone(), |b| {
+        b.epoch = epoch;
+        b.seq = 0;
+        b.parent = parent;
+        edit(b);
+    })
+}
+
+/// `(epoch, seq)` as the one `u64` requests name, packed here independently of the kernel.
+fn ver(epoch: u32, seq: u32) -> u64 {
+    (u64::from(epoch) << 32) | u64::from(seq)
+}
+
+/// A version as the vector file writes it.
+fn ver_json(version: u64) -> Value {
+    json!({ "epoch": (version >> 32).to_string(), "seq": (version & 0xffff_ffff).to_string() })
+}
+
+fn body_ver(body: &PolicyBundleV1) -> Value {
+    json!({ "epoch": body.epoch.to_string(), "seq": body.seq.to_string() })
 }
 
 /// TRX capped at `cap`, its top tier moved with it.
@@ -366,19 +391,19 @@ fn unhex(s: &str) -> Vec<u8> {
 // ───────────────────────────── expectations (written by hand) ─────────────────────────────
 
 fn effective(body: &PolicyBundleV1) -> Value {
-    json!({ "effective": { "version": body.version.to_string(), "digest": hx(&body.digest()) } })
+    json!({ "effective": { "version": body_ver(body), "digest": hx(&body.digest()) } })
 }
 
 fn pending(body: &PolicyBundleV1, effective_at_ms: u64) -> Value {
     json!({ "pending": {
-        "version": body.version.to_string(),
+        "version": body_ver(body),
         "digest": hx(&body.digest()),
         "effective_at_ms": effective_at_ms.to_string(),
     } })
 }
 
 fn in_force(body: &PolicyBundleV1) -> Value {
-    json!({ "in_force": { "version": body.version.to_string(), "digest": hx(&body.digest()) } })
+    json!({ "in_force": { "version": body_ver(body), "digest": hx(&body.digest()) } })
 }
 
 /// A refusal: the wire code, its registry name, and the check (the `PolicyRefusal` variant).
@@ -454,7 +479,7 @@ impl Case {
     /// A request naming `version` at `now_ms`.
     fn use_version(mut self, version: u64, now_ms: u64, expect: Value) -> Self {
         self.steps.push(json!({ "use": {
-            "version": version.to_string(),
+            "version": ver_json(version),
             "now_ms": now_ms.to_string(),
         } }));
         self.expect.push(expect);
@@ -464,7 +489,7 @@ impl Case {
     /// The decoder view for `wallet_id` on `network`, under `version`.
     fn view(mut self, version: u64, wallet_id: &str, network: &str, expect: Value) -> Self {
         self.steps.push(json!({ "view": {
-            "version": version.to_string(),
+            "version": ver_json(version),
             "now_ms": T1.to_string(),
             "wallet_id": wallet_id,
             "network": network,
@@ -476,7 +501,7 @@ impl Case {
     /// The asset rules applied to `intent`, under `version`.
     fn intent(mut self, version: u64, intent: &IntentV1, expect: Value) -> Self {
         self.steps.push(json!({ "intent": {
-            "version": version.to_string(),
+            "version": ver_json(version),
             "now_ms": T1.to_string(),
             "intent": hx(&to_canonical(intent).unwrap()),
         } }));
@@ -597,10 +622,10 @@ fn table_rows() -> Vec<Row> {
         ),
         row(
             "DELAY-UP",
-            "loosen_delay_ms: 2 days to 3",
+            "loosen_delay_ms: 2 days to 3 (only a quorum bundle changes the time lock)",
             strict,
             |b| b.loosen_delay_ms = 3 * DAY,
-            true,
+            false,
         ),
         row(
             "INITIATORS-ADD",
@@ -935,7 +960,8 @@ fn table_cases() -> Vec<Case> {
         .map(|r| {
             let (name, description, tightens) = (r.name, r.description, r.tightens);
             let genesis = (r.from)();
-            let v2 = next(genesis.clone(), 2, r.edit);
+            let as_step = step(&genesis, r.edit);
+            let as_quorum = quorum(&genesis, 2, r.edit);
             let gname = if genesis == base() {
                 "genesis"
             } else {
@@ -943,34 +969,37 @@ fn table_cases() -> Vec<Case> {
             };
             let delay = genesis.loosen_delay_ms;
             let (kind, rule) = if tightens {
-                ("TIGHTEN", "offer steps 5 and 7 (tightening: 1-of-N)")
+                (
+                    "TIGHTEN",
+                    "offer steps 5 and 7 (a step that tightens: 1-of-N)",
+                )
             } else {
                 (
                     "LOOSEN",
-                    "offer steps 5 and 7 (loosening: M-of-N, time lock)",
+                    "offer step 5 (not a tightening: a quorum bundle, M-of-N, time lock)",
                 )
             };
             let id = format!("T-{kind}-{name}");
             let c = case(&id, rule, Some("A-GENESIS"), description).genesis(gname, &genesis);
             if tightens {
                 c.offer(
-                    &format!("{id}/v2-1of3"),
-                    sign(&v2, &[3]),
+                    &format!("{id}/step-1of3"),
+                    sign(&as_step, &[3]),
                     T1,
-                    effective(&v2),
+                    effective(&as_step),
                 )
             } else {
                 c.offer(
-                    &format!("{id}/v2-1of3"),
-                    sign(&v2, &[3]),
+                    &format!("{id}/step-1of3"),
+                    sign(&as_step, &[3]),
                     T1,
-                    refuse(RefusalCode::BUNDLE_INVALID, "Quorum"),
+                    refuse(RefusalCode::BUNDLE_INVALID, "StepNotTighter"),
                 )
                 .offer(
-                    &format!("{id}/v2-2of3"),
-                    sign(&v2, &[1, 2]),
+                    &format!("{id}/quorum-2of3"),
+                    sign(&as_quorum, &[1, 2]),
                     T1,
-                    pending(&v2, T1 + delay),
+                    pending(&as_quorum, T1 + delay),
                 )
             }
         })
@@ -1010,16 +1039,20 @@ fn sized(target: usize) -> PolicyBundleV1 {
 
 fn cases() -> Vec<Case> {
     let b = base();
-    let loose = next(base(), 2, |b| trx_cap(b, 2_000_000_000));
-    let tight2 = next(base(), 2, |b| trx_cap(b, 500_000_000));
-    // Version 3 while `loose` (version 2) is pending: its parent is still the genesis.
-    let tight3 = next(base(), 3, |b| trx_cap(b, 500_000_000));
-    let replaces = next(loose.clone(), 3, |b| b.parent = base().digest());
+    // Quorum bundles anchored to the genesis: a loosening at epoch 2, a tightening at epoch 3 (it
+    // supersedes `loose` while that is pending), and another loosening at epoch 3.
+    let loose = quorum(&b, 2, |b| trx_cap(b, 2_000_000_000));
+    let tight3 = quorum(&b, 3, |b| trx_cap(b, 500_000_000));
+    let replaces = quorum(&b, 3, |b| trx_cap(b, 2_000_000_000));
+    // Steps: on the genesis, and on the zero-approval genesis.
+    let tight2 = step(&b, |b| trx_cap(b, 500_000_000));
+    let zero_step = step(&zero(), |b| trx_cap(b, 500_000_000));
+    let delay_down = quorum(&strict(), 2, |b| b.loosen_delay_ms = DAY);
     let mut out = vec![
         // ── accept sequences ──
-        case("A-GENESIS", "offer steps 1 to 8 (genesis)", None, "The genesis bundle, signed 2-of-3 by the pinned admins, takes effect at once")
+        case("A-GENESIS", "offer steps 1 to 8 (genesis)", None, "The genesis bundle (epoch 1, seq 0, zero parent), signed 2-of-3 by the pinned admins, takes effect at once")
             .genesis("genesis", &b)
-            .use_version(1, T0, in_force(&b)),
+            .use_version(ver(1, 0), T0, in_force(&b)),
         case("A-GENESIS-3OF3", "offer step 7", Some("A-GENESIS"), "Signed by all three admins")
             .offer("A-GENESIS-3OF3/v1", sign(&b, &[3, 1, 2]), T0, effective(&b)),
         case("A-GENESIS-DUPLICATE", "offer step 7 (each key counts once)", Some("A-GENESIS"), "A duplicated signature next to a second admin's still reaches 2-of-3")
@@ -1040,71 +1073,131 @@ fn cases() -> Vec<Case> {
             .genesis("A-DELAY-MAX/v1", &edited(base(), |b| b.loosen_delay_ms = MAX_LOOSEN_DELAY_MS)),
         case("A-SIZE-MAX", "offer step 1 (bound)", Some("A-GENESIS"), "A signed bundle of exactly MAX_BUNDLE_BYTES")
             .genesis("A-SIZE-MAX/v1", &sized(MAX_BUNDLE_BYTES)),
-        case("A-TIGHTEN", "offer steps 5 and 7", Some("A-GENESIS"), "A tightening signed by one admin takes effect at once; the old version no longer serves")
+        case("A-TIGHTEN", "offer steps 5 and 7 (a step)", Some("A-GENESIS"), "A step that tightens, signed by one admin, takes effect at once; the old version no longer serves")
             .genesis("genesis", &b)
-            .offer("A-TIGHTEN/v2-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
-            .use_version(2, T1, in_force(&tight2))
-            .use_version(1, T1, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch")),
-        case("A-LOOSEN", "offer step 8 and the time lock", Some("A-GENESIS"), "A loosening signed 2-of-3 waits one day from this signer's receipt: refused one millisecond before, in force at the boundary")
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .use_version(ver(1, 1), T1, in_force(&tight2))
+            .use_version(ver(1, 0), T1, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch")),
+        case("A-LOOSEN", "offer step 8 and the time lock", Some("A-GENESIS"), "A quorum loosening signed 2-of-3 waits one day from this signer's receipt: refused one millisecond before, in force at the boundary")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .use_version(2, T1 + DAY - 1, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
-            .use_version(1, T1 + DAY - 1, in_force(&b))
-            .use_version(2, T1 + DAY, in_force(&loose))
-            .use_version(1, T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch")),
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .use_version(ver(2, 0), T1 + DAY - 1, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
+            .use_version(ver(1, 0), T1 + DAY - 1, in_force(&b))
+            .use_version(ver(2, 0), T1 + DAY, in_force(&loose))
+            .use_version(ver(1, 0), T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch")),
         case("A-LOCK-FROM-RECEIPT", "time lock (measured from this signer's receipt)", Some("A-LOOSEN"), "Received two days after genesis: still pending one day after genesis plus one day")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T0 + 2 * DAY, pending(&loose, T0 + 3 * DAY))
-            .use_version(2, T0 + 3 * DAY - 1, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
-            .use_version(2, T0 + 3 * DAY, in_force(&loose)),
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T0 + 2 * DAY, pending(&loose, T0 + 3 * DAY))
+            .use_version(ver(2, 0), T0 + 3 * DAY - 1, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
+            .use_version(ver(2, 0), T0 + 3 * DAY, in_force(&loose)),
         case("A-DELAY-OF-ACTIVE", "time lock (the active bundle's delay)", Some("A-LOOSEN"), "A loosening that shortens the delay to one day still waits the active two days")
             .genesis("genesis-strict", &strict())
-            .offer("A-DELAY-OF-ACTIVE/v2", sign(&next(strict(), 2, |b| b.loosen_delay_ms = DAY), &[1, 2]), T1, pending(&next(strict(), 2, |b| b.loosen_delay_ms = DAY), T1 + 2 * DAY))
-            .use_version(2, T1 + DAY, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
-            .use_version(2, T1 + 2 * DAY, in_force(&next(strict(), 2, |b| b.loosen_delay_ms = DAY))),
-        case("A-SUPERSEDE-MOFN", "offer step 7 (superseding a pending loosening needs M-of-N)", Some("A-LOOSEN"), "A tightening signed 2-of-3 while a loosening is pending takes effect at once and drops the loosening")
+            .offer("A-DELAY-OF-ACTIVE/q2", sign(&delay_down, &[1, 2]), T1, pending(&delay_down, T1 + 2 * DAY))
+            .use_version(ver(2, 0), T1 + DAY, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
+            .use_version(ver(2, 0), T1 + 2 * DAY, in_force(&delay_down)),
+        case("A-SUPERSEDE-MOFN", "offer step 7 (superseding a pending loosening needs M-of-N)", Some("A-LOOSEN"), "A quorum tightening signed 2-of-3 while a loosening is pending takes effect at once and drops the loosening")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
-            .use_version(2, T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
-            .use_version(3, T1 + DAY, in_force(&tight3)),
-        case("A-N1-SEEN", "offer step 3 (the parent is the bundle in force)", Some("A-SUPERSEDE-MOFN"), "A signer that received the loosening and the bundle that cancelled it: the cancelled bundle cannot come back")
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
+            .use_version(ver(2, 0), T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
+            .use_version(ver(3, 0), T1 + DAY, in_force(&tight3)),
+        case("A-N1-SEEN", "offer step 3 (no replay of a cancelled pending bundle)", Some("A-SUPERSEDE-MOFN"), "A signer that received the loosening and the bundle that cancelled it: the cancelled bundle cannot come back")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
-            .use_version(3, T1 + DAY, in_force(&tight3)),
-        case("A-N1-MISSED", "offer step 3 (versions that never came into force may be skipped)", Some("A-N1-SEEN"), "A signer that never received the cancelled loosening installs the cancelling bundle directly and ends in the same state")
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
+            .use_version(ver(3, 0), T1 + DAY, in_force(&tight3)),
+        case("A-N1-MISSED", "offer step 3 (epochs that never came into force may be skipped)", Some("A-N1-SEEN"), "A signer that never received the cancelled loosening installs the cancelling bundle directly and ends in the same state")
             .genesis("genesis", &b)
-            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
-            .use_version(3, T1 + DAY, in_force(&tight3)),
-        case("A-LOOSEN-REPLACES", "states (a loosening replaces the pending one)", Some("A-LOOSEN"), "A second loosening replaces the first, and its own lock starts at its receipt")
+            .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
+            .use_version(ver(3, 0), T1 + DAY, in_force(&tight3)),
+        case("A-LOOSEN-REPLACES", "states (a loosening replaces the pending one)", Some("A-LOOSEN"), "A second loosening replaces the first, and its own lock starts at its receipt; the replaced one cannot come back")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("A-LOOSEN-REPLACES/v3", sign(&replaces, &[1, 2]), T1 + 1_000, pending(&replaces, T1 + 1_000 + DAY))
-            .use_version(2, T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
-            .use_version(3, T1 + DAY, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
-            .use_version(3, T1 + 1_000 + DAY, in_force(&replaces)),
-        case("A-ZERO-TIGHTEN", "offer step 7 (zero approval needs M-of-N)", Some("A-GENESIS"), "A zero-approval policy that tightens, signed 2-of-3, takes effect at once")
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("A-LOOSEN-REPLACES/q3", sign(&replaces, &[1, 2]), T1 + 1_000, pending(&replaces, T1 + 1_000 + DAY))
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1 + 2_000, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
+            .use_version(ver(2, 0), T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
+            .use_version(ver(3, 0), T1 + DAY, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
+            .use_version(ver(3, 0), T1 + 1_000 + DAY, in_force(&replaces)),
+        case("A-ZERO-TIGHTEN", "offer step 7 (zero approval needs M-of-N)", Some("A-GENESIS"), "A zero-approval step that tightens, signed 2-of-3, takes effect at once")
             .genesis("genesis-zero", &zero())
-            .offer("A-ZERO-TIGHTEN/v2-2of3", sign(&next(zero(), 2, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, effective(&next(zero(), 2, |b| trx_cap(b, 500_000_000)))),
+            .offer("A-ZERO-TIGHTEN/step-2of3", sign(&zero_step, &[1, 2]), T1, effective(&zero_step)),
     ];
 
     // The judge is the effective bundle: a pending one has no authority until its lock ends.
-    let rotated = next(base(), 2, |b| b.admins.keys = keys(&[1, 2, 5]));
-    let after = next(rotated.clone(), 3, |b| trx_cap(b, 500_000_000));
-    let early = next(rotated.clone(), 3, |b| {
+    let rotated = quorum(&b, 2, |b| b.admins.keys = keys(&[1, 2, 5]));
+    let early = quorum(&b, 3, |b| {
+        b.admins.keys = keys(&[1, 2, 5]);
         trx_cap(b, 500_000_000);
-        b.parent = base().digest();
     });
+    let after = step(&rotated, |b| trx_cap(b, 500_000_000));
     out.push(
-        case("A-JUDGE-IS-EFFECTIVE", "offer step 4 (judge)", Some("A-LOOSEN"), "A rotation to admin 5 is pending: admin 5 alone cannot tighten yet, and can once the rotation is in force")
+        case("A-JUDGE-IS-EFFECTIVE", "offer step 4 (judge)", Some("A-LOOSEN"), "A rotation to admin 5 is pending: admin 5 alone cannot change anything yet, and can tighten once the rotation is in force")
             .genesis("genesis", &b)
-            .offer("A-JUDGE-IS-EFFECTIVE/v2", sign(&rotated, &[1, 3]), T1, pending(&rotated, T1 + DAY))
-            .offer("A-JUDGE-IS-EFFECTIVE/v3-early", sign(&early, &[5]), T1 + DAY - 1, refuse(RefusalCode::BUNDLE_INVALID, "Quorum"))
-            .offer("A-JUDGE-IS-EFFECTIVE/v3", sign(&after, &[5]), T1 + DAY, effective(&after)),
+            .offer("A-JUDGE-IS-EFFECTIVE/q2", sign(&rotated, &[1, 3]), T1, pending(&rotated, T1 + DAY))
+            .offer("A-JUDGE-IS-EFFECTIVE/q3-early", sign(&early, &[5]), T1 + DAY - 1, refuse(RefusalCode::BUNDLE_INVALID, "Quorum"))
+            .offer("A-JUDGE-IS-EFFECTIVE/step", sign(&after, &[5]), T1 + DAY, effective(&after)),
     );
+
+    // ── anchors (ADR-11 follow-up of 2026-10-18) ──
+    // (a) A quorum bundle signed against the anchor survives any number of steps.
+    let mut churn = vec![b.clone()];
+    for _ in 0..20 {
+        let last = churn.last().unwrap().clone();
+        churn.push(step(&last, |_| {}));
+    }
+    let mut n2 = case("A-N2-CHURN", "offer step 3 (a quorum bundle names the anchor)", Some("A-JUDGE-IS-EFFECTIVE"), "Twenty no-op steps by one admin neither invalidate nor delay a rotation signed 2-of-3 against the genesis, and no step lands while it is pending")
+        .genesis("genesis", &b);
+    for (i, s) in churn.iter().enumerate().skip(1) {
+        n2 = n2.offer(
+            &format!("A-N2-CHURN/step-{i}"),
+            sign(s, &[3]),
+            T1 + i as u64,
+            effective(s),
+        );
+    }
+    let late_step = step(&churn[20], |_| {});
+    out.push(
+        n2.offer(
+            "A-JUDGE-IS-EFFECTIVE/q2",
+            sign(&rotated, &[1, 3]),
+            T1 + 100,
+            pending(&rotated, T1 + 100 + DAY),
+        )
+        .offer(
+            "A-N2-CHURN/step-21",
+            sign(&late_step, &[3]),
+            T1 + 101,
+            refuse(RefusalCode::BUNDLE_INVALID, "StepWhilePending"),
+        )
+        .use_version(ver(1, 20), T1 + 100 + DAY - 1, in_force(&churn[20]))
+        .use_version(ver(2, 0), T1 + 100 + DAY, in_force(&rotated)),
+    );
+    // (b) It is classified against the bundle in force, steps included.
+    let same = quorum(&b, 2, |_| {});
+    let after_lock = quorum(&loose, 3, |b| trx_cap(b, 1_500_000_000));
+    let anchor2 = quorum(&b, 2, |b| trx_cap(b, 500_000_000));
+    let anchor3 = quorum(&anchor2, 3, |b| trx_cap(b, 400_000_000));
+    out.extend([
+        case("A-ANCHOR-CLASS", "offer step 5 (classified against the bundle in force)", Some("A-TIGHTEN"), "After a step lowered the TRX cap, a quorum bundle with the genesis content is a loosening: dropping the step waits out the lock")
+            .genesis("genesis", &b)
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .offer("A-ANCHOR-CLASS/q2", sign(&same, &[1, 2]), T1 + 1, pending(&same, T1 + 1 + DAY))
+            .use_version(ver(1, 1), T1 + DAY, in_force(&tight2))
+            .use_version(ver(2, 0), T1 + 1 + DAY, in_force(&same)),
+        case("A-ANCHOR-CLASS-LAGGING", "offer step 5 (classified against the bundle in force)", Some("A-ANCHOR-CLASS"), "A signer that missed the step classes the same quorum bundle as a tightening and installs it at once: both reach it")
+            .genesis("genesis", &b)
+            .offer("A-ANCHOR-CLASS/q2", sign(&same, &[1, 2]), T1 + 1, effective(&same)),
+        case("A-ANCHOR-AFTER-LOCK", "offer step 3 (the anchor moves with the quorum bundle in force)", Some("A-LOOSEN"), "Once a pending quorum bundle is in force it is the anchor of the next one")
+            .genesis("genesis", &b)
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("A-ANCHOR-AFTER-LOCK/q3", sign(&after_lock, &[1, 2]), T1 + DAY, effective(&after_lock)),
+        case("A-ANCHOR-AFTER-QUORUM", "offer step 3 (the anchor moves with the quorum bundle in force)", Some("A-GENESIS"), "A quorum tightening in force at once is the anchor of the next quorum bundle")
+            .genesis("genesis", &b)
+            .offer("A-ANCHOR-AFTER-QUORUM/q2", sign(&anchor2, &[1, 2]), T1, effective(&anchor2))
+            .offer("A-ANCHOR-AFTER-QUORUM/q3", sign(&anchor3, &[1, 2]), T1 + 1, effective(&anchor3)),
+    ]);
 
     // ── install refusals ──
     let mut trailing = sign(&b, &[1, 2]);
@@ -1156,7 +1249,7 @@ fn cases() -> Vec<Case> {
         .genesis("genesis", &b)
         .offer(
             "R-ADMIN-THRESHOLD-ZERO-LATER/v2",
-            sign(&next(base(), 2, |b| b.admins.threshold = 0), &[1, 2]),
+            sign(&quorum(&base(), 2, |b| b.admins.threshold = 0), &[1, 2]),
             T1,
             invalid("AdminThreshold"),
         ),
@@ -1257,7 +1350,7 @@ fn cases() -> Vec<Case> {
         .genesis("genesis", &b)
         .offer(
             "R-DELAY-LONG-LATER/v2",
-            sign(&next(base(), 2, |b| b.loosen_delay_ms = u64::MAX), &[3]),
+            sign(&step(&base(), |b| b.loosen_delay_ms = u64::MAX), &[3]),
             T1,
             invalid("DelayTooLong"),
         ),
@@ -1339,11 +1432,11 @@ fn cases() -> Vec<Case> {
             "R-ROLLBACK-LOWER",
             "offer step 3",
             Some("A-TIGHTEN"),
-            "Version 1 again after version 2",
+            "The genesis again after a step",
         )
         .genesis("genesis", &b)
         .offer(
-            "A-TIGHTEN/v2-1of3",
+            "A-TIGHTEN/step-1of3",
             sign(&tight2, &[3]),
             T1,
             effective(&tight2),
@@ -1358,18 +1451,18 @@ fn cases() -> Vec<Case> {
             "R-ROLLBACK-PENDING",
             "offer step 3 (the pending version counts)",
             Some("A-LOOSEN"),
-            "A second version 2 while version 2 is pending",
+            "A second epoch-2 bundle while epoch 2 is pending",
         )
         .genesis("genesis", &b)
         .offer(
-            "A-LOOSEN/v2",
+            "A-LOOSEN/q2",
             sign(&loose, &[1, 3]),
             T1,
             pending(&loose, T1 + DAY),
         )
         .offer(
             "R-ROLLBACK-PENDING/v2",
-            sign(&next(base(), 2, |b| trx_cap(b, 3_000_000_000)), &[1, 2]),
+            sign(&quorum(&base(), 2, |b| trx_cap(b, 3_000_000_000)), &[1, 2]),
             T1,
             refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"),
         ),
@@ -1377,11 +1470,11 @@ fn cases() -> Vec<Case> {
             "R-ROLLBACK-ZERO",
             "offer step 3",
             Some("A-GENESIS"),
-            "A genesis numbered 0",
+            "A genesis at epoch 0",
         )
         .offer(
             "R-ROLLBACK-ZERO/v0",
-            sign(&next(base(), 0, |_| {}), &[1, 2]),
+            sign(&edited(base(), |b| b.epoch = 0), &[1, 2]),
             T0,
             refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"),
         ),
@@ -1466,55 +1559,100 @@ fn cases() -> Vec<Case> {
             "R-QUORUM-ZERO-TIGHTEN",
             "offer step 7 (zero approval needs M-of-N)",
             Some("A-ZERO-TIGHTEN"),
-            "A zero-approval policy that tightens, signed by one admin",
+            "A zero-approval step that tightens, signed by one admin",
         )
         .genesis("genesis-zero", &zero())
         .offer(
-            "R-QUORUM-ZERO-TIGHTEN/v2-1of3",
-            sign(&next(zero(), 2, |b| trx_cap(b, 500_000_000)), &[1]),
+            "R-QUORUM-ZERO-TIGHTEN/step-1of3",
+            sign(&zero_step, &[1]),
             T1,
             invalid("Quorum"),
         ),
     ]);
 
     let rollback = |check| refuse(RefusalCode::BUNDLE_ROLLBACK, check);
-    let gap = |b: &PolicyBundleV1| next(b.clone(), u64::MAX, |b| trx_cap(b, 500_000_000));
+    let seq_max = step(&b, |b| {
+        trx_cap(b, 500_000_000);
+        b.seq = u32::MAX;
+    });
+    let seq_at = |seq: u32| {
+        step(&b, |b| {
+            trx_cap(b, 500_000_000);
+            b.seq = seq;
+        })
+    };
+    let s2 = step(&tight2, |b| trx_cap(b, 400_000_000));
     out.extend([
-        case("R-SUPERSEDE-1OFN", "offer step 7 (superseding a pending loosening needs M-of-N)", Some("A-SUPERSEDE-MOFN"), "A tightening signed by one admin while a loosening is pending")
+        case("R-SUPERSEDE-1OFN", "offer step 3 (a step while a loosening is pending)", Some("A-SUPERSEDE-MOFN"), "A step signed by one admin while a loosening is pending")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("SUPERSEDE/v3-1of3", sign(&tight3, &[3]), T1 + 1, invalid("Quorum"))
-            .use_version(2, T1 + DAY, in_force(&loose)),
-        case("A-VERSION-AT-K", "offer step 3 (bound)", Some("A-TIGHTEN"), "A tightening numbered h + K (h = 1) takes effect")
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1 + 1, invalid("StepWhilePending"))
+            .use_version(ver(2, 0), T1 + DAY, in_force(&loose)),
+        case("R-QUORUM-SUPERSEDE-1OFN", "offer step 7 (a quorum bundle needs M-of-N)", Some("A-SUPERSEDE-MOFN"), "A quorum tightening signed by one admin while a loosening is pending")
             .genesis("genesis", &b)
-            .offer("A-VERSION-AT-K/v17", sign(&next(tight2.clone(), 1 + MAX_VERSION_STEP, |b| b.parent = base().digest()), &[3]), T1, effective(&next(tight2.clone(), 1 + MAX_VERSION_STEP, |b| b.parent = base().digest()))),
-        case("A-VERSION-GENESIS-AT-K", "offer step 3 (bound)", Some("A-GENESIS"), "A genesis numbered K (h = 0)")
-            .genesis("A-VERSION-GENESIS-AT-K/v16", &edited(base(), |b| b.version = MAX_VERSION_STEP)),
-        case("R-VERSION-PAST-K", "offer step 3 (bound)", Some("A-VERSION-AT-K"), "A tightening numbered h + K + 1 (h = 1)")
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("SUPERSEDE/q3-1of3", sign(&tight3, &[3]), T1 + 1, invalid("Quorum"))
+            .use_version(ver(2, 0), T1 + DAY, in_force(&loose)),
+        case("R-QUORUM-EPOCH-1OFN", "offer step 7 (one admin cannot start an epoch)", Some("A-ANCHOR-AFTER-QUORUM"), "A quorum tightening signed by one admin, with nothing pending")
             .genesis("genesis", &b)
-            .offer("R-VERSION-PAST-K/v18", sign(&next(tight2.clone(), 2 + MAX_VERSION_STEP, |b| b.parent = base().digest()), &[3]), T1, invalid("VersionGap")),
-        case("R-VERSION-GAP-MAX", "offer step 3", Some("A-TIGHTEN"), "A tightening by one admin numbered 2^64 − 1, which would end the version sequence")
+            .offer("A-ANCHOR-AFTER-QUORUM/q2-1of3", sign(&anchor2, &[3]), T1, invalid("Quorum")),
+        case("A-VERSION-EPOCH-AT-K", "offer step 3 (bound)", Some("A-ANCHOR-AFTER-QUORUM"), "A quorum bundle at epoch E + K (E = 1)")
             .genesis("genesis", &b)
-            .offer("R-VERSION-GAP-MAX/v-max", sign(&gap(&b), &[3]), T1, invalid("VersionGap")),
-        case("R-VERSION-GAP-GENESIS", "offer step 3 (bound)", Some("A-VERSION-GENESIS-AT-K"), "A genesis numbered K + 1 (h = 0)")
-            .offer("R-VERSION-GAP-GENESIS/v17", sign(&edited(base(), |b| b.version = MAX_VERSION_STEP + 1), &[1, 2]), T0, invalid("VersionGap")),
-        case("R-PARENT-FORK", "offer step 3 (the parent is the bundle in force)", Some("A-N1-MISSED"), "A signer whose bundle in force is another version 2 cannot install a version 3 built on version 1")
+            .offer("A-VERSION-EPOCH-AT-K/q17", sign(&quorum(&b, 1 + MAX_VERSION_STEP, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, effective(&quorum(&b, 1 + MAX_VERSION_STEP, |b| trx_cap(b, 500_000_000)))),
+        case("A-VERSION-SEQ-AT-K", "offer step 3 (bound)", Some("A-TIGHTEN"), "A step at seq s + K (s = 0)")
             .genesis("genesis", &b)
-            .offer("A-TIGHTEN/v2-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
-            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, rollback("ParentMismatch")),
+            .offer("A-VERSION-SEQ-AT-K/step-16", sign(&seq_at(MAX_VERSION_STEP), &[3]), T1, effective(&seq_at(MAX_VERSION_STEP))),
+        case("A-VERSION-GENESIS-AT-K", "offer step 3 (bound)", Some("A-GENESIS"), "A genesis at epoch K (E = 0)")
+            .genesis("A-VERSION-GENESIS-AT-K/q16", &edited(base(), |b| b.epoch = MAX_VERSION_STEP)),
+        case("R-VERSION-EPOCH-PAST-K", "offer step 3 (bound)", Some("A-VERSION-EPOCH-AT-K"), "A quorum bundle at epoch E + K + 1 (E = 1)")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-EPOCH-PAST-K/q18", sign(&quorum(&b, 2 + MAX_VERSION_STEP, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, invalid("VersionGap")),
+        case("R-VERSION-SEQ-PAST-K", "offer step 3 (bound)", Some("A-VERSION-SEQ-AT-K"), "A step at seq s + K + 1 (s = 0)")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-SEQ-PAST-K/step-17", sign(&seq_at(MAX_VERSION_STEP + 1), &[3]), T1, invalid("VersionGap")),
+        case("R-VERSION-GAP-MAX", "offer step 3 (no single-admin freeze)", Some("A-TIGHTEN"), "A step by one admin at seq 2^32 − 1, which would end the step sequence")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-GAP-MAX/step-max", sign(&seq_max, &[3]), T1, invalid("VersionGap")),
+        case("R-VERSION-GAP-EPOCH-MAX", "offer step 3", Some("A-VERSION-EPOCH-AT-K"), "A quorum bundle at epoch 2^32 − 1")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-GAP-EPOCH-MAX/q-max", sign(&quorum(&b, u32::MAX, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, invalid("VersionGap")),
+        case("R-VERSION-STEP-EPOCH", "offer step 3 (one admin cannot move the epoch)", Some("A-TIGHTEN"), "A step by one admin that names the next epoch")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-STEP-EPOCH/step", sign(&step(&b, |b| { trx_cap(b, 500_000_000); b.epoch = 2; }), &[3]), T1, invalid("VersionGap")),
+        case("R-VERSION-GENESIS-STEP", "offer step 3 (a genesis is a quorum bundle)", Some("A-GENESIS"), "A first bundle at (1, 1) with a zero parent")
+            .offer("R-VERSION-GENESIS-STEP/step", sign(&edited(base(), |b| b.seq = 1), &[1, 2]), T0, invalid("VersionGap")),
+        case("R-VERSION-GAP-GENESIS", "offer step 3 (bound)", Some("A-VERSION-GENESIS-AT-K"), "A genesis at epoch K + 1 (E = 0)")
+            .offer("R-VERSION-GAP-GENESIS/q17", sign(&edited(base(), |b| b.epoch = MAX_VERSION_STEP + 1), &[1, 2]), T0, invalid("VersionGap")),
+        case("R-ROLLBACK-STEP", "offer step 3", Some("A-TIGHTEN"), "The first step again after the second")
+            .genesis("genesis", &b)
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .offer("R-ROLLBACK-STEP/step-2", sign(&s2, &[3]), T1 + 1, effective(&s2))
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1 + 2, rollback("Rollback")),
+        case("R-PARENT-FORK", "offer step 3 (a quorum bundle names the anchor)", Some("A-ANCHOR-AFTER-QUORUM"), "A signer whose anchor is another epoch-2 bundle cannot install an epoch-3 bundle built on the genesis")
+            .genesis("genesis", &b)
+            .offer("A-ANCHOR-AFTER-QUORUM/q2", sign(&anchor2, &[1, 2]), T1, effective(&anchor2))
+            .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, rollback("ParentMismatch")),
         case("R-PARENT-GENESIS", "offer step 3 (genesis has a zero parent)", Some("A-GENESIS"), "A genesis that names a parent")
             .offer("R-PARENT-GENESIS/v1", sign(&edited(base(), |b| b.parent = [1; 32]), &[1, 2]), T0, rollback("ParentMismatch")),
-        case("R-PARENT-ZERO", "offer step 3 (parent)", Some("A-TIGHTEN"), "A tightening whose parent is all zeros instead of the genesis")
+        case("R-PARENT-ZERO", "offer step 3 (a step names the bundle in force)", Some("A-TIGHTEN"), "A step whose parent is all zeros instead of the genesis")
             .genesis("genesis", &b)
-            .offer("R-PARENT-ZERO/v2", sign(&next(base(), 2, |b| { trx_cap(b, 500_000_000); b.parent = [0; 32]; }), &[3]), T1, rollback("ParentMismatch")),
-        case("R-PARENT-PENDING", "offer step 3 (the parent is the bundle in force)", Some("A-SUPERSEDE-MOFN"), "A tightening that names the pending loosening, not the bundle in force, as its parent")
+            .offer("R-PARENT-ZERO/step", sign(&step(&b, |b| { trx_cap(b, 500_000_000); b.parent = [0; 32]; }), &[3]), T1, rollback("ParentMismatch")),
+        case("R-PARENT-STEP-ANCHOR", "offer step 3 (a step names the bundle in force)", Some("R-ROLLBACK-STEP"), "A second step that names the anchor instead of the step in force")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("R-PARENT-PENDING/v3", sign(&next(base(), 3, |b| { trx_cap(b, 500_000_000); b.parent = loose.digest(); }), &[3]), T1 + 1, rollback("ParentMismatch")),
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .offer("R-PARENT-STEP-ANCHOR/step-2", sign(&step(&tight2, |b| { trx_cap(b, 400_000_000); b.parent = base().digest(); }), &[3]), T1 + 1, rollback("ParentMismatch")),
+        case("R-PARENT-PENDING", "offer step 3 (a quorum bundle names the anchor)", Some("A-SUPERSEDE-MOFN"), "A quorum bundle that names the pending loosening, not the anchor, as its parent")
+            .genesis("genesis", &b)
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("R-PARENT-PENDING/q3", sign(&quorum(&b, 3, |b| { trx_cap(b, 500_000_000); b.parent = loose.digest(); }), &[1, 2]), T1 + 1, rollback("ParentMismatch")),
+        case("R-PARENT-QUORUM-IN-FORCE", "offer step 3 (a quorum bundle names the anchor)", Some("A-ANCHOR-CLASS"), "A quorum bundle that names the step in force, not the anchor, as its parent")
+            .genesis("genesis", &b)
+            .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .offer("R-PARENT-QUORUM-IN-FORCE/q2", sign(&quorum(&tight2, 2, |_| {}), &[1, 2]), T1 + 1, rollback("ParentMismatch")),
         case("R-LOCK-OVERFLOW", "offer step 8 (bound)", Some("A-LOOSEN"), "A loosening received so late that its time lock would end past 2^64 − 1 ms; one millisecond earlier it ends exactly there")
             .genesis("genesis", &b)
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), u64::MAX - DAY + 1, refuse(RefusalCode::CLOCK_UNTRUSTED, "LockOverflow"))
-            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), u64::MAX - DAY, pending(&loose, u64::MAX)),
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), u64::MAX - DAY + 1, refuse(RefusalCode::CLOCK_UNTRUSTED, "LockOverflow"))
+            .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), u64::MAX - DAY, pending(&loose, u64::MAX)),
         case("R-BAD-SIGNATURE-SMALL-ORDER-R", "offer step 6 (strict verification)", Some("A-GENESIS"), "Admin 2's signature has a small-order R: cofactorless verification accepts it, strict verification refuses it")
             .offer("R-BAD-SIGNATURE-SMALL-ORDER-R/v1", sign_with(&b, vec![signature(1, &b.digest()), small_order_r_signature(2, &b.digest())]), T0, invalid("BadSignature")),
     ]);
@@ -1533,7 +1671,7 @@ fn cases() -> Vec<Case> {
             (
                 "T-CLASSIFY/any-window",
                 sign(
-                    &next(no_windows.clone(), 2, |b| {
+                    &step(&no_windows, |b| {
                         trx(b).windows = vec![window(DAY, u64::MAX, u32::MAX, u64::MAX)]
                     }),
                     &[1, 2],
@@ -1551,7 +1689,7 @@ fn cases() -> Vec<Case> {
             ("T-CLASSIFY/no-windows", sign(&no_windows, &[1, 2])),
             (
                 "T-CLASSIFY/no-windows-v2",
-                sign(&next(no_windows.clone(), 2, |_| {}), &[1, 2]),
+                sign(&step(&no_windows, |_| {}), &[1, 2]),
             ),
             true,
         ),
@@ -1585,20 +1723,25 @@ fn cases() -> Vec<Case> {
             None,
             "Nothing installed: every request is refused",
         )
-        .use_version(1, T0, refuse(RefusalCode::NO_POLICY, "NoPolicy"))
-        .view(1, WALLET, NILE, refuse(RefusalCode::NO_POLICY, "NoPolicy")),
+        .use_version(ver(1, 0), T0, refuse(RefusalCode::NO_POLICY, "NoPolicy"))
+        .view(
+            ver(1, 0),
+            WALLET,
+            NILE,
+            refuse(RefusalCode::NO_POLICY, "NoPolicy"),
+        ),
         used(
             "U-VERSION-MISMATCH",
             "use (version)",
             "A request naming a version that was never installed",
         )
         .use_version(
-            2,
+            ver(2, 0),
             T1,
             refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"),
         )
         .use_version(
-            0,
+            ver(0, 0),
             T1,
             refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"),
         ),
@@ -1607,14 +1750,14 @@ fn cases() -> Vec<Case> {
             "use (decoder view)",
             "The decoder's context comes from the bundle",
         )
-        .view(1, WALLET, NILE, view),
+        .view(ver(1, 0), WALLET, NILE, view),
         used(
             "U-VIEW-UNKNOWN-WALLET",
             "use (decoder view)",
             "A wallet the bundle does not list",
         )
         .view(
-            1,
+            ver(1, 0),
             "hot-two",
             NILE,
             refuse(RefusalCode::UNKNOWN_WALLET, "UnknownWallet"),
@@ -1625,7 +1768,7 @@ fn cases() -> Vec<Case> {
             "The wallet's own id on another network",
         )
         .view(
-            1,
+            ver(1, 0),
             WALLET,
             SHASTA,
             refuse(RefusalCode::NETWORK_MISMATCH, "NetworkMismatch"),
@@ -1636,33 +1779,37 @@ fn cases() -> Vec<Case> {
             "TRX at each tier edge and the cap; the token to an unlisted recipient",
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Native, 0x22, 1),
             admitted(&AssetId::Native, 1),
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Native, 0x22, 100_000_000),
             admitted(&AssetId::Native, 1),
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Native, 0x33, 100_000_001),
             admitted(&AssetId::Native, 2),
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Native, 0x22, 1_000_000_000),
             admitted(&AssetId::Native, 2),
         )
-        .intent(1, &intent(token(), 0x55, 1_000_001), admitted(&token(), 2)),
+        .intent(
+            ver(1, 0),
+            &intent(token(), 0x55, 1_000_001),
+            admitted(&token(), 2),
+        ),
         used(
             "U-INTENT-CAP",
             "use (asset rules)",
             "TRX one base unit over max_per_tx (bound)",
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Native, 0x22, 1_000_000_001),
             refuse(RefusalCode::AMOUNT_OVER_TX_CAP, "AmountOverCap"),
         ),
@@ -1672,7 +1819,7 @@ fn cases() -> Vec<Case> {
             "A token the bundle does not list",
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Contract(address(0x98)), 0x22, 1),
             refuse(RefusalCode::ASSET_NOT_ALLOWED, "AssetNotAllowed"),
         ),
@@ -1682,7 +1829,7 @@ fn cases() -> Vec<Case> {
             "TRX to an address not on its list",
         )
         .intent(
-            1,
+            ver(1, 0),
             &intent(AssetId::Native, 0x44, 1),
             refuse(RefusalCode::RECIPIENT_NOT_ALLOWED, "RecipientNotAllowed"),
         ),
@@ -1692,7 +1839,7 @@ fn cases() -> Vec<Case> {
             "An intent for a wallet the bundle does not list",
         )
         .intent(
-            1,
+            ver(1, 0),
             &other_wallet,
             refuse(RefusalCode::UNKNOWN_WALLET, "UnknownWallet"),
         ),
@@ -1702,7 +1849,7 @@ fn cases() -> Vec<Case> {
             "An intent on another network",
         )
         .intent(
-            1,
+            ver(1, 0),
             &other_network,
             refuse(RefusalCode::NETWORK_MISMATCH, "NetworkMismatch"),
         ),
@@ -1738,14 +1885,14 @@ fn refusal_json(r: PolicyRefusal) -> Value {
 fn offer_json(offer: Offer) -> Value {
     match offer {
         Offer::Effective { version, digest } => {
-            json!({ "effective": { "version": version.to_string(), "digest": hx(&digest) } })
+            json!({ "effective": { "version": ver_json(version), "digest": hx(&digest) } })
         }
         Offer::Pending {
             version,
             digest,
             effective_at_ms,
         } => json!({ "pending": {
-            "version": version.to_string(),
+            "version": ver_json(version),
             "digest": hx(&digest),
             "effective_at_ms": effective_at_ms.to_string(),
         } }),
@@ -1775,13 +1922,18 @@ fn answer(state: &mut PolicyState, genesis: &AdminSetV1, bundles: &Value, step: 
             Err(r) => refusal_json(r),
         };
     }
-    let bundle = match state.for_version(num(&input["version"]), now) {
+    let version = &input["version"];
+    let version = ver(
+        u32::try_from(num(&version["epoch"])).unwrap(),
+        u32::try_from(num(&version["seq"])).unwrap(),
+    );
+    let bundle = match state.for_version(version, now) {
         Ok(bundle) => bundle,
         Err(r) => return refusal_json(r),
     };
     match kind.as_str() {
         "use" => json!({ "in_force": {
-            "version": bundle.version().to_string(),
+            "version": ver_json(bundle.version()),
             "digest": hx(&bundle.digest()),
         } }),
         "view" => {
@@ -1890,7 +2042,7 @@ fn generate() -> Value {
             "admin5": key(5), "initiator": key(INITIATOR), "approver1": key(0x21),
             "approver2": key(0x22), "extra": key(EXTRA_KEY),
         },
-        "encoding": "bundles: hex of BCS(SignedPolicyBundleV1). intent: hex of BCS(IntentV1). asset: hex of BCS(AssetId). classify: the bodies of two named bundles (signatures unused). Integers: decimal strings.",
+        "encoding": "bundles: hex of BCS(SignedPolicyBundleV1). intent: hex of BCS(IntentV1). asset: hex of BCS(AssetId). classify: the bodies of two named bundles (signatures unused). version: {epoch, seq}; requests and receipts name it as epoch * 2^32 + seq. Integers: decimal strings.",
         "bundles": bundles,
         "vectors": vectors,
     })
@@ -2024,7 +2176,48 @@ fn policy_accepts_version_up_to_k() {
 
 #[test]
 fn policy_supersede_pending_needs_m_of_n() {
-    check(&["R-SUPERSEDE"]);
+    check(&["R-SUPERSEDE", "R-QUORUM-SUPERSEDE"]);
+}
+
+/// (a) N2: a quorum bundle signed against the anchor survives twenty no-op steps.
+#[test]
+fn policy_quorum_bundle_survives_step_churn() {
+    check(&["A-N2-CHURN"]);
+}
+
+/// (b) A quorum bundle is classified against the bundle in force, steps included.
+#[test]
+fn policy_quorum_bundle_classified_against_in_force() {
+    check(&["A-ANCHOR-CLASS", "R-PARENT-QUORUM-IN-FORCE"]);
+}
+
+/// (c) A cancelled or replaced pending quorum bundle cannot come back.
+#[test]
+fn policy_no_replay_of_cancelled_or_replaced_pending() {
+    check(&["A-N1-SEEN", "A-N1-MISSED", "A-LOOSEN-REPLACES"]);
+}
+
+/// (e) One admin can neither end the step sequence nor move the epoch.
+#[test]
+fn policy_no_single_admin_freeze() {
+    check(&[
+        "R-VERSION-GAP-MAX",
+        "R-VERSION-STEP-EPOCH",
+        "R-QUORUM-EPOCH-1OFN",
+    ]);
+}
+
+/// (g) A genesis is a quorum bundle with a zero parent.
+#[test]
+fn policy_genesis_is_a_quorum_bundle() {
+    check(&["A-GENESIS", "R-PARENT-GENESIS", "R-VERSION-GENESIS-STEP"]);
+}
+
+/// The anchor moves with the quorum bundle in force, whether it took effect at once or after its
+/// lock.
+#[test]
+fn policy_anchor_moves_with_quorum_bundles() {
+    check(&["A-ANCHOR-AFTER"]);
 }
 
 #[test]
@@ -2037,8 +2230,8 @@ fn policy_supersede_pending_with_m_of_n() {
 #[test]
 fn policy_missed_cancelled_loosening_converges() {
     check(&["A-N1"]);
-    let loose = next(base(), 2, |b| trx_cap(b, 2_000_000_000));
-    let cancel = next(base(), 3, |b| trx_cap(b, 500_000_000));
+    let loose = quorum(&base(), 2, |b| trx_cap(b, 2_000_000_000));
+    let cancel = quorum(&base(), 3, |b| trx_cap(b, 500_000_000));
     let genesis = PolicyState::default()
         .offer(&admins(), &sign(&base(), &[1, 2]), T0)
         .unwrap()
@@ -2244,7 +2437,7 @@ fn installed(body: &PolicyBundleV1) -> PolicyState {
 #[test]
 fn policy_tron_ctx_decodes_with_bundle_facts() {
     let state = installed(&base());
-    let bundle = state.for_version(1, DECODE_NOW).unwrap();
+    let bundle = state.for_version(ver(1, 0), DECODE_NOW).unwrap();
     let wallet_id = WalletId::new(WALLET).unwrap();
     let ctx = bundle
         .tron_ctx(&wallet_id, nile(), DECODE_NOW, None)
@@ -2262,7 +2455,7 @@ fn policy_tron_ctx_denies_by_default() {
     let state = installed(&edited(base(), |b| {
         b.wallets[0].assets.pop();
     }));
-    let bundle = state.for_version(1, DECODE_NOW).unwrap();
+    let bundle = state.for_version(ver(1, 0), DECODE_NOW).unwrap();
     let wallet_id = WalletId::new(WALLET).unwrap();
     let ctx = bundle
         .tron_ctx(&wallet_id, nile(), DECODE_NOW, None)
@@ -2273,7 +2466,7 @@ fn policy_tron_ctx_denies_by_default() {
     );
     // A bundle that pins permission 0 refuses the permission-2 transaction.
     let state = installed(&edited(base(), |b| wallet(b).permission_id = 0));
-    let bundle = state.for_version(1, DECODE_NOW).unwrap();
+    let bundle = state.for_version(ver(1, 0), DECODE_NOW).unwrap();
     let ctx = bundle
         .tron_ctx(&wallet_id, nile(), DECODE_NOW, None)
         .unwrap();
@@ -2293,7 +2486,7 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn loosened() -> PolicyBundleV1 {
-    next(base(), 2, |b| trx_cap(b, 2_000_000_000))
+    quorum(&base(), 2, |b| trx_cap(b, 2_000_000_000))
 }
 
 #[test]
@@ -2301,7 +2494,7 @@ fn policy_store_records_and_reloads() {
     let path = temp_dir("reload").join("policy.bcs");
     let mut store = PolicyStore::open(&path, admins()).unwrap();
     assert_eq!(
-        store.state().for_version(1, T0).map(|_| ()),
+        store.state().for_version(ver(1, 0), T0).map(|_| ()),
         Err(PolicyRefusal::NoPolicy)
     );
     assert!(!path.exists());
@@ -2317,24 +2510,24 @@ fn policy_store_records_and_reloads() {
     let mut store = PolicyStore::open(&path, admins()).unwrap();
     let state = store.state();
     assert_eq!(
-        state.for_version(2, T1 + DAY - 1).map(|_| ()),
+        state.for_version(ver(2, 0), T1 + DAY - 1).map(|_| ()),
         Err(PolicyRefusal::NotEffective)
     );
     assert_eq!(
-        state.for_version(2, T1 + DAY).unwrap().digest(),
+        state.for_version(ver(2, 0), T1 + DAY).unwrap().digest(),
         loosened().digest()
     );
     assert_eq!(
         state.pending().map(|(b, at)| (b.version(), at)),
-        Some((2, T1 + DAY))
+        Some((ver(2, 0), T1 + DAY))
     );
 
     // After the lock, the promoted bundle judges: admin 3 alone may tighten it.
-    let tighter = next(loosened(), 3, |b| trx_cap(b, 1_500_000_000));
+    let tighter = step(&loosened(), |b| trx_cap(b, 1_500_000_000));
     store.offer(&sign(&tighter, &[3]), T1 + DAY).unwrap();
     drop(store);
     let store = PolicyStore::open(&path, admins()).unwrap();
-    assert_eq!(store.state().effective(T0).unwrap().version(), 3);
+    assert_eq!(store.state().effective(T0).unwrap().version(), ver(2, 1));
     assert!(store.state().pending().is_none());
 }
 
@@ -2360,7 +2553,7 @@ fn policy_store_failed_write_changes_nothing() {
         "{result:?}"
     );
     assert_eq!(
-        store.state().for_version(1, T0).map(|_| ()),
+        store.state().for_version(ver(1, 0), T0).map(|_| ()),
         Err(PolicyRefusal::NoPolicy)
     );
     assert!(!path.exists());
@@ -2375,15 +2568,79 @@ fn policy_store_failed_write_changes_nothing() {
     assert!(store.offer(&sign(&base(), &[1, 2]), T0).is_ok());
 }
 
-/// The installed file's layout: the active signed bundle, then the pending one with its receipt
-/// time. Written here by hand to tamper with it.
-fn write_installed(path: &Path, active: Vec<u8>, pending: Option<(Vec<u8>, u64)>) {
+/// The installed file's layout: the active signed bundle, the anchor, then the pending one with
+/// its receipt time. Written here by hand to tamper with it. The anchor is the active bundle's own
+/// digest (an active quorum bundle) unless given.
+fn write_installed_with(
+    path: &Path,
+    active: Vec<u8>,
+    anchor: Option<[u8; 32]>,
+    pending: Option<(Vec<u8>, u64)>,
+) {
     let decode = |bytes: Vec<u8>| from_canonical_strict::<SignedPolicyBundleV1>(&bytes).unwrap();
+    let active = decode(active);
+    let anchor = anchor.unwrap_or_else(|| active.body.digest());
     let file = (
-        decode(active),
+        active,
+        anchor,
         pending.map(|(bytes, at)| (decode(bytes), at)),
     );
     std::fs::write(path, to_canonical(&file).unwrap()).unwrap();
+}
+
+fn write_installed(path: &Path, active: Vec<u8>, pending: Option<(Vec<u8>, u64)>) {
+    write_installed_with(path, active, None, pending);
+}
+
+/// (h) The anchor survives restarts: a quorum bundle signed against the genesis installs after a
+/// step and a restart; a step while it is pending is still refused after another restart; once in
+/// force it anchors the next quorum bundle, across a restart that follows a step on it.
+#[test]
+fn policy_store_keeps_the_anchor_across_restarts() {
+    let path = temp_dir("anchor").join("policy.bcs");
+    let open = || PolicyStore::open(&path, admins()).unwrap();
+    let rotation = quorum(&base(), 2, |b| b.admins.keys = keys(&[1, 2, 5]));
+    let s1 = step(&base(), |b| trx_cap(b, 500_000_000));
+    let mut store = open();
+    store.offer(&sign(&base(), &[1, 2]), T0).unwrap();
+    store.offer(&sign(&s1, &[3]), T1).unwrap();
+    drop(store);
+
+    let mut store = open();
+    let offered = store.offer(&sign(&rotation, &[1, 2]), T1 + 1);
+    assert!(matches!(offered, Ok(Offer::Pending { .. })), "{offered:?}");
+    drop(store);
+
+    let mut store = open();
+    let late = step(&s1, |b| trx_cap(b, 400_000_000));
+    assert_eq!(
+        store.offer(&sign(&late, &[3]), T1 + 2),
+        Err(PolicyRefusal::StepWhilePending)
+    );
+    let on_rotation = step(&rotation, |b| trx_cap(b, 500_000_000));
+    store
+        .offer(&sign(&on_rotation, &[5]), T1 + 1 + DAY)
+        .unwrap();
+    drop(store);
+
+    let mut store = open();
+    let next_epoch = quorum(&rotation, 3, |b| trx_cap(b, 400_000_000));
+    let offered = store.offer(&sign(&next_epoch, &[1, 5]), T1 + 2 + DAY);
+    assert!(
+        matches!(offered, Ok(Offer::Effective { .. })),
+        "{offered:?}"
+    );
+}
+
+#[test]
+fn policy_store_rechecks_the_anchor() {
+    let path = temp_dir("anchor-check").join("policy.bcs");
+    // An active quorum bundle is its own anchor.
+    write_installed_with(&path, sign(&base(), &[1, 2]), Some([7; 32]), None);
+    assert_eq!(
+        PolicyStore::open(&path, admins()).map(|_| ()),
+        Err(PolicyRefusal::ParentMismatch)
+    );
 }
 
 #[test]
@@ -2456,7 +2713,7 @@ fn policy_store_rechecks_the_pending_bundle() {
     );
     assert!(PolicyStore::open(&path, admins()).is_ok());
     // So does a pending bundle that replaced an earlier one (two versions above the active one).
-    let replaced = next(base(), 3, |b| trx_cap(b, 2_000_000_000));
+    let replaced = quorum(&base(), 3, |b| trx_cap(b, 2_000_000_000));
     write_installed(
         &path,
         sign(&base(), &[1, 2]),
@@ -2468,7 +2725,7 @@ fn policy_store_rechecks_the_pending_bundle() {
 #[test]
 fn policy_store_rechecks_the_pending_parent() {
     let path = temp_dir("pending-parent").join("policy.bcs");
-    let orphan = next(base(), 2, |b| {
+    let orphan = quorum(&base(), 2, |b| {
         trx_cap(b, 2_000_000_000);
         b.parent = [0; 32];
     });

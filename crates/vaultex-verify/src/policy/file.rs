@@ -25,11 +25,13 @@ use super::{
 use crate::durable::{self, io_err};
 use crate::velocity::StoreError;
 
-/// The installed file: BCS of this. `received_at_ms` is this signer's own record of when it
-/// received the pending bundle.
+/// The installed file: BCS of this. `anchor` is the digest of the quorum bundle that started the
+/// active bundle's epoch (an earlier bundle when the active one is a step, so it is kept here);
+/// `received_at_ms` is this signer's own record of when it received the pending bundle.
 #[derive(Serialize, Deserialize)]
 struct InstalledV1 {
     active: SignedPolicyBundleV1,
+    anchor: [u8; 32],
     pending: Option<(SignedPolicyBundleV1, u64)>,
 }
 
@@ -91,6 +93,7 @@ fn save(state: &PolicyState) -> Result<Vec<u8>, PolicyRefusal> {
     let active = state.active.as_ref().ok_or(PolicyRefusal::NoPolicy)?;
     let file = InstalledV1 {
         active: active.signed.clone(),
+        anchor: state.anchor,
         pending: state
             .pending
             .as_ref()
@@ -99,12 +102,16 @@ fn save(state: &PolicyState) -> Result<Vec<u8>, PolicyRefusal> {
     to_canonical(&file).map_err(|_| PolicyRefusal::Store(StoreError::TooLarge))
 }
 
-/// Decodes the installed file: both bundles pass step 2, and the pending one, always a loosening,
-/// passes steps 3, 6, 7 and 8 against the active one again. Its version is above the active one's
-/// (by more than 1 when it replaced an earlier pending bundle) and its parent is the active one.
+/// Decodes the installed file: both bundles pass step 2; an active quorum bundle is its own
+/// anchor; and the pending one, always a quorum loosening, passes steps 3, 6, 7 and 8 against the
+/// active one again: its version is above the active one's (possibly by several epochs, when it
+/// replaced earlier pending bundles) and its parent is the anchor.
 fn load(bytes: &[u8]) -> Result<PolicyState, PolicyRefusal> {
     let file = from_canonical_strict::<InstalledV1>(bytes).map_err(|_| PolicyRefusal::Malformed)?;
     let active = VerifiedBundle::check(file.active)?;
+    if active.body().seq == 0 && file.anchor != active.digest() {
+        return Err(PolicyRefusal::ParentMismatch);
+    }
     let pending = match file.pending {
         None => None,
         Some((signed, received_at_ms)) => {
@@ -112,7 +119,7 @@ fn load(bytes: &[u8]) -> Result<PolicyState, PolicyRefusal> {
             if bundle.version() <= active.version() {
                 return Err(PolicyRefusal::Rollback);
             }
-            if bundle.body().parent != active.digest() {
+            if bundle.body().parent != file.anchor {
                 return Err(PolicyRefusal::ParentMismatch);
             }
             let admins = &active.body().admins;
@@ -124,6 +131,7 @@ fn load(bytes: &[u8]) -> Result<PolicyState, PolicyRefusal> {
     };
     Ok(PolicyState {
         active: Some(active),
+        anchor: file.anchor,
         pending,
     })
 }
