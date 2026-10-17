@@ -51,11 +51,11 @@ impl NatsTlsConfig {
     /// Build a [`rustls::ClientConfig`] from PEM files on disk.
     ///
     /// Loads the CA cert, client cert, and client key from the configured paths.
-    /// The client key bytes are zeroized after use (SEC-004 pattern).
+    /// The client key's PEM buffer is zeroized on every path, including errors.
     pub fn build_rustls_config(&self) -> Result<rustls::ClientConfig, CoreError> {
         use rustls::pki_types::pem::{self, PemObject};
         use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-        use zeroize::Zeroize;
+        use zeroize::Zeroizing;
 
         // 1. Load CA cert
         let ca_pem = std::fs::read(&self.ca_cert_path).map_err(|e| {
@@ -89,20 +89,22 @@ impl NatsTlsConfig {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| CoreError::Transport(format!("parse client cert: {e}")))?;
 
-        // 3. Load client key (zeroize raw bytes after use — SEC-004 pattern)
-        let mut key_pem = std::fs::read(&self.client_key_path).map_err(|e| {
-            CoreError::Transport(format!(
-                "read client key {}: {e}",
-                self.client_key_path.display()
-            ))
-        })?;
-        let client_key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| match e {
-            pem::Error::NoItemsFound => {
-                CoreError::Transport("no private key found in PEM file".into())
-            }
-            e => CoreError::Transport(format!("parse client key: {e}")),
-        })?;
-        key_pem.zeroize(); // SEC-004 pattern: zeroize key bytes
+        // 3. Load client key. The PEM buffer is wiped when this block ends,
+        //    whether parsing succeeded or returned early with an error.
+        let client_key = {
+            let key_pem = Zeroizing::new(std::fs::read(&self.client_key_path).map_err(|e| {
+                CoreError::Transport(format!(
+                    "read client key {}: {e}",
+                    self.client_key_path.display()
+                ))
+            })?);
+            PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| match e {
+                pem::Error::NoItemsFound => {
+                    CoreError::Transport("no private key found in PEM file".into())
+                }
+                e => CoreError::Transport(format!("parse client key: {e}")),
+            })?
+        };
 
         // 4. Build rustls config — TLS 1.2+ with default safe cipher suites
         let config = rustls::ClientConfig::builder()
@@ -112,6 +114,36 @@ impl NatsTlsConfig {
 
         Ok(config)
     }
+}
+
+/// Parse `nats_url` and refuse every scheme except `tls://`.
+///
+/// The parsed address is the one handed to the connector, so the scheme
+/// checked here is the scheme that gets dialled. Errors from this function
+/// never echo the URL: it may carry credentials.
+fn parse_tls_server_addr(nats_url: &str) -> Result<async_nats::ServerAddr, CoreError> {
+    let addr: async_nats::ServerAddr = nats_url
+        .parse()
+        .map_err(|e| CoreError::Transport(format!("invalid NATS URL: {e}")))?;
+    if addr.scheme() != "tls" {
+        return Err(CoreError::Transport(format!(
+            "NATS mTLS requires a tls:// URL, got scheme {:?}",
+            addr.scheme()
+        )));
+    }
+    Ok(addr)
+}
+
+/// Connect options for every mTLS bus connection.
+///
+/// TLS is required on every connection the client makes, reconnects
+/// included, whatever the server's INFO says. Server addresses the cluster
+/// advertises are ignored, so the client only dials the configured address.
+fn mtls_connect_options(tls_client_config: rustls::ClientConfig) -> async_nats::ConnectOptions {
+    async_nats::ConnectOptions::new()
+        .require_tls(true)
+        .ignore_discovered_servers()
+        .tls_client_config(tls_client_config)
 }
 
 /// NATS-backed [`Transport`] with SEC-007 signed envelope authentication.
@@ -201,6 +233,11 @@ impl NatsTransport {
     /// against the provided CA cert, and presents its own client certificate for
     /// server-side authentication.
     ///
+    /// Only `tls://` URLs are accepted; any other scheme is refused before
+    /// the key is read or the network is touched. TLS is required on every
+    /// connection, reconnects included, and server addresses advertised by
+    /// the cluster are never dialled.
+    ///
     /// # Arguments
     /// - `nats_url` — NATS server URL (e.g. `tls://nats.example.com:4222`).
     /// - `party_id` — this party's ID.
@@ -214,11 +251,11 @@ impl NatsTransport {
         signing_key: SigningKey,
         tls_config: NatsTlsConfig,
     ) -> Result<Self, CoreError> {
+        let server_addr = parse_tls_server_addr(nats_url)?;
         let tls_client_config = tls_config.build_rustls_config()?;
 
-        let client = async_nats::ConnectOptions::new()
-            .tls_client_config(tls_client_config)
-            .connect(nats_url)
+        let client = mtls_connect_options(tls_client_config)
+            .connect(server_addr)
             .await
             .map_err(|e| CoreError::Transport(format!("NATS TLS connect failed: {e}")))?;
 
@@ -561,6 +598,227 @@ mod tests {
             err.contains("read CA cert"),
             "should fail on TLS config, got: {err}"
         );
+    }
+
+    // ─── mTLS loader and TLS enforcement (fixtures: throwaway test CA) ──
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/nats-tls-test-only")
+            .join(name)
+    }
+
+    fn fixture_tls_config(client_cert: &str, client_key: &str) -> NatsTlsConfig {
+        NatsTlsConfig {
+            ca_cert_path: fixture("ca.pem"),
+            client_cert_path: fixture(client_cert),
+            client_key_path: fixture(client_key),
+        }
+    }
+
+    fn random_signing_key() -> SigningKey {
+        use rand::rngs::OsRng;
+        use rand::RngCore;
+
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        SigningKey::from_bytes(&bytes)
+    }
+
+    /// Build the config and check the client identity it will present: the
+    /// fixture certificate, with a key of `algorithm` whose public half equals
+    /// the certificate's (the pairing openssl produced when it issued it).
+    fn assert_client_identity_loaded(config: NatsTlsConfig, algorithm: rustls::SignatureAlgorithm) {
+        use rustls::pki_types::{pem::PemObject, CertificateDer};
+
+        let tls = config
+            .build_rustls_config()
+            .expect("fixture mTLS config must load");
+        let identity = tls
+            .client_auth_cert_resolver
+            .resolve(&[], &[])
+            .expect("a client certificate must be configured");
+        // Ok(()) rather than "unknown": the key's public half was compared.
+        identity
+            .keys_match()
+            .expect("client key must match the client certificate");
+        assert_eq!(identity.key.algorithm(), algorithm);
+        let expected = CertificateDer::from_pem_file(&config.client_cert_path).unwrap();
+        assert_eq!(identity.end_entity_cert().unwrap(), &expected);
+    }
+
+    #[test]
+    fn test_tls_config_loads_pkcs8_ec_client_key() {
+        assert_client_identity_loaded(
+            fixture_tls_config("client-ec.pem", "client-ec-key-pkcs8.pem"),
+            rustls::SignatureAlgorithm::ECDSA,
+        );
+    }
+
+    #[test]
+    fn test_tls_config_loads_sec1_ec_client_key() {
+        assert_client_identity_loaded(
+            fixture_tls_config("client-ec.pem", "client-ec-key-sec1.pem"),
+            rustls::SignatureAlgorithm::ECDSA,
+        );
+    }
+
+    #[test]
+    fn test_tls_config_loads_pkcs1_rsa_client_key() {
+        assert_client_identity_loaded(
+            fixture_tls_config("client-rsa.pem", "client-rsa-key-pkcs1.pem"),
+            rustls::SignatureAlgorithm::RSA,
+        );
+    }
+
+    #[test]
+    fn test_tls_config_rejects_key_file_without_private_key() {
+        // A well-formed PEM file that holds a certificate and no key.
+        let config = fixture_tls_config("client-ec.pem", "client-ec.pem");
+        let err = config.build_rustls_config().unwrap_err().to_string();
+        assert!(
+            err.contains("no private key found in PEM file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connect_signed_tls_refuses_non_tls_url_before_network_io() {
+        // A listener that never accepts: a client that dialled it would sit in
+        // its backlog, and a non-blocking accept() would return it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        for url in [
+            format!("nats://127.0.0.1:{port}"),
+            // No scheme: async-nats would default to nats://.
+            format!("127.0.0.1:{port}"),
+            format!("ws://127.0.0.1:{port}"),
+            format!("wss://127.0.0.1:{port}"),
+        ] {
+            // A loadable config, so only the URL check stands in the way.
+            let result = NatsTransport::connect_signed_tls(
+                &url,
+                PartyId(1),
+                "test-session".into(),
+                random_signing_key(),
+                fixture_tls_config("client-ec.pem", "client-ec-key-pkcs8.pem"),
+            )
+            .await;
+            let err = match result {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("{url}: connect must be refused"),
+            };
+            assert!(
+                err.contains("NATS mTLS requires a tls:// URL"),
+                "{url}: unexpected error: {err}"
+            );
+            match listener.accept() {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("{url}: a connection reached the server: {other:?}"),
+            }
+        }
+    }
+
+    /// A fake NATS server that speaks plaintext: it accepts one connection,
+    /// sends an INFO line without `tls_required`, records the first record the
+    /// client sends back, then hangs up. Returns its port and what it received.
+    async fn plaintext_nats_server() -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket
+                .write_all(
+                    b"INFO {\"server_id\":\"plaintext-fake\",\"version\":\"2.10.0\",\
+                      \"proto\":1,\"headers\":true,\"max_payload\":1048576}\r\n",
+                )
+                .await
+                .unwrap();
+
+            let mut received = Vec::new();
+            let mut header = [0u8; 5];
+            if socket.read_exact(&mut header).await.is_ok() {
+                received.extend_from_slice(&header);
+                if header[0] == 0x16 {
+                    // TLS handshake record: read its body, then hang up.
+                    let len = u16::from_be_bytes([header[3], header[4]]) as usize;
+                    let mut body = vec![0u8; len];
+                    if socket.read_exact(&mut body).await.is_ok() {
+                        received.extend_from_slice(&body);
+                    }
+                } else {
+                    // Plaintext: keep the rest of what was sent for the report.
+                    let mut rest = [0u8; 1024];
+                    if let Ok(n) = socket.read(&mut rest).await {
+                        received.extend_from_slice(&rest[..n]);
+                    }
+                }
+            }
+            received
+        });
+        (port, server)
+    }
+
+    /// The first thing the client sent after INFO must be a TLS ClientHello,
+    /// and no plaintext CONNECT may appear.
+    fn assert_client_hello_not_plaintext_connect(received: &[u8]) {
+        let shown = String::from_utf8_lossy(received);
+        assert!(
+            !received.windows(7).any(|w| w == b"CONNECT"),
+            "client sent CONNECT in plaintext: {shown:?}"
+        );
+        assert!(
+            received.len() > 5,
+            "client sent no complete record after INFO: {shown:?}"
+        );
+        assert_eq!(
+            received[0], 0x16,
+            "first record after INFO must be a TLS handshake: {shown:?}"
+        );
+        assert_eq!(
+            received[5], 0x01,
+            "TLS handshake message must be ClientHello"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mtls_never_sends_plaintext_connect_to_plaintext_server() {
+        // 1. The public entry point with a tls:// URL.
+        let (port, server) = plaintext_nats_server().await;
+        let result = NatsTransport::connect_signed_tls(
+            &format!("tls://127.0.0.1:{port}"),
+            PartyId(1),
+            "test-session".into(),
+            random_signing_key(),
+            fixture_tls_config("client-ec.pem", "client-ec-key-pkcs8.pem"),
+        )
+        .await;
+        let err = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("connect must fail: the server hung up mid-handshake"),
+        };
+        assert!(
+            err.contains("NATS TLS connect failed"),
+            "unexpected error: {err}"
+        );
+        assert_client_hello_not_plaintext_connect(&server.await.unwrap());
+
+        // 2. The connect options alone, dialling a nats:// address, as a
+        //    reconnect to any non-tls:// address would: require_tls must force
+        //    the upgrade although neither the scheme nor the server asks for it.
+        let (port, server) = plaintext_nats_server().await;
+        let tls = fixture_tls_config("client-ec.pem", "client-ec-key-pkcs8.pem")
+            .build_rustls_config()
+            .unwrap();
+        let result = mtls_connect_options(tls)
+            .connect(format!("nats://127.0.0.1:{port}"))
+            .await;
+        assert!(result.is_err(), "connect must fail: the server hung up");
+        assert_client_hello_not_plaintext_connect(&server.await.unwrap());
     }
 
     // NatsTransport integration test requires a live NATS server.
