@@ -18,3 +18,6 @@ serde = { workspace = true }
 [dev-dependencies]
 # Reads the JSON vector files shared with the independent oracle (KAT plan R8).
 serde_json = { workspace = true }
+# SHA-512 for the constructed small-order-R signature vector (policy bundle tests). Already in
+# Cargo.lock.
+sha2 = { workspace = true }

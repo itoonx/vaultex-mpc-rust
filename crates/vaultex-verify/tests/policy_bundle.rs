@@ -5,8 +5,10 @@
 //! **These are regression vectors (KAT plan R1), not external evidence.** [`cases`] builds them
 //! with the kernel's own BCS and SHA-256 (through `vaultex-types`) and Ed25519 test keys from fixed
 //! seeds; the expected outcomes and refusal codes are written by hand in [`cases`]. The
-//! independent JS oracle (T05-7b, then WS-13) has not reproduced them yet. The one external
-//! Ed25519 check is the RFC 8032 unit test in `policy.rs`.
+//! independent JS oracle (T05-7b, then WS-13) has not reproduced them yet. The external Ed25519
+//! checks are the unit tests in `policy.rs`: RFC 8032 §7.1, and a published small-order-R case
+//! (ed25519-speccheck). `R-BAD-SIGNATURE-SMALL-ORDER-R` is constructed here (see
+//! [`small_order_r_signature`]) and checked against dalek's cofactorless `verify`.
 //!
 //! Each refusal case changes one property of a named accept case (`base`), so the refusal under
 //! test is the first check that fails. The named tests and the file replay share one runner,
@@ -17,17 +19,18 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha512};
 use vaultex_types::{
     from_canonical_strict, tag, tagged_digest, to_canonical, Address, AssetId, ChainId, Ed25519Pub,
     IntentV1, NetworkId, RefusalCode, Sig64, TxHash, WalletId, U256,
 };
 use vaultex_verify::breaker::BreakerConfig;
 use vaultex_verify::policy::{
-    AdminSetV1, AdminSignatureV1, AssetRuleV1, Offer, PolicyBundleV1, PolicyRefusal, PolicyState,
-    PolicyStore, RecipientsV1, SignedPolicyBundleV1, TierV1, WalletV1, MAX_BUNDLE_BYTES,
-    MIN_LOOSEN_DELAY_MS,
+    tightens, AdminSetV1, AdminSignatureV1, AssetRuleV1, Offer, PolicyBundleV1, PolicyRefusal,
+    PolicyState, PolicyStore, RecipientsV1, SignedPolicyBundleV1, TierV1, WalletV1,
+    MAX_BUNDLE_BYTES, MAX_LOOSEN_DELAY_MS, MIN_LOOSEN_DELAY_MS,
 };
 use vaultex_verify::tron::{decode, TronRefusal};
 use vaultex_verify::velocity::{StoreError, WindowLimit};
@@ -45,7 +48,8 @@ const NILE: &str = "tron:3448148188";
 const SHASTA: &str = "tron:2494104990";
 const WALLET: &str = "hot-payout";
 
-/// Test seeds (32 × the byte). Admins 1–3 are pinned; 4 and 5 are not, until a bundle adds 5.
+/// Test-only seeds (32 × the byte), public in the vector file; they must never hold value on any
+/// network. Admins 1–3 are pinned; 4 and 5 are not, until a bundle adds 5.
 const ADMINS: [u8; 3] = [0x01, 0x02, 0x03];
 const INITIATOR: u8 = 0x20;
 const APPROVERS: [u8; 2] = [0x21, 0x22];
@@ -119,6 +123,7 @@ fn window(window_ms: u64, max_amount: u64, max_count: u32, max_fee: u64) -> Wind
 fn base() -> PolicyBundleV1 {
     PolicyBundleV1 {
         version: 1,
+        parent: [0; 32],
         admins: admins(),
         loosen_delay_ms: DAY,
         allows_zero_approval: false,
@@ -201,14 +206,17 @@ fn edited(from: PolicyBundleV1, edit: impl FnOnce(&mut PolicyBundleV1)) -> Polic
     b
 }
 
-/// `from` as version `version`, with `edit` applied.
+/// The bundle that replaces `from` while `from` is in force: version `version`, parent `from`,
+/// with `edit` applied (which may re-point the parent).
 fn next(
     from: PolicyBundleV1,
     version: u64,
     edit: impl FnOnce(&mut PolicyBundleV1),
 ) -> PolicyBundleV1 {
+    let parent = from.digest();
     edited(from, |b| {
         b.version = version;
+        b.parent = parent;
         edit(b);
     })
 }
@@ -241,6 +249,106 @@ fn signature(seed: u8, digest: &[u8; 32]) -> AdminSignatureV1 {
 fn sign(body: &PolicyBundleV1, seeds: &[u8]) -> Vec<u8> {
     let digest = body.digest();
     sign_with(body, seeds.iter().map(|s| signature(*s, &digest)).collect())
+}
+
+/// L, the order of the Ed25519 base point, as little-endian 64-bit limbs.
+const L: [u64; 4] = [
+    0x5812_631a_5cf5_d3ed,
+    0x14de_f9de_a2f7_9cd6,
+    0,
+    0x1000_0000_0000_0000,
+];
+
+fn sub_l_if_ge(x: &mut [u64; 4]) {
+    if x.iter().rev().cmp(L.iter().rev()) == std::cmp::Ordering::Less {
+        return;
+    }
+    let mut borrow = false;
+    for (xi, li) in x.iter_mut().zip(L) {
+        let (d, b1) = xi.overflowing_sub(li);
+        let (d, b2) = d.overflowing_sub(u64::from(borrow));
+        *xi = d;
+        borrow = b1 || b2;
+    }
+}
+
+/// `x ← 2x + bit mod L`, for `x < L`.
+fn shift_in(x: &mut [u64; 4], bit: bool) {
+    let mut carry = u64::from(bit);
+    for xi in x.iter_mut() {
+        let top = *xi >> 63;
+        *xi = (*xi << 1) | carry;
+        carry = top;
+    }
+    sub_l_if_ge(x);
+}
+
+/// `x ← x + y mod L`, for `x, y < L`.
+fn add_l(x: &mut [u64; 4], y: &[u64; 4]) {
+    let mut carry = false;
+    for (xi, yi) in x.iter_mut().zip(y) {
+        let (t, c1) = xi.overflowing_add(*yi);
+        let (t, c2) = t.overflowing_add(u64::from(carry));
+        *xi = t;
+        carry = c1 || c2;
+    }
+    sub_l_if_ge(x);
+}
+
+/// A little-endian integer, reduced mod L.
+fn reduce_l(le: &[u8]) -> [u64; 4] {
+    let mut x = [0; 4];
+    for byte in le.iter().rev() {
+        for i in (0..8).rev() {
+            shift_in(&mut x, (byte >> i) & 1 == 1);
+        }
+    }
+    x
+}
+
+/// `x·y mod L`, for `y < L`, by double and add.
+fn mul_l(x: &[u64; 4], y: &[u64; 4]) -> [u64; 4] {
+    let mut r = [0; 4];
+    for limb in x.iter().rev() {
+        for i in (0..64).rev() {
+            shift_in(&mut r, false);
+            if (limb >> i) & 1 == 1 {
+                add_l(&mut r, y);
+            }
+        }
+    }
+    r
+}
+
+/// A signature by admin `seed` over `msg` whose R is the identity point (small order). With
+/// `k = SHA-512(R ‖ A ‖ msg) mod L` and the admin's clamped scalar `a` (RFC 8032 §5.1.5),
+/// `s = k·a mod L` gives `[s]B = [k·a]B = R + [k]A`: cofactorless verification accepts it, strict
+/// verification must refuse it. Constructed here, not taken from a published set: a published
+/// vector cannot sign a bundle digest (`policy.rs` runs the published one, speccheck test 3).
+fn small_order_r_signature(seed: u8, msg: &[u8]) -> AdminSignatureV1 {
+    let mut r = [0u8; 32];
+    r[0] = 1;
+    let h = Sha512::digest([seed; 32]);
+    let mut a = [0u8; 32];
+    a.copy_from_slice(&h[..32]);
+    a[0] &= 248;
+    a[31] &= 127;
+    a[31] |= 64;
+    let k = Sha512::new()
+        .chain_update(r)
+        .chain_update(pk(seed).0)
+        .chain_update(msg)
+        .finalize();
+    let s = mul_l(&reduce_l(&k), &reduce_l(&a));
+    let mut sig = [0u8; 64];
+    sig[..32].copy_from_slice(&r);
+    for (chunk, limb) in sig[32..].chunks_exact_mut(8).zip(s) {
+        chunk.copy_from_slice(&limb.to_le_bytes());
+    }
+    AdminSignatureV1 {
+        key: pk(seed),
+        signature: Sig64(sig),
+    }
 }
 
 fn hx(bytes: &[u8]) -> String {
@@ -331,6 +439,16 @@ impl Case {
     /// The genesis `body`, signed by admins 1 and 2 at `T0`, accepted.
     fn genesis(self, name: &str, body: &PolicyBundleV1) -> Self {
         self.offer(name, sign(body, &[1, 2]), T0, effective(body))
+    }
+
+    /// The tightening classifier on two bodies, given as signed bundles (signatures unused).
+    fn classify(mut self, old: (&str, Vec<u8>), new: (&str, Vec<u8>), tightens: bool) -> Self {
+        self.steps
+            .push(json!({ "classify": { "old": old.0, "new": new.0 } }));
+        self.bundles.push((old.0.to_owned(), old.1));
+        self.bundles.push((new.0.to_owned(), new.1));
+        self.expect.push(json!({ "tightens": tightens }));
+        self
     }
 
     /// A request naming `version` at `now_ms`.
@@ -893,7 +1011,10 @@ fn sized(target: usize) -> PolicyBundleV1 {
 fn cases() -> Vec<Case> {
     let b = base();
     let loose = next(base(), 2, |b| trx_cap(b, 2_000_000_000));
+    let tight2 = next(base(), 2, |b| trx_cap(b, 500_000_000));
+    // Version 3 while `loose` (version 2) is pending: its parent is still the genesis.
     let tight3 = next(base(), 3, |b| trx_cap(b, 500_000_000));
+    let replaces = next(loose.clone(), 3, |b| b.parent = base().digest());
     let mut out = vec![
         // ── accept sequences ──
         case("A-GENESIS", "offer steps 1 to 8 (genesis)", None, "The genesis bundle, signed 2-of-3 by the pinned admins, takes effect at once")
@@ -915,12 +1036,14 @@ fn cases() -> Vec<Case> {
             .offer("A-THRESHOLD-N/v1", sign(&edited(base(), |b| b.admins.threshold = 3), &[1, 2, 3]), T0, effective(&edited(base(), |b| b.admins.threshold = 3))),
         case("A-DECIMALS-77", "offer step 2.4 (bound)", Some("A-GENESIS"), "A token with 77 decimals")
             .genesis("A-DECIMALS-77/v1", &edited(base(), |b| usdt(b).decimals = 77)),
+        case("A-DELAY-MAX", "offer step 2.3 (bound)", Some("A-GENESIS"), "A time lock of exactly MAX_LOOSEN_DELAY_MS")
+            .genesis("A-DELAY-MAX/v1", &edited(base(), |b| b.loosen_delay_ms = MAX_LOOSEN_DELAY_MS)),
         case("A-SIZE-MAX", "offer step 1 (bound)", Some("A-GENESIS"), "A signed bundle of exactly MAX_BUNDLE_BYTES")
             .genesis("A-SIZE-MAX/v1", &sized(MAX_BUNDLE_BYTES)),
         case("A-TIGHTEN", "offer steps 5 and 7", Some("A-GENESIS"), "A tightening signed by one admin takes effect at once; the old version no longer serves")
             .genesis("genesis", &b)
-            .offer("A-TIGHTEN/v3-1of3", sign(&tight3, &[3]), T1, effective(&tight3))
-            .use_version(3, T1, in_force(&tight3))
+            .offer("A-TIGHTEN/v2-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .use_version(2, T1, in_force(&tight2))
             .use_version(1, T1, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch")),
         case("A-LOOSEN", "offer step 8 and the time lock", Some("A-GENESIS"), "A loosening signed 2-of-3 waits one day from this signer's receipt: refused one millisecond before, in force at the boundary")
             .genesis("genesis", &b)
@@ -942,16 +1065,16 @@ fn cases() -> Vec<Case> {
         case("A-TIGHTEN-CANCELS", "states (a tightening drops the pending loosening)", Some("A-LOOSEN"), "One admin's tightening replaces both the active bundle and the pending loosening")
             .genesis("genesis", &b)
             .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("A-TIGHTEN/v3-1of3", sign(&tight3, &[3]), T1 + 1, effective(&tight3))
+            .offer("A-TIGHTEN-CANCELS/v3-1of3", sign(&tight3, &[3]), T1 + 1, effective(&tight3))
             .use_version(2, T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
             .use_version(3, T1 + DAY, in_force(&tight3)),
         case("A-LOOSEN-REPLACES", "states (a loosening replaces the pending one)", Some("A-LOOSEN"), "A second loosening replaces the first, and its own lock starts at its receipt")
             .genesis("genesis", &b)
             .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("A-LOOSEN-REPLACES/v3", sign(&next(loose.clone(), 3, |_| {}), &[1, 2]), T1 + 1_000, pending(&next(loose.clone(), 3, |_| {}), T1 + 1_000 + DAY))
+            .offer("A-LOOSEN-REPLACES/v3", sign(&replaces, &[1, 2]), T1 + 1_000, pending(&replaces, T1 + 1_000 + DAY))
             .use_version(2, T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
             .use_version(3, T1 + DAY, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
-            .use_version(3, T1 + 1_000 + DAY, in_force(&next(loose.clone(), 3, |_| {}))),
+            .use_version(3, T1 + 1_000 + DAY, in_force(&replaces)),
         case("A-ZERO-TIGHTEN", "offer step 7 (zero approval needs M-of-N)", Some("A-GENESIS"), "A zero-approval policy that tightens, signed 2-of-3, takes effect at once")
             .genesis("genesis-zero", &zero())
             .offer("A-ZERO-TIGHTEN/v2-2of3", sign(&next(zero(), 2, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, effective(&next(zero(), 2, |b| trx_cap(b, 500_000_000)))),
@@ -960,11 +1083,15 @@ fn cases() -> Vec<Case> {
     // The judge is the effective bundle: a pending one has no authority until its lock ends.
     let rotated = next(base(), 2, |b| b.admins.keys = keys(&[1, 2, 5]));
     let after = next(rotated.clone(), 3, |b| trx_cap(b, 500_000_000));
+    let early = next(rotated.clone(), 3, |b| {
+        trx_cap(b, 500_000_000);
+        b.parent = base().digest();
+    });
     out.push(
         case("A-JUDGE-IS-EFFECTIVE", "offer step 4 (judge)", Some("A-LOOSEN"), "A rotation to admin 5 is pending: admin 5 alone cannot tighten yet, and can once the rotation is in force")
             .genesis("genesis", &b)
             .offer("A-JUDGE-IS-EFFECTIVE/v2", sign(&rotated, &[1, 3]), T1, pending(&rotated, T1 + DAY))
-            .offer("A-JUDGE-IS-EFFECTIVE/v3", sign(&after, &[5]), T1 + DAY - 1, refuse(RefusalCode::BUNDLE_INVALID, "Quorum"))
+            .offer("A-JUDGE-IS-EFFECTIVE/v3-early", sign(&early, &[5]), T1 + DAY - 1, refuse(RefusalCode::BUNDLE_INVALID, "Quorum"))
             .offer("A-JUDGE-IS-EFFECTIVE/v3", sign(&after, &[5]), T1 + DAY, effective(&after)),
     );
 
@@ -1104,6 +1231,31 @@ fn cases() -> Vec<Case> {
             "DelayTooShort",
             |b| b.loosen_delay_ms = MIN_LOOSEN_DELAY_MS - 1,
         ),
+        bad_content(
+            "R-DELAY-LONG",
+            "loosen_delay_ms one millisecond over MAX_LOOSEN_DELAY_MS (bound)",
+            "DelayTooLong",
+            |b| b.loosen_delay_ms = MAX_LOOSEN_DELAY_MS + 1,
+        ),
+        case(
+            "R-DELAY-LONG-LATER",
+            "offer step 2 (content)",
+            Some("A-TIGHTEN"),
+            "A tightening by one admin that would set a time lock no loosening could ever outwait",
+        )
+        .genesis("genesis", &b)
+        .offer(
+            "R-DELAY-LONG-LATER/v2",
+            sign(&next(base(), 2, |b| b.loosen_delay_ms = u64::MAX), &[3]),
+            T1,
+            invalid("DelayTooLong"),
+        ),
+        bad_content(
+            "R-NO-WINDOWS",
+            "TRX with no velocity window (it would block TRX, and make any window look tighter)",
+            "NoWindows",
+            |b| trx(b).windows = Vec::new(),
+        ),
         bad_content("R-NOT-TRON", "A wallet on an EVM network", "NotTron", |b| {
             wallet(b).network = NetworkId::new("eip155:11155111").unwrap()
         }),
@@ -1176,18 +1328,18 @@ fn cases() -> Vec<Case> {
             "R-ROLLBACK-LOWER",
             "offer step 3",
             Some("A-TIGHTEN"),
-            "Version 2 after version 3",
+            "Version 1 again after version 2",
         )
         .genesis("genesis", &b)
         .offer(
-            "A-TIGHTEN/v3-1of3",
-            sign(&tight3, &[3]),
+            "A-TIGHTEN/v2-1of3",
+            sign(&tight2, &[3]),
             T1,
-            effective(&tight3),
+            effective(&tight2),
         )
         .offer(
-            "R-ROLLBACK-LOWER/v2",
-            sign(&next(tight3.clone(), 2, |_| {}), &[1, 2, 3]),
+            "genesis",
+            sign(&b, &[1, 2]),
             T1,
             refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"),
         ),
@@ -1311,6 +1463,72 @@ fn cases() -> Vec<Case> {
             sign(&next(zero(), 2, |b| trx_cap(b, 500_000_000)), &[1]),
             T1,
             invalid("Quorum"),
+        ),
+    ]);
+
+    let rollback = |check| refuse(RefusalCode::BUNDLE_ROLLBACK, check);
+    let gap = |b: &PolicyBundleV1| next(b.clone(), u64::MAX, |b| trx_cap(b, 500_000_000));
+    out.extend([
+        case("R-VERSION-GAP", "offer step 3", Some("A-TIGHTEN"), "A tightening numbered 3 straight after version 1")
+            .genesis("genesis", &b)
+            .offer("A-TIGHTEN-CANCELS/v3-1of3", sign(&tight3, &[3]), T1, invalid("VersionGap")),
+        case("R-VERSION-GAP-MAX", "offer step 3", Some("A-TIGHTEN"), "A tightening by one admin numbered 2^64 − 1, which would end the version sequence")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-GAP-MAX/v-max", sign(&gap(&b), &[3]), T1, invalid("VersionGap")),
+        case("R-VERSION-GAP-GENESIS", "offer step 3 (genesis is version 1)", Some("A-GENESIS"), "A genesis numbered 2")
+            .offer("R-VERSION-GAP-GENESIS/v2", sign(&next(base(), 2, |b| b.parent = [0; 32]), &[1, 2]), T0, invalid("VersionGap")),
+        case("R-PARENT-GENESIS", "offer step 3 (genesis has a zero parent)", Some("A-GENESIS"), "A genesis that names a parent")
+            .offer("R-PARENT-GENESIS/v1", sign(&edited(base(), |b| b.parent = [1; 32]), &[1, 2]), T0, rollback("ParentMismatch")),
+        case("R-PARENT-ZERO", "offer step 3 (parent)", Some("A-TIGHTEN"), "A tightening whose parent is all zeros instead of the genesis")
+            .genesis("genesis", &b)
+            .offer("R-PARENT-ZERO/v2", sign(&next(base(), 2, |b| { trx_cap(b, 500_000_000); b.parent = [0; 32]; }), &[3]), T1, rollback("ParentMismatch")),
+        case("R-PARENT-PENDING", "offer step 3 (the parent is the bundle in force)", Some("A-TIGHTEN-CANCELS"), "A tightening that names the pending loosening, not the bundle in force, as its parent")
+            .genesis("genesis", &b)
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("R-PARENT-PENDING/v3", sign(&next(base(), 3, |b| { trx_cap(b, 500_000_000); b.parent = loose.digest(); }), &[3]), T1 + 1, rollback("ParentMismatch")),
+        case("R-LOCK-OVERFLOW", "offer step 8 (bound)", Some("A-LOOSEN"), "A loosening received so late that its time lock would end past 2^64 − 1 ms; one millisecond earlier it ends exactly there")
+            .genesis("genesis", &b)
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), u64::MAX - DAY + 1, refuse(RefusalCode::CLOCK_UNTRUSTED, "LockOverflow"))
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), u64::MAX - DAY, pending(&loose, u64::MAX)),
+        case("R-BAD-SIGNATURE-SMALL-ORDER-R", "offer step 6 (strict verification)", Some("A-GENESIS"), "Admin 2's signature has a small-order R: cofactorless verification accepts it, strict verification refuses it")
+            .offer("R-BAD-SIGNATURE-SMALL-ORDER-R/v1", sign_with(&b, vec![signature(1, &b.digest()), small_order_r_signature(2, &b.digest())]), T0, invalid("BadSignature")),
+    ]);
+
+    // ── the classifier on bodies step 2 refuses ──
+    let no_windows = edited(base(), |b| trx(b).windows = Vec::new());
+    out.extend([
+        case(
+            "T-CLASSIFY-WINDOWS-FROM-NONE",
+            "tightening table (asset.windows)",
+            None,
+            "TRX from no window (nothing allowed) to an unbounded window: not a tightening",
+        )
+        .classify(
+            ("T-CLASSIFY/no-windows", sign(&no_windows, &[1, 2])),
+            (
+                "T-CLASSIFY/any-window",
+                sign(
+                    &next(no_windows.clone(), 2, |b| {
+                        trx(b).windows = vec![window(DAY, u64::MAX, u32::MAX, u64::MAX)]
+                    }),
+                    &[1, 2],
+                ),
+            ),
+            false,
+        ),
+        case(
+            "T-CLASSIFY-WINDOWS-NONE-KEPT",
+            "tightening table (asset.windows)",
+            Some("T-CLASSIFY-WINDOWS-FROM-NONE"),
+            "TRX with no window before and after: a tightening",
+        )
+        .classify(
+            ("T-CLASSIFY/no-windows", sign(&no_windows, &[1, 2])),
+            (
+                "T-CLASSIFY/no-windows-v2",
+                sign(&next(no_windows.clone(), 2, |_| {}), &[1, 2]),
+            ),
+            true,
         ),
     ]);
 
@@ -1512,6 +1730,15 @@ fn offer_json(offer: Offer) -> Value {
 /// What the kernel answers to one step.
 fn answer(state: &mut PolicyState, genesis: &AdminSetV1, bundles: &Value, step: &Value) -> Value {
     let (kind, input) = step.as_object().unwrap().iter().next().unwrap();
+    if kind == "classify" {
+        let body = |name: &Value| {
+            let hex = bundles[name.as_str().unwrap()].as_str().unwrap();
+            from_canonical_strict::<SignedPolicyBundleV1>(&unhex(hex))
+                .unwrap()
+                .body
+        };
+        return json!({ "tightens": tightens(&body(&input["old"]), &body(&input["new"])) });
+    }
     let now = num(&input["now_ms"]);
     if kind == "offer" {
         let bytes = unhex(bundles[input["bundle"].as_str().unwrap()].as_str().unwrap());
@@ -1621,6 +1848,7 @@ fn generate() -> Value {
         }
         vectors.push(c.vector());
     }
+    // Test-only seeds: public here, so they must never hold value on any network.
     let key = |seed: u8| json!({ "seed": hx(&[seed; 32]), "public_key": hx(&pk(seed).0) });
     json!({
         "rfc": "POLICY_BUNDLE_V1",
@@ -1632,11 +1860,12 @@ fn generate() -> Value {
             "note": "Written by the same author as the Rust code, and encoded with the kernel's own BCS and SHA-256: regression vectors (KAT plan R1), not external evidence. Expected outcomes and codes are written by hand. The independent oracle has not reproduced them yet.",
         }],
         "keys": {
+            "note": "Test-only seeds (32 x one byte), published here: never use them for value on any network.",
             "admin1": key(1), "admin2": key(2), "admin3": key(3), "outsider4": key(4),
             "admin5": key(5), "initiator": key(INITIATOR), "approver1": key(0x21),
             "approver2": key(0x22), "extra": key(EXTRA_KEY),
         },
-        "encoding": "bundles: hex of BCS(SignedPolicyBundleV1). intent: hex of BCS(IntentV1). asset: hex of BCS(AssetId). Integers: decimal strings.",
+        "encoding": "bundles: hex of BCS(SignedPolicyBundleV1). intent: hex of BCS(IntentV1). asset: hex of BCS(AssetId). classify: the bodies of two named bundles (signatures unused). Integers: decimal strings.",
         "bundles": bundles,
         "vectors": vectors,
     })
@@ -1746,6 +1975,48 @@ fn policy_refuses_unsorted_lists() {
 #[test]
 fn policy_refuses_weak_keys() {
     check(&["R-WEAK-KEY"]);
+}
+
+#[test]
+fn policy_refuses_long_delay() {
+    check(&["R-DELAY-LONG", "A-DELAY-MAX"]);
+}
+
+#[test]
+fn policy_refuses_no_windows() {
+    check(&["R-NO-WINDOWS"]);
+}
+
+#[test]
+fn policy_refuses_version_gap() {
+    check(&["R-VERSION-GAP"]);
+}
+
+#[test]
+fn policy_refuses_parent_mismatch() {
+    check(&["R-PARENT"]);
+}
+
+#[test]
+fn policy_refuses_lock_overflow() {
+    check(&["R-LOCK-OVERFLOW"]);
+}
+
+/// The windows row of the tightening table, on a body step 2 now refuses.
+#[test]
+fn policy_classifier_no_windows_allows_nothing() {
+    check(&["T-CLASSIFY"]);
+}
+
+/// The constructed vector exercises exactly the difference between the two rules.
+#[test]
+fn policy_small_order_r_vector_is_cofactorless_valid() {
+    let digest = base().digest();
+    let sig = small_order_r_signature(2, &digest);
+    let vk = VerifyingKey::from_bytes(&pk(2).0).unwrap();
+    let sig = ed25519_dalek::Signature::from_bytes(&sig.signature.0);
+    assert!(vk.verify(&digest, &sig).is_ok());
+    assert!(vk.verify_strict(&digest, &sig).is_err());
 }
 
 #[test]
@@ -2022,6 +2293,15 @@ fn policy_store_failed_write_changes_nothing() {
         Err(PolicyRefusal::NoPolicy)
     );
     assert!(!path.exists());
+    // The store is poisoned until reopened, even once the obstacle is gone.
+    std::fs::remove_dir(path.with_extension("bcs.tmp")).unwrap();
+    assert_eq!(
+        store.offer(&sign(&base(), &[1, 2]), T0),
+        Err(PolicyRefusal::Store(StoreError::Failed))
+    );
+    drop(store);
+    let mut store = PolicyStore::open(&path, admins()).unwrap();
+    assert!(store.offer(&sign(&base(), &[1, 2]), T0).is_ok());
 }
 
 /// The installed file's layout: the active signed bundle, then the pending one with its receipt
@@ -2104,4 +2384,44 @@ fn policy_store_rechecks_the_pending_bundle() {
         Some((sign(&loosened(), &[1, 2]), T1)),
     );
     assert!(PolicyStore::open(&path, admins()).is_ok());
+    // So does a pending bundle that replaced an earlier one (two versions above the active one).
+    let replaced = next(base(), 3, |b| trx_cap(b, 2_000_000_000));
+    write_installed(
+        &path,
+        sign(&base(), &[1, 2]),
+        Some((sign(&replaced, &[1, 2]), T1)),
+    );
+    assert!(PolicyStore::open(&path, admins()).is_ok());
+}
+
+#[test]
+fn policy_store_rechecks_the_pending_parent() {
+    let path = temp_dir("pending-parent").join("policy.bcs");
+    let orphan = next(base(), 2, |b| {
+        trx_cap(b, 2_000_000_000);
+        b.parent = [0; 32];
+    });
+    write_installed(
+        &path,
+        sign(&base(), &[1, 2]),
+        Some((sign(&orphan, &[1, 2]), T1)),
+    );
+    assert_eq!(
+        PolicyStore::open(&path, admins()).map(|_| ()),
+        Err(PolicyRefusal::ParentMismatch)
+    );
+}
+
+#[test]
+fn policy_store_rechecks_the_pending_lock() {
+    let path = temp_dir("pending-lock").join("policy.bcs");
+    write_installed(
+        &path,
+        sign(&base(), &[1, 2]),
+        Some((sign(&loosened(), &[1, 2]), u64::MAX)),
+    );
+    assert_eq!(
+        PolicyStore::open(&path, admins()).map(|_| ()),
+        Err(PolicyRefusal::LockOverflow)
+    );
 }

@@ -2,6 +2,7 @@
 //! [module docs](super#tightening). It answers "provably no looser", so every doubt is a loosening.
 
 use crate::breaker::BreakerConfig;
+use crate::velocity::WindowLimit;
 
 use super::{AssetRuleV1, PolicyBundleV1, RecipientsV1, WalletV1};
 
@@ -49,14 +50,23 @@ fn asset(old: &AssetRuleV1, new: &AssetRuleV1) -> bool {
         && new.max_per_tx <= old.max_per_tx
         && recipients(&old.recipients, &new.recipients)
         && tiers(old, new)
-        && old.windows.iter().all(|o| {
-            new.windows.iter().any(|n| {
-                n.window_ms == o.window_ms
-                    && n.max_amount <= o.max_amount
-                    && n.max_count <= o.max_count
-                    && n.max_fee <= o.max_fee
-            })
+        && windows(&old.windows, &new.windows)
+}
+
+/// Every old window is in `new` with no limit raised; extra windows only restrict more. No window
+/// at all lets nothing through (velocity refuses every charge), so only no window tightens that.
+fn windows(old: &[WindowLimit], new: &[WindowLimit]) -> bool {
+    if old.is_empty() {
+        return new.is_empty();
+    }
+    old.iter().all(|o| {
+        new.iter().any(|n| {
+            n.window_ms == o.window_ms
+                && n.max_amount <= o.max_amount
+                && n.max_count <= o.max_count
+                && n.max_fee <= o.max_fee
         })
+    })
 }
 
 fn recipients(old: &RecipientsV1, new: &RecipientsV1) -> bool {

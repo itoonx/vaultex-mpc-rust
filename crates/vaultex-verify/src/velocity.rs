@@ -278,9 +278,9 @@ pub enum Rounding {
     /// `⌊t·G/n⌋`. With every signer enforcing, the group's total outflow per window is at most
     /// `G`: the tighter bound, for use once its proof has been reviewed (R1).
     Floor,
-    /// `⌈t·G/n⌉`, the formula as ROADMAP M6 #5 writes it, and the one to use for now (owner
-    /// decision, 2026-10-16). The total can then exceed `G` by less than `n/t` base units:
-    /// negligible, but not `≤ G`.
+    /// `⌈t·G/n⌉`, the formula as ROADMAP M6 #5 writes it, and the one to use for now
+    /// (`docs/TASKS.md` §3, Kernel defaults: velocity bound rounded up). The total can then
+    /// exceed `G` by less than `n/t` base units: negligible, but not `≤ G`.
     Ceil,
 }
 
