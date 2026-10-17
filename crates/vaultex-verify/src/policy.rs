@@ -5,9 +5,10 @@
 //! # Format
 //!
 //! - **Body:** [`PolicyBundleV1`], BCS with field order = declaration order. Its digest is
-//!   `tagged_digest("VAULTEX/POLICY-BUNDLE/v1", body)` ([`PolicyBundleV1::digest`]). Versions are
-//!   sequential from 1, and each body names the digest of the bundle it replaces (`parent`; all
-//!   zeros for version 1), so a signer's policy history is a hash chain (THREAT_MODEL_V2 TH15).
+//!   `tagged_digest("VAULTEX/POLICY-BUNDLE/v1", body)` ([`PolicyBundleV1::digest`]). Versions
+//!   increase by at most [`MAX_VERSION_STEP`] at a time, and each body names the digest of the
+//!   bundle it replaces (`parent`; all zeros for a genesis), so the bundles a signer puts in force
+//!   form a hash chain (THREAT_MODEL_V2 TH15; ADR-11 follow-ups of 2026-10-17).
 //! - **Signed bundle:** [`SignedPolicyBundleV1`], the body followed by `(admin key, signature)`
 //!   pairs, BCS, at most [`MAX_BUNDLE_BYTES`].
 //! - **Signatures** are Ed25519 over the 32-byte digest, checked with strict verification (RFC 8032
@@ -46,10 +47,15 @@
 //!    5. `allows_zero_approval` is true exactly when some tier needs 0 approvals
 //!       (`ZeroApprovalFlag`).
 //! 3. **Sequence.** Let `h` be the highest version this signer has accepted: the pending bundle's,
-//!    else the effective one's, else 0. A version `≤ h` is `Rollback` [BUNDLE_ROLLBACK]; any other
-//!    than `h + 1` is `VersionGap` [BUNDLE_INVALID]. The `parent` must be the digest of the bundle
-//!    effective at `now` (all zeros when none): `ParentMismatch` [BUNDLE_ROLLBACK, a fork]. So a
-//!    genesis is version 1 with a zero parent.
+//!    else the effective one's, else 0. The version must lie in `(h, h + K]` with
+//!    `K =` [`MAX_VERSION_STEP`]: `≤ h` is `Rollback` [BUNDLE_ROLLBACK], above `h + K` is
+//!    `VersionGap` [BUNDLE_INVALID]. Order comes from the parent link: `parent` must be the digest
+//!    of the bundle in force at this signer, effective at `now` (all zeros when none), never of a
+//!    pending one: `ParentMismatch` [BUNDLE_ROLLBACK, a fork]. So a genesis has a zero parent, and
+//!    a signer that never received a bundle which never came into force (a loosening cancelled or
+//!    replaced while pending) installs the next one directly: its parent is still the bundle that
+//!    signer has in force, and the window allows the skipped version. A bundle built on a history
+//!    the signer does not have fails the parent link.
 //! 4. **Judge.** The admin set of the bundle effective at `now`. With none installed it is the
 //!    genesis pin configured at setup, and the candidate's own admin set must equal the pin:
 //!    `GenesisAdmins` [BUNDLE_INVALID]. A candidate never judges itself.
@@ -58,8 +64,11 @@
 //! 6. **Signatures.** Every signature by a judging key verifies over the candidate's digest:
 //!    `BadSignature` [BUNDLE_INVALID].
 //! 7. **Quorum.** The distinct judging keys with a signature number at least 1 for a tightening
-//!    with `allows_zero_approval` false, and at least the judge's threshold M otherwise: `Quorum`
-//!    [BUNDLE_INVALID].
+//!    with `allows_zero_approval` false while no loosening is pending at `now`, and at least the
+//!    judge's threshold M otherwise: `Quorum` [BUNDLE_INVALID]. Any accepted candidate supersedes a
+//!    pending loosening (a tightening drops it, a loosening replaces it), so superseding always
+//!    needs M-of-N (ADR-11 follow-ups). The code is `BUNDLE_INVALID`, the registry's code for a
+//!    bundle short of its quorum; `APPROVALS_INSUFFICIENT` is for approver statements on a request.
 //! 8. **Record.** For a loosening, the end of its time lock (receipt time plus the active
 //!    bundle's delay) must fit in a `u64`: `LockOverflow` [CLOCK_UNTRUSTED]. Then
 //!    [`PolicyStore::offer`] replaces the installed file atomically and durably before it answers:
@@ -70,7 +79,8 @@
 //!
 //! ```text
 //! NONE                    ── genesis, M-of-N of the pin ───────────────────► ACTIVE(a)
-//! ACTIVE(a) [+ PENDING]   ── tightening, 1-of-N of a (M if zero approval) ─► ACTIVE(b)              (pending dropped)
+//! ACTIVE(a)               ── tightening, 1-of-N of a (M if zero approval) ─► ACTIVE(b)
+//! ACTIVE(a) + PENDING     ── tightening, M-of-N of a ──────────────────────► ACTIVE(b)              (pending dropped)
 //! ACTIVE(a) [+ PENDING]   ── loosening, M-of-N of a ───────────────────────► ACTIVE(a) + PENDING(b, r = now)
 //! ACTIVE(a) + PENDING(b, r) ── now ≥ r + a.loosen_delay_ms ───────────────► ACTIVE(b)
 //! ```
@@ -81,7 +91,8 @@
 //! - The last transition needs no write: the effective bundle is a function of the installed file
 //!   and `now`, and the next offer writes the promoted state.
 //! - A new loosening replaces the pending one and its time lock starts again. A tightening drops
-//!   it, so any single admin can stop a pending loosening.
+//!   it. Either way it takes M-of-N: no single admin can stop a pending change, such as an
+//!   admin-set rotation.
 //!
 //! **Using the policy.** [`PolicyState::for_version`] gives the bundle a request names: none
 //! installed is `NoPolicy` [NO_POLICY]; the pending version before its lock ends is `NotEffective`
@@ -128,11 +139,12 @@
 //!   so does a clock that is behind when a loosening arrives. A promotion is recorded only by the
 //!   next offer, so a clock moved back below the end of a lock makes the earlier bundle effective
 //!   again until then. The caller must pass its own clock through the breaker's rollback check.
-//! - Any single admin can stop a pending loosening by installing a tightening first, including an
-//!   admin-set rotation that would remove that admin (TH16). Whether cancelling an admin-set change
-//!   should need M-of-N is an open governance decision (ADR-11).
-//! - Versions are strictly sequential, so every signer must receive every bundle in order,
-//!   including loosenings that a later tightening cancelled.
+//! - While a loosening is pending, nothing supersedes it without M-of-N, not even an emergency
+//!   tightening (ADR-11 follow-ups): a quorum that is unavailable for the length of the time lock
+//!   cannot cancel a pending change. Freezing (1-of-N, in the breaker) stays available.
+//! - A signer can skip only versions that never came into force, and at most
+//!   [`MAX_VERSION_STEP`]` − 1` at a time; one that missed a bundle that did come into force must
+//!   be given it first, because the next bundle names it as parent.
 //! - The decoder clamps a fee limit or validity above its hard ceilings.
 //! - No receipt records an install yet: receipts record decisions on requests only.
 
@@ -171,8 +183,13 @@ pub const MAX_BUNDLE_BYTES: usize = 60 * 1024;
 pub const MIN_LOOSEN_DELAY_MS: u64 = 86_400_000;
 /// Longest time lock a bundle may set: 30 days. Without a bound one admin could tighten the delay
 /// so far that no loosening, not even an admin rotation, ever takes effect.
-// ponytail: provisional until the owner confirms the value.
+// ponytail: owner decision 2026-10-17 (ADR-11 follow-ups).
 pub const MAX_LOOSEN_DELAY_MS: u64 = 30 * 86_400_000;
+/// K: a candidate's version lies in `(h, h + K]`, where `h` is the highest version accepted. The
+/// step lets a signer skip versions that never came into force, and bounds how far one bundle can
+/// move the sequence (no jump to `u64::MAX`).
+// ponytail: provisional (ADR-11 follow-ups, 2026-10-17).
+pub const MAX_VERSION_STEP: u64 = 16;
 /// 1 TRX = 10^6 sun.
 const TRX_DECIMALS: u8 = 6;
 /// 10^77 is the largest power of ten below 2^256, so every token amount has a decimal rendering.
@@ -190,7 +207,7 @@ pub struct AdminSetV1 {
 /// The body of a policy bundle: what the signer may agree to, and who may change it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyBundleV1 {
-    /// One more than the highest version this signer accepted before; 1 for a genesis.
+    /// Above the highest version this signer accepted before, by at most [`MAX_VERSION_STEP`].
     pub version: u64,
     /// [`digest`](Self::digest) of the bundle in force when this one is offered; all zeros for a
     /// genesis.
@@ -335,7 +352,7 @@ pub enum PolicyRefusal {
     ZeroApprovalFlag,
     /// The version is not greater than every version accepted before.
     Rollback,
-    /// The version skips ahead: it is not the highest version accepted plus 1.
+    /// The version is more than [`MAX_VERSION_STEP`] above the highest version accepted.
     VersionGap,
     /// `parent` is not the digest of the bundle in force (a fork).
     ParentMismatch,
@@ -765,7 +782,8 @@ impl PolicyState {
         if candidate.version() <= highest {
             return Err(R::Rollback);
         }
-        if Some(candidate.version()) != highest.checked_add(1) {
+        // `h + K` saturates: a window reaching past `u64::MAX` ends there.
+        if candidate.version() > highest.saturating_add(MAX_VERSION_STEP) {
             return Err(R::VersionGap);
         }
         let parent = base.active.as_ref().map_or([0; 32], VerifiedBundle::digest);
@@ -780,7 +798,8 @@ impl PolicyState {
             None if candidate.body().admins == *genesis => (genesis, false),
             None => return Err(R::GenesisAdmins),
         };
-        let quorum = if tighter && !candidate.body().allows_zero_approval {
+        let superseding = base.pending.is_some();
+        let quorum = if tighter && !candidate.body().allows_zero_approval && !superseding {
             1
         } else {
             judge.threshold
