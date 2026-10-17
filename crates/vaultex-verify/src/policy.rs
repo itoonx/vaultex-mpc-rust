@@ -55,20 +55,21 @@
 //! 3. **Sequence.** At `now`, let `(e, s)` be the version in force (`(0, 0)` when none), `E` the
 //!    highest epoch accepted (the pending bundle's, else `e`), `A` the anchor (all zeros when none)
 //!    and `K =` [`MAX_VERSION_STEP`].
-//!    - A quorum bundle: `epoch ≤ E` is `Rollback` [BUNDLE_ROLLBACK]; `epoch > E + K` is
-//!      `VersionGap` [BUNDLE_INVALID]; `parent ≠ A` is `ParentMismatch` [BUNDLE_ROLLBACK, a fork].
+//!    - A quorum bundle: `epoch ≤ E` is `Rollback` [BUNDLE_ROLLBACK]; any higher epoch is
+//!      allowed, with no cap (ADR-11 follow-up of 2026-10-18: a quorum bundle is not held to `K`);
+//!      `parent ≠ A` is `ParentMismatch` [BUNDLE_ROLLBACK, a fork].
 //!    - A step: `(epoch, seq) ≤ (e, s)` is `Rollback`; a pending loosening is `StepWhilePending`
 //!      [BUNDLE_INVALID] (superseding needs M-of-N, so it takes a quorum bundle); `epoch ≠ e` is
 //!      `VersionGap` (one admin cannot move the epoch); `seq > s + K` is `VersionGap`; `parent ≠`
 //!      the digest of the bundle in force is `ParentMismatch`.
 //!
-//!    So a genesis is a quorum bundle with a zero parent and an epoch in `1..=K` (the rule with
+//!    So a genesis is a quorum bundle with a zero parent and any epoch from 1 (the rule with
 //!    `E = 0`; the pin and the zero parent, not the number, make it a genesis). A signer that never
 //!    received a bundle which never came into force (a loosening cancelled or replaced while
 //!    pending) installs the next quorum bundle directly; one that missed steps does too, because
-//!    the anchor did not move. The windows bound how far one bundle moves the epoch or the seq
-//!    (no jump to `u32::MAX`). A bundle built on a history the signer does not have fails the
-//!    parent link.
+//!    the anchor did not move. `K` bounds how far one step moves the seq, so one admin cannot jump
+//!    it to `u32::MAX`; only a quorum moves the epoch. A bundle built on a history the signer does
+//!    not have fails the parent link.
 //! 4. **Judge.** The admin set of the bundle effective at `now`. With none installed it is the
 //!    genesis pin configured at setup, and the candidate's own admin set must equal the pin:
 //!    `GenesisAdmins` [BUNDLE_INVALID]. A candidate never judges itself.
@@ -163,9 +164,12 @@
 //! - A quorum bundle is classified against the bundle in force at each signer. A signer that
 //!   missed some steps may therefore class it as a tightening where the others hold it pending;
 //!   all reach the same bundle once the lock ends.
-//! - A signer can skip only quorum epochs that never came into force, at most
-//!   [`MAX_VERSION_STEP`]` − 1` at a time, and steps only by starting the next epoch; one that
-//!   missed a step must be given it before the next step, which names it as parent.
+//! - A signer can skip only quorum epochs that never came into force, and steps only by starting
+//!   the next epoch; one that missed a step must be given it before the next step, which names it
+//!   as parent.
+//! - Quorum epochs are not capped: a quorum-signed epoch near `u32::MAX` would exhaust the epoch
+//!   space and leave no room for the next quorum bundle. That takes a quorum mistake, not a
+//!   single-admin action; recovery is a new genesis.
 //! - The decoder clamps a fee limit or validity above its hard ceilings.
 //! - No receipt records an install yet: receipts record decisions on requests only.
 
@@ -206,9 +210,8 @@ pub const MIN_LOOSEN_DELAY_MS: u64 = 86_400_000;
 /// so far that no loosening, not even an admin rotation, ever takes effect.
 // ponytail: owner decision 2026-10-17 (ADR-11 follow-ups).
 pub const MAX_LOOSEN_DELAY_MS: u64 = 30 * 86_400_000;
-/// K: a quorum bundle's epoch lies in `(E, E + K]` and a step's seq in `(s, s + K]` (step 3). It
-/// lets a signer skip epochs that never came into force, and bounds how far one bundle moves the
-/// epoch or the seq (no jump to `u32::MAX`).
+/// K: a step's seq lies in `(s, s + K]` (step 3), so one admin cannot jump the seq to
+/// `u32::MAX`. Quorum bundles are not held to it (ADR-11 follow-up of 2026-10-18).
 // ponytail: provisional (ADR-11 follow-ups, 2026-10-17).
 pub const MAX_VERSION_STEP: u32 = 16;
 /// 1 TRX = 10^6 sun.
@@ -381,8 +384,7 @@ pub enum PolicyRefusal {
     ZeroApprovalFlag,
     /// The version is not above the versions accepted before (step 3).
     Rollback,
-    /// A quorum bundle's epoch more than [`MAX_VERSION_STEP`] above the highest epoch accepted; a
-    /// step outside the epoch in force, or more than [`MAX_VERSION_STEP`] above its seq.
+    /// A step outside the epoch in force, or more than [`MAX_VERSION_STEP`] above its seq.
     VersionGap,
     /// `parent` is not the anchor (quorum bundle) or the bundle in force (step): a fork.
     ParentMismatch,
@@ -816,7 +818,6 @@ impl PolicyState {
         let (in_force, epoch, seq) = base.active.as_ref().map_or(([0; 32], 0, 0), |a| {
             (a.digest, a.body().epoch, a.body().seq)
         });
-        // Windows saturate: one reaching past `u32::MAX` ends there.
         if quorum_bundle {
             let top = base
                 .pending
@@ -824,9 +825,6 @@ impl PolicyState {
                 .map_or(epoch, |p| p.bundle.body().epoch);
             if c.epoch <= top {
                 return Err(R::Rollback);
-            }
-            if c.epoch > top.saturating_add(MAX_VERSION_STEP) {
-                return Err(R::VersionGap);
             }
             if c.parent != base.anchor {
                 return Err(R::ParentMismatch);
@@ -841,7 +839,11 @@ impl PolicyState {
             if c.epoch != epoch {
                 return Err(R::VersionGap);
             }
-            if c.seq > seq.saturating_add(MAX_VERSION_STEP) {
+            // A window reaching past `u32::MAX` ends there.
+            if seq
+                .checked_add(MAX_VERSION_STEP)
+                .is_some_and(|max| c.seq > max)
+            {
                 return Err(R::VersionGap);
             }
             if c.parent != in_force {

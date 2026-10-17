@@ -1147,11 +1147,11 @@ fn cases() -> Vec<Case> {
         let last = churn.last().unwrap().clone();
         churn.push(step(&last, |_| {}));
     }
-    let mut churn_case = case("A-QUORUM-SURVIVES-STEP-CHURN", "offer step 3 (a quorum bundle names the anchor)", Some("A-JUDGE-IS-EFFECTIVE"), "Twenty no-op steps by one admin neither invalidate nor delay a rotation signed 2-of-3 against the genesis, and no step lands while it is pending")
+    let mut churn_case = case("A-STEP-CHURN-THEN-ROTATION", "offer step 3 (a quorum bundle names the anchor)", Some("A-JUDGE-IS-EFFECTIVE"), "Twenty no-op steps by one admin neither invalidate nor delay a rotation signed 2-of-3 against the genesis, and no step lands while it is pending")
         .genesis("genesis", &b);
     for (i, s) in churn.iter().enumerate().skip(1) {
         churn_case = churn_case.offer(
-            &format!("A-QUORUM-SURVIVES-STEP-CHURN/step-{i}"),
+            &format!("A-STEP-CHURN-THEN-ROTATION/step-{i}"),
             sign(s, &[3]),
             T1 + i as u64,
             effective(s),
@@ -1167,7 +1167,7 @@ fn cases() -> Vec<Case> {
                 pending(&rotated, T1 + 100 + DAY),
             )
             .offer(
-                "A-QUORUM-SURVIVES-STEP-CHURN/step-21",
+                "A-STEP-CHURN-THEN-ROTATION/step-21",
                 sign(&late_step, &[3]),
                 T1 + 101,
                 refuse(RefusalCode::BUNDLE_INVALID, "StepWhilePending"),
@@ -1583,6 +1583,7 @@ fn cases() -> Vec<Case> {
         })
     };
     let s2 = step(&tight2, |b| trx_cap(b, 400_000_000));
+    let epoch_max = quorum(&b, u32::MAX, |b| trx_cap(b, 500_000_000));
     out.extend([
         case("R-SUPERSEDE-1OFN", "offer step 3 (a step while a loosening is pending)", Some("A-SUPERSEDE-MOFN"), "A step signed by one admin while a loosening is pending")
             .genesis("genesis", &b)
@@ -1605,25 +1606,27 @@ fn cases() -> Vec<Case> {
             .offer("A-VERSION-SEQ-AT-K/step-16", sign(&seq_at(MAX_VERSION_STEP), &[3]), T1, effective(&seq_at(MAX_VERSION_STEP))),
         case("A-VERSION-GENESIS-AT-K", "offer step 3 (bound)", Some("A-GENESIS"), "A genesis at epoch K (E = 0)")
             .genesis("A-VERSION-GENESIS-AT-K/q16", &edited(base(), |b| b.epoch = MAX_VERSION_STEP)),
-        case("R-VERSION-EPOCH-PAST-K", "offer step 3 (bound)", Some("A-VERSION-EPOCH-AT-K"), "A quorum bundle at epoch E + K + 1 (E = 1)")
+        case("A-VERSION-EPOCH-PAST-K", "offer step 3 (quorum epochs are not capped by K)", Some("A-VERSION-EPOCH-AT-K"), "A quorum bundle at epoch E + K + 1 (E = 1) takes effect")
             .genesis("genesis", &b)
-            .offer("R-VERSION-EPOCH-PAST-K/q18", sign(&quorum(&b, 2 + MAX_VERSION_STEP, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, invalid("VersionGap")),
+            .offer("A-VERSION-EPOCH-PAST-K/q18", sign(&quorum(&b, 2 + MAX_VERSION_STEP, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, effective(&quorum(&b, 2 + MAX_VERSION_STEP, |b| trx_cap(b, 500_000_000)))),
         case("R-VERSION-SEQ-PAST-K", "offer step 3 (bound)", Some("A-VERSION-SEQ-AT-K"), "A step at seq s + K + 1 (s = 0)")
             .genesis("genesis", &b)
             .offer("R-VERSION-SEQ-PAST-K/step-17", sign(&seq_at(MAX_VERSION_STEP + 1), &[3]), T1, invalid("VersionGap")),
         case("R-VERSION-GAP-MAX", "offer step 3 (no single-admin freeze)", Some("A-TIGHTEN"), "A step by one admin at seq 2^32 − 1, which would end the step sequence")
             .genesis("genesis", &b)
             .offer("R-VERSION-GAP-MAX/step-max", sign(&seq_max, &[3]), T1, invalid("VersionGap")),
-        case("R-VERSION-GAP-EPOCH-MAX", "offer step 3", Some("A-VERSION-EPOCH-AT-K"), "A quorum bundle at epoch 2^32 − 1")
+        case("A-VERSION-QUORUM-EPOCH-MAX", "offer step 3 (quorum epochs are not capped by K)", Some("A-VERSION-EPOCH-PAST-K"), "A quorum bundle at epoch 2^32 − 1 takes effect; it leaves no epoch for another quorum bundle, while steps still work")
             .genesis("genesis", &b)
-            .offer("R-VERSION-GAP-EPOCH-MAX/q-max", sign(&quorum(&b, u32::MAX, |b| trx_cap(b, 500_000_000)), &[1, 2]), T1, invalid("VersionGap")),
+            .offer("A-VERSION-QUORUM-EPOCH-MAX/q-max", sign(&epoch_max, &[1, 2]), T1, effective(&epoch_max))
+            .offer("A-VERSION-QUORUM-EPOCH-MAX/q-max-again", sign(&quorum(&epoch_max, u32::MAX, |b| trx_cap(b, 400_000_000)), &[1, 2]), T1 + 1, rollback("Rollback"))
+            .offer("A-VERSION-QUORUM-EPOCH-MAX/step", sign(&step(&epoch_max, |b| trx_cap(b, 400_000_000)), &[3]), T1 + 2, effective(&step(&epoch_max, |b| trx_cap(b, 400_000_000)))),
         case("R-VERSION-STEP-EPOCH", "offer step 3 (one admin cannot move the epoch)", Some("A-TIGHTEN"), "A step by one admin that names the next epoch")
             .genesis("genesis", &b)
             .offer("R-VERSION-STEP-EPOCH/step", sign(&step(&b, |b| { trx_cap(b, 500_000_000); b.epoch = 2; }), &[3]), T1, invalid("VersionGap")),
         case("R-VERSION-GENESIS-STEP", "offer step 3 (a genesis is a quorum bundle)", Some("A-GENESIS"), "A first bundle at (1, 1) with a zero parent")
             .offer("R-VERSION-GENESIS-STEP/step", sign(&edited(base(), |b| b.seq = 1), &[1, 2]), T0, invalid("VersionGap")),
-        case("R-VERSION-GAP-GENESIS", "offer step 3 (bound)", Some("A-VERSION-GENESIS-AT-K"), "A genesis at epoch K + 1 (E = 0)")
-            .offer("R-VERSION-GAP-GENESIS/q17", sign(&edited(base(), |b| b.epoch = MAX_VERSION_STEP + 1), &[1, 2]), T0, invalid("VersionGap")),
+        case("A-VERSION-GENESIS-PAST-K", "offer step 3 (quorum epochs are not capped by K)", Some("A-VERSION-GENESIS-AT-K"), "A genesis at epoch K + 1 (E = 0) takes effect")
+            .genesis("A-VERSION-GENESIS-PAST-K/q17", &edited(base(), |b| b.epoch = MAX_VERSION_STEP + 1)),
         case("R-ROLLBACK-STEP", "offer step 3", Some("A-TIGHTEN"), "The first step again after the second")
             .genesis("genesis", &b)
             .offer("A-TIGHTEN/step-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
@@ -2171,8 +2174,18 @@ fn policy_refuses_version_gap() {
 }
 
 #[test]
-fn policy_accepts_version_up_to_k() {
+fn policy_accepts_versions_in_range() {
     check(&["A-VERSION"]);
+}
+
+/// Quorum epochs are not capped by K (owner decision, 2026-10-18): E + K + 1 and 2^32 − 1 install.
+#[test]
+fn policy_quorum_epoch_not_capped_by_k() {
+    check(&[
+        "A-VERSION-EPOCH-PAST-K",
+        "A-VERSION-GENESIS-PAST-K",
+        "A-VERSION-QUORUM-EPOCH-MAX",
+    ]);
 }
 
 #[test]
@@ -2183,7 +2196,7 @@ fn policy_supersede_pending_needs_m_of_n() {
 /// (a) A quorum bundle signed against the anchor survives twenty no-op steps.
 #[test]
 fn policy_quorum_bundle_survives_step_churn() {
-    check(&["A-QUORUM-SURVIVES-STEP-CHURN"]);
+    check(&["A-STEP-CHURN-THEN-ROTATION"]);
 }
 
 /// (b) A quorum bundle is classified against the bundle in force, steps included.
