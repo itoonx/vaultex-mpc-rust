@@ -5,10 +5,16 @@
 //! # Format
 //!
 //! - **Body:** [`PolicyBundleV1`], BCS with field order = declaration order. Its digest is
-//!   `tagged_digest("VAULTEX/POLICY-BUNDLE/v1", body)` ([`PolicyBundleV1::digest`]). Versions
-//!   increase by at most [`MAX_VERSION_STEP`] at a time, and each body names the digest of the
-//!   bundle it replaces (`parent`; all zeros for a genesis), so the bundles a signer puts in force
-//!   form a hash chain (THREAT_MODEL_V2 TH15; ADR-11 follow-ups of 2026-10-17).
+//!   `tagged_digest("VAULTEX/POLICY-BUNDLE/v1", body)` ([`PolicyBundleV1::digest`]).
+//! - **Versions** are pairs `(epoch, seq)`, ordered lexicographically. Requests and receipts name
+//!   them as one `u64`, `epoch · 2^32 + seq` ([`PolicyBundleV1::version`]), whose numeric order is
+//!   the pair order. A **quorum bundle** has `seq = 0`: it always needs M-of-N and starts epoch
+//!   `epoch`. A **step** has `seq > 0`: a tightening of the bundle in force that one admin may sign,
+//!   within the same epoch. Each body names a parent digest, so the bundles in force form a hash
+//!   chain (THREAT_MODEL_V2 TH15): a step names the bundle in force, a quorum bundle names the
+//!   **anchor**, the quorum bundle that started the epoch in force. Steps never move the epoch or
+//!   the anchor, so a quorum bundle signed against the anchor stays valid however many steps are
+//!   installed after it was signed (ADR-11 follow-ups of 2026-10-17 and 2026-10-18).
 //! - **Signed bundle:** [`SignedPolicyBundleV1`], the body followed by `(admin key, signature)`
 //!   pairs, BCS, at most [`MAX_BUNDLE_BYTES`].
 //! - **Signatures** are Ed25519 over the 32-byte digest, checked with strict verification (RFC 8032
@@ -46,29 +52,39 @@
 //!       strictly ascending by length (`Unsorted`);
 //!    5. `allows_zero_approval` is true exactly when some tier needs 0 approvals
 //!       (`ZeroApprovalFlag`).
-//! 3. **Sequence.** Let `h` be the highest version this signer has accepted: the pending bundle's,
-//!    else the effective one's, else 0. The version must lie in `(h, h + K]` with
-//!    `K =` [`MAX_VERSION_STEP`]: `≤ h` is `Rollback` [BUNDLE_ROLLBACK], above `h + K` is
-//!    `VersionGap` [BUNDLE_INVALID]. Order comes from the parent link: `parent` must be the digest
-//!    of the bundle in force at this signer, effective at `now` (all zeros when none), never of a
-//!    pending one: `ParentMismatch` [BUNDLE_ROLLBACK, a fork]. So a genesis has a zero parent, and
-//!    a signer that never received a bundle which never came into force (a loosening cancelled or
-//!    replaced while pending) installs the next one directly: its parent is still the bundle that
-//!    signer has in force, and the window allows the skipped version. A bundle built on a history
-//!    the signer does not have fails the parent link.
+//! 3. **Sequence.** At `now`, let `(e, s)` be the version in force (`(0, 0)` when none), `E` the
+//!    highest epoch accepted (the pending bundle's, else `e`), `A` the anchor (all zeros when none)
+//!    and `K =` [`MAX_VERSION_STEP`].
+//!    - A quorum bundle: `epoch ≤ E` is `Rollback` [BUNDLE_ROLLBACK]; any higher epoch is
+//!      allowed, with no cap (ADR-11 follow-up of 2026-10-18: a quorum bundle is not held to `K`);
+//!      `parent ≠ A` is `ParentMismatch` [BUNDLE_ROLLBACK, a fork].
+//!    - A step: `(epoch, seq) ≤ (e, s)` is `Rollback`; a pending loosening is `StepWhilePending`
+//!      [BUNDLE_INVALID] (superseding needs M-of-N, so it takes a quorum bundle); `epoch ≠ e` is
+//!      `VersionGap` (one admin cannot move the epoch); `seq > s + K` is `VersionGap`; `parent ≠`
+//!      the digest of the bundle in force is `ParentMismatch`.
+//!
+//!    So a genesis is a quorum bundle with a zero parent and any epoch from 1 (the rule with
+//!    `E = 0`; the pin and the zero parent, not the number, make it a genesis). A signer that never
+//!    received a bundle which never came into force (a loosening cancelled or replaced while
+//!    pending) installs the next quorum bundle directly; one that missed steps does too, because
+//!    the anchor did not move. `K` bounds how far one step moves the seq, so one admin cannot jump
+//!    it to `u32::MAX`; only a quorum moves the epoch. A bundle built on a history the signer does
+//!    not have fails the parent link.
 //! 4. **Judge.** The admin set of the bundle effective at `now`. With none installed it is the
 //!    genesis pin configured at setup, and the candidate's own admin set must equal the pin:
 //!    `GenesisAdmins` [BUNDLE_INVALID]. A candidate never judges itself.
 //! 5. **Class.** A tightening if a bundle is installed and [`tightens`]`(effective, candidate)`
-//!    (table below); otherwise a loosening, genesis included.
+//!    (table below), always against the bundle in force, steps included; otherwise a loosening,
+//!    genesis included. A step must be a tightening: `StepNotTighter` [BUNDLE_INVALID] (a loosening
+//!    takes a quorum bundle and its time lock).
 //! 6. **Signatures.** Every signature by a judging key verifies over the candidate's digest:
 //!    `BadSignature` [BUNDLE_INVALID].
-//! 7. **Quorum.** The distinct judging keys with a signature number at least 1 for a tightening
-//!    with `allows_zero_approval` false while no loosening is pending at `now`, and at least the
-//!    judge's threshold M otherwise: `Quorum` [BUNDLE_INVALID]. Any accepted candidate supersedes a
-//!    pending loosening (a tightening drops it, a loosening replaces it), so superseding always
-//!    needs M-of-N (ADR-11 follow-ups). The code is `BUNDLE_INVALID`, the registry's code for a
-//!    bundle short of its quorum; `APPROVALS_INSUFFICIENT` is for approver statements on a request.
+//! 7. **Quorum.** The distinct judging keys with a signature number at least the judge's
+//!    threshold M for a quorum bundle or a step with `allows_zero_approval`, and at least 1 for
+//!    any other step: `Quorum` [BUNDLE_INVALID]. Only a quorum bundle can supersede a pending
+//!    loosening (steps are refused meanwhile), so superseding always needs M-of-N (ADR-11
+//!    follow-ups). The code is `BUNDLE_INVALID`, the registry's code for a bundle short of its
+//!    quorum; `APPROVALS_INSUFFICIENT` is for approver statements on a request.
 //! 8. **Record.** For a loosening, the end of its time lock (receipt time plus the active
 //!    bundle's delay) must fit in a `u64`: `LockOverflow` [CLOCK_UNTRUSTED]. Then
 //!    [`PolicyStore::offer`] replaces the installed file atomically and durably before it answers:
@@ -78,11 +94,11 @@
 //! # States
 //!
 //! ```text
-//! NONE                    ── genesis, M-of-N of the pin ───────────────────► ACTIVE(a)
-//! ACTIVE(a)               ── tightening, 1-of-N of a (M if zero approval) ─► ACTIVE(b)
-//! ACTIVE(a) + PENDING     ── tightening, M-of-N of a ──────────────────────► ACTIVE(b)              (pending dropped)
-//! ACTIVE(a) [+ PENDING]   ── loosening, M-of-N of a ───────────────────────► ACTIVE(a) + PENDING(b, r = now)
-//! ACTIVE(a) + PENDING(b, r) ── now ≥ r + a.loosen_delay_ms ───────────────► ACTIVE(b)
+//! NONE                     ── genesis: quorum bundle, M-of-N of the pin ──────► ACTIVE(a), anchor a
+//! ACTIVE(x)                ── step tightening x, 1-of-N (M if zero approval) ─► ACTIVE(y), anchor kept
+//! ACTIVE(x) [+ PENDING]    ── quorum bundle tighter than x, M-of-N ───────────► ACTIVE(b), anchor b   (pending dropped)
+//! ACTIVE(x) [+ PENDING]    ── quorum bundle not tighter than x, M-of-N ───────► ACTIVE(x) + PENDING(b, r = now)
+//! ACTIVE(x) + PENDING(b, r) ── now ≥ r + x.loosen_delay_ms ──────────────────► ACTIVE(b), anchor b
 //! ```
 //!
 //! - `r` is the time this signer recorded receiving `b`: its own clock at the offer, written to the
@@ -93,6 +109,8 @@
 //! - A new loosening replaces the pending one and its time lock starts again. A tightening drops
 //!   it. Either way it takes M-of-N: no single admin can stop a pending change, such as an
 //!   admin-set rotation.
+//! - Steps cannot change the time lock (table below), so the lock a quorum loosening waits out is
+//!   the one the last quorum bundle set: steps can neither invalidate nor delay a quorum change.
 //!
 //! **Using the policy.** [`PolicyState::for_version`] gives the bundle a request names: none
 //! installed is `NoPolicy` [NO_POLICY]; the pending version before its lock ends is `NotEffective`
@@ -112,7 +130,7 @@
 //! | Field | `new` tightens `old` when |
 //! |---|---|
 //! | `admins` | equal. A stricter admin set is still a loosening: raising M or dropping admins lets one admin lock the quorum out |
-//! | `loosen_delay_ms` | `new ≥ old` |
+//! | `loosen_delay_ms` | equal. A longer lock is still a loosening of governance: one admin could otherwise delay every quorum change by up to [`MAX_LOOSEN_DELAY_MS`] |
 //! | `allows_zero_approval` | not compared (it follows the tiers); when true, the bundle needs M-of-N even as a tightening |
 //! | `initiators`, `approvers` | `new ⊆ old` |
 //! | `breaker.refusal_threshold` | `new ≤ old`, where 0 counts as 1 |
@@ -126,7 +144,7 @@
 //! | `asset.recipients` | old is `Any`, or both are `Only` and `new ⊆ old` |
 //! | `asset.tiers` | for every amount up to both caps, new approvals `≥` old approvals |
 //! | `asset.windows` | every old window length is in new, with `max_amount`, `max_count` and `max_fee` each `≤` (extra windows are allowed). No old window means nothing is allowed (step 2 refuses it): only no new window tightens that |
-//! | `version`, `parent` | not compared (step 3) |
+//! | `epoch`, `seq`, `parent` | not compared (step 3) |
 //!
 //! # Limits
 //!
@@ -141,10 +159,17 @@
 //!   again until then. The caller must pass its own clock through the breaker's rollback check.
 //! - While a loosening is pending, nothing supersedes it without M-of-N, not even an emergency
 //!   tightening (ADR-11 follow-ups): a quorum that is unavailable for the length of the time lock
-//!   cannot cancel a pending change. Freezing (1-of-N, in the breaker) stays available.
-//! - A signer can skip only versions that never came into force, and at most
-//!   [`MAX_VERSION_STEP`]` − 1` at a time; one that missed a bundle that did come into force must
-//!   be given it first, because the next bundle names it as parent.
+//!   cannot cancel a pending change. The kernel's freeze (`Breaker::freeze`) is a local operator
+//!   action today; an admin-signed freeze order is not implemented yet.
+//! - A quorum bundle is classified against the bundle in force at each signer. A signer that
+//!   missed some steps may therefore class it as a tightening where the others hold it pending;
+//!   all reach the same bundle once the lock ends.
+//! - A signer can skip only quorum epochs that never came into force, and steps only by starting
+//!   the next epoch; one that missed a step must be given it before the next step, which names it
+//!   as parent.
+//! - Quorum epochs are not capped: a quorum-signed epoch near `u32::MAX` would exhaust the epoch
+//!   space and leave no room for the next quorum bundle. That takes a quorum mistake, not a
+//!   single-admin action; recovery is a new genesis.
 //! - The decoder clamps a fee limit or validity above its hard ceilings.
 //! - No receipt records an install yet: receipts record decisions on requests only.
 
@@ -185,11 +210,10 @@ pub const MIN_LOOSEN_DELAY_MS: u64 = 86_400_000;
 /// so far that no loosening, not even an admin rotation, ever takes effect.
 // ponytail: owner decision 2026-10-17 (ADR-11 follow-ups).
 pub const MAX_LOOSEN_DELAY_MS: u64 = 30 * 86_400_000;
-/// K: a candidate's version lies in `(h, h + K]`, where `h` is the highest version accepted. The
-/// step lets a signer skip versions that never came into force, and bounds how far one bundle can
-/// move the sequence (no jump to `u64::MAX`).
+/// K: a step's seq lies in `(s, s + K]` (step 3), so one admin cannot jump the seq to
+/// `u32::MAX`. Quorum bundles are not held to it (ADR-11 follow-up of 2026-10-18).
 // ponytail: provisional (ADR-11 follow-ups, 2026-10-17).
-pub const MAX_VERSION_STEP: u64 = 16;
+pub const MAX_VERSION_STEP: u32 = 16;
 /// 1 TRX = 10^6 sun.
 const TRX_DECIMALS: u8 = 6;
 /// 10^77 is the largest power of ten below 2^256, so every token amount has a decimal rendering.
@@ -207,10 +231,12 @@ pub struct AdminSetV1 {
 /// The body of a policy bundle: what the signer may agree to, and who may change it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyBundleV1 {
-    /// Above the highest version this signer accepted before, by at most [`MAX_VERSION_STEP`].
-    pub version: u64,
-    /// [`digest`](Self::digest) of the bundle in force when this one is offered; all zeros for a
-    /// genesis.
+    /// The epoch: started by a quorum bundle (`seq = 0`), kept by every step after it.
+    pub epoch: u32,
+    /// 0 for a quorum bundle; above the step in force, by at most [`MAX_VERSION_STEP`], for a step.
+    pub seq: u32,
+    /// For a quorum bundle the anchor's [`digest`](Self::digest) (the quorum bundle that started
+    /// the epoch in force; all zeros for a genesis); for a step, the bundle in force.
     pub parent: [u8; 32],
     /// Who judges the next bundle.
     pub admins: AdminSetV1,
@@ -307,6 +333,12 @@ impl PolicyBundleV1 {
     pub fn digest(&self) -> [u8; 32] {
         tagged_digest(tag::POLICY_BUNDLE_V1, self)
     }
+
+    /// The version as requests and receipts name it, `epoch · 2^32 + seq`: its numeric order is
+    /// the order of `(epoch, seq)`.
+    pub fn version(&self) -> u64 {
+        u64::from(self.epoch).checked_shl(32).unwrap_or_default() | u64::from(self.seq)
+    }
 }
 
 impl AssetRuleV1 {
@@ -350,12 +382,16 @@ pub enum PolicyRefusal {
     NoWindows,
     /// `allows_zero_approval` does not match the tiers.
     ZeroApprovalFlag,
-    /// The version is not greater than every version accepted before.
+    /// The version is not above the versions accepted before (step 3).
     Rollback,
-    /// The version is more than [`MAX_VERSION_STEP`] above the highest version accepted.
+    /// A step outside the epoch in force, or more than [`MAX_VERSION_STEP`] above its seq.
     VersionGap,
-    /// `parent` is not the digest of the bundle in force (a fork).
+    /// `parent` is not the anchor (quorum bundle) or the bundle in force (step): a fork.
     ParentMismatch,
+    /// A step while a loosening is pending: superseding it takes a quorum bundle.
+    StepWhilePending,
+    /// A step that is not a tightening of the bundle in force.
+    StepNotTighter,
     /// The time lock of a loosening would end beyond the clock's range.
     LockOverflow,
     /// A first bundle whose admin set is not the genesis pin.
@@ -404,6 +440,8 @@ impl PolicyRefusal {
             | R::NoWindows
             | R::ZeroApprovalFlag
             | R::VersionGap
+            | R::StepWhilePending
+            | R::StepNotTighter
             | R::GenesisAdmins
             | R::BadSignature
             | R::Quorum => RefusalCode::BUNDLE_INVALID,
@@ -516,9 +554,9 @@ impl VerifiedBundle {
         &self.signed
     }
 
-    /// The body's version.
+    /// The body's version, `epoch · 2^32 + seq` ([`PolicyBundleV1::version`]).
     pub fn version(&self) -> u64 {
-        self.signed.body.version
+        self.signed.body.version()
     }
 
     /// [`PolicyBundleV1::digest`], as receipts name it.
@@ -696,11 +734,13 @@ fn verify_strict(key: &Ed25519Pub, msg: &[u8], sig: &Sig64) -> bool {
     })
 }
 
-/// What a signer has installed: the active bundle and at most one pending loosening. Pure;
-/// [`PolicyStore`] keeps it in a file.
+/// What a signer has installed: the active bundle, the anchor of its epoch, and at most one
+/// pending loosening. Pure; [`PolicyStore`] keeps it in a file.
 #[derive(Clone, Debug, Default)]
 pub struct PolicyState {
     active: Option<VerifiedBundle>,
+    /// Digest of the quorum bundle that started the active bundle's epoch; zeros when none.
+    anchor: [u8; 32],
     pending: Option<Pending>,
 }
 
@@ -773,22 +813,42 @@ impl PolicyState {
         let candidate = VerifiedBundle::check(signed)?;
 
         let base = self.at(now_ms);
-        let highest = base
-            .pending
-            .as_ref()
-            .map(|p| &p.bundle)
-            .or(base.active.as_ref())
-            .map_or(0, VerifiedBundle::version);
-        if candidate.version() <= highest {
-            return Err(R::Rollback);
-        }
-        // `h + K` saturates: a window reaching past `u64::MAX` ends there.
-        if candidate.version() > highest.saturating_add(MAX_VERSION_STEP) {
-            return Err(R::VersionGap);
-        }
-        let parent = base.active.as_ref().map_or([0; 32], VerifiedBundle::digest);
-        if candidate.body().parent != parent {
-            return Err(R::ParentMismatch);
+        let c = candidate.body();
+        let quorum_bundle = c.seq == 0;
+        let (in_force, epoch, seq) = base.active.as_ref().map_or(([0; 32], 0, 0), |a| {
+            (a.digest, a.body().epoch, a.body().seq)
+        });
+        if quorum_bundle {
+            let top = base
+                .pending
+                .as_ref()
+                .map_or(epoch, |p| p.bundle.body().epoch);
+            if c.epoch <= top {
+                return Err(R::Rollback);
+            }
+            if c.parent != base.anchor {
+                return Err(R::ParentMismatch);
+            }
+        } else {
+            if (c.epoch, c.seq) <= (epoch, seq) {
+                return Err(R::Rollback);
+            }
+            if base.pending.is_some() {
+                return Err(R::StepWhilePending);
+            }
+            if c.epoch != epoch {
+                return Err(R::VersionGap);
+            }
+            // A window reaching past `u32::MAX` ends there.
+            if seq
+                .checked_add(MAX_VERSION_STEP)
+                .is_some_and(|max| c.seq > max)
+            {
+                return Err(R::VersionGap);
+            }
+            if c.parent != in_force {
+                return Err(R::ParentMismatch);
+            }
         }
         let (judge, tighter) = match &base.active {
             Some(active) => (
@@ -798,11 +858,13 @@ impl PolicyState {
             None if candidate.body().admins == *genesis => (genesis, false),
             None => return Err(R::GenesisAdmins),
         };
-        let superseding = base.pending.is_some();
-        let quorum = if tighter && !candidate.body().allows_zero_approval && !superseding {
-            1
-        } else {
+        if !quorum_bundle && !tighter {
+            return Err(R::StepNotTighter);
+        }
+        let quorum = if quorum_bundle || candidate.body().allows_zero_approval {
             judge.threshold
+        } else {
+            1
         };
         if candidate.signers(judge)? < usize::from(quorum) {
             return Err(R::Quorum);
@@ -815,6 +877,7 @@ impl PolicyState {
                 let effective_at_ms = pending.effective_at_ms;
                 let next = Self {
                     active: Some(active),
+                    anchor: base.anchor,
                     pending: Some(pending),
                 };
                 let offer = Offer::Pending {
@@ -827,6 +890,7 @@ impl PolicyState {
             _ => {
                 let next = Self {
                     active: Some(candidate),
+                    anchor: if quorum_bundle { digest } else { base.anchor },
                     pending: None,
                 };
                 (next, Offer::Effective { version, digest })
@@ -865,6 +929,7 @@ impl PolicyState {
         match (&self.active, &self.pending) {
             (Some(_), Some(p)) if now_ms >= p.effective_at_ms => Self {
                 active: Some(p.bundle.clone()),
+                anchor: p.bundle.digest,
                 pending: None,
             },
             _ => self.clone(),
@@ -959,6 +1024,8 @@ mod tests {
             R::NoWindows,
             R::ZeroApprovalFlag,
             R::VersionGap,
+            R::StepWhilePending,
+            R::StepNotTighter,
             R::GenesisAdmins,
             R::BadSignature,
             R::Quorum,
