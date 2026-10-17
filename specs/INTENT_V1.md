@@ -474,7 +474,7 @@ If no check fails, the decoder returns the intent and the sign input:
 
 1. **Native zero-address recipient.** Should the decoder refuse it, as it does for tokens, or leave it to the policy recipient allowlist?
 2. **`Permission_id` reference capture.** `A-003` and `A-019` are constructed bytes. They become reference vectors once a tronweb capture confirms where `Permission_id` is written.
-3. **Finer wire codes.** Several checks share a code (§7.4). Should the registry gain finer codes, appended, so that receipts name the exact check? `NATIVE_AMOUNT_OVER_BOUND` uses `TX_VALUE_NOT_ALLOWED` because the registry has no amount-bound code (the fee analogue is `TX_FEE_OVER_BOUND`); one has been requested.
+3. **Finer wire codes.** Several checks share a code (§7.4). Should the registry gain finer codes, appended, so that receipts name the exact check? `NATIVE_AMOUNT_OVER_BOUND` uses `TX_VALUE_NOT_ALLOWED` because the registry has no amount-bound code (the fee analogue is `TX_FEE_OVER_BOUND`); a dedicated code is still to be requested.
 4. **A ceiling for `max_clock_skew_ms`.** It is bounded in effect by `timestamp ≤ expiration ≤ now_ms + V`. Is a separate ceiling wanted?
 5. **Reference-block freshness.** Should a signer that holds a view of the chain also bound the reference block's age? That needs chain data, which the kernel does not read.
 6. **Where the statement format lives.** §6.3 is informative. Should the approval statement be specified here, or with the approvals design and `POLICY_BUNDLE_V1`?
