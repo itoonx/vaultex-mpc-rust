@@ -129,8 +129,9 @@ Constants of this RFC:
 | `MAX_RAW_BYTES` | 512 | Inputs longer than this are refused before parsing. Both accepted shapes are under 256 bytes |
 | `MAX_VALIDITY_MS` | 86,400,000 (24 h) | Hard ceiling on `max_validity_ms` |
 | `MAX_FEE_LIMIT_SUN` | 15,000,000,000 (15,000 TRX) | Hard ceiling on `max_fee_limit_sun` |
+| `MAX_NATIVE_AMOUNT_SUN` | 9,007,199,254,740,991 (`2⁵³ − 1`, about 9.0 billion TRX) | Hard ceiling on a native `amount`. It is JavaScript's `Number.MAX_SAFE_INTEGER`: tronweb reads `int64` fields as JS numbers, which are exact only up to this value, so above it JS tooling (tronweb, approver tools, the independent oracle) would show a rounded amount while the decoder and the chain read the exact one. TRC-20 amounts are 32-byte words that JS tooling reads exactly, and are not bounded |
 
-A bundle can lower these ceilings and can never raise them: a larger configured value is clamped to the ceiling (§7.3 step 6).
+A bundle can lower the validity and fee ceilings and can never raise them: a larger configured value is clamped to the ceiling (§7.3 step 6). `MAX_NATIVE_AMOUNT_SUN` has no context value; per-transaction amount caps belong to the policy bundle (`POLICY_BUNDLE_V1`).
 
 ## 5. Canonical encoding
 
@@ -310,7 +311,7 @@ An implementation MUST apply the steps below in order and report the **first** c
    4. `owner_address`, then the counterparty (`to_address` for type 1, `contract_address` for type 31), is not 21 bytes starting with `0x41`: `ADDRESS_SHAPE`.
    5. `owner_address` differs from `wallet_address`: `OWNER_NOT_WALLET`.
 6. **Shape.**
-   - **Type 1:** `to_address` equals `owner_address`: `SELF_TRANSFER`. `fee_limit` is present: `FEE_LIMIT_ON_NATIVE`.
+   - **Type 1:** `to_address` equals `owner_address`: `SELF_TRANSFER`. `fee_limit` is present: `FEE_LIMIT_ON_NATIVE`. `amount` is above `MAX_NATIVE_AMOUNT_SUN` (`2⁵³ − 1`): `NATIVE_AMOUNT_OVER_BOUND`.
    - **Type 31**, in this order:
      1. `data` is shorter than 4 bytes: `CALLDATA_LENGTH`.
      2. `data[0..4]` is not `a9059cbb` (`transfer(address,uint256)`): `SELECTOR_NOT_TRANSFER`.
@@ -359,6 +360,7 @@ Several checks share one wire code. The registry is coarse on purpose; the check
 | `OWNER_NOT_WALLET` | 5.5 | The owner is not the wallet's address | `0x020A` | `TX_SENDER_MISMATCH` |
 | `SELF_TRANSFER` | 6 | A native transfer to the sender | `0x0206` | `TX_SHAPE_NOT_ALLOWED` |
 | `FEE_LIMIT_ON_NATIVE` | 6 | A native transfer with `fee_limit` | `0x0206` | `TX_SHAPE_NOT_ALLOWED` |
+| `NATIVE_AMOUNT_OVER_BOUND` | 6 | A native amount above `2⁵³ − 1` sun | `0x0208` | `TX_VALUE_NOT_ALLOWED` |
 | `CALLDATA_LENGTH` | 6.1, 6.3 | Call data shorter than a selector, or not 68 bytes | `0x0207` | `TX_SELECTOR_NOT_ALLOWED` |
 | `SELECTOR_NOT_TRANSFER` | 6.2 | Any selector other than `a9059cbb` | `0x0207` | `TX_SELECTOR_NOT_ALLOWED` |
 | `CALLDATA_ADDRESS_PADDING` | 6.4 | Non-zero padding in the recipient word | `0x0205` | `TX_NON_CANONICAL` |
@@ -423,14 +425,15 @@ If no check fails, the decoder returns the intent and the sign input:
 
 **Running a vector.** Decode `raw_tx` under `ctx`. An accept vector passes when every field, `BCS(intent)`, the intent digest and `BCS(SignInput)` match. A refuse vector passes when the first failing check, its code and its code name match. A harness MUST fail when the file holds no vectors, when a vector has an unknown key, or when a code and its name disagree with the registry (KAT plan R10).
 
-**Coverage.** 146 vectors: 19 accept, 127 refuse. Every check except `NON_CANONICAL_ENCODING` has at least one refuse vector. Each refuse vector with a `base` changes one property of it (KAT plan R3): one field, one encoding detail, the call data, or one context value. The precedence vectors below change two on purpose.
+**Coverage.** 146 vectors: 19 accept, 127 refuse. Every check except `NON_CANONICAL_ENCODING` and `NATIVE_AMOUNT_OVER_BOUND` has at least one refuse vector. Each refuse vector with a `base` changes one property of it (KAT plan R3): one field, one encoding detail, the call data, or one context value. The precedence vectors below change two on purpose.
 
 **Boundaries** (KAT plan R5; each pair is at the bound and one past it):
 
 | Bound | Accepted at the bound | Refused past it |
 |---|---|---|
 | Input size, 512 bytes (inclusive) | `R-004` (passes the size check, then refused for its padding field) | `R-003` |
-| Native amount, `1 ..= 2⁶³ − 1` | `A-005`, `A-006` | `R-026` (0), `R-062` (`2⁶³`) |
+| Native amount, `1 ..= 2⁵³ − 1` | `A-005` (1); `2⁵³ − 1`: no vector yet | `R-026` (0); `2⁵³`: no vector yet |
+| Native `int64` range, `2⁶³ − 1` | — | `R-062` (`2⁶³`, `INT_RANGE`) |
 | Token amount, `1 ..= 2²⁵⁶ − 1` | `A-007`, `A-008` | `R-107` (0) |
 | Configured `fee_limit` bound (inclusive) | `A-010` | `R-111` |
 | `fee_limit` ceiling, 15,000 TRX | `A-011` | `R-112` |
@@ -440,6 +443,8 @@ If no check fails, the decoder returns the intent and the sign input:
 | `timestamp ≤ expiration` | `A-014` | `R-117` |
 | `timestamp ≤ now_ms + max_clock_skew_ms` | `A-015` | `R-118` |
 | `timestamp ≥ now_ms − V` | `A-016` | `R-119` |
+
+**Vector file behind this draft.** The file was generated from the draft of 2026-10-11, before `NATIVE_AMOUNT_OVER_BOUND` (§7.3 step 6). Its `checks` table does not list that check, it has no vector at that bound, and `A-006` (a native amount of `2⁶³ − 1` sun) still expects an accept that this draft refuses. The file is regenerated once the independent oracle implements the check; until then the oracle checks the file against the 2026-10-11 draft, and the decoder's own tests pin the bound.
 
 **Precedence** (two properties changed; the order of §7.3 decides): `R-120` to `R-127`, plus `R-039` (a memo after the last field: R4 before R7) and `R-041` (an explicit zero `call_value`: R4 before R9).
 
@@ -460,7 +465,7 @@ If no check fails, the decoder returns the intent and the sign input:
 - **Reference block.** The decoder checks only the reference block's shape. It does not rely on the chain's own reference-block check to bind a transaction to a network; the per-network key above does that.
 - **Time.** `now_ms` is the signer's own clock. Expiry is bounded (24 h at most), so a signed transaction does not stay valid indefinitely. Clock attacks are handled outside the decoder (the breaker's clock checks).
 - **Fees.** `fee_limit` is bounded for token calls and refused on native transfers.
-- **Amounts.** Amounts are base units; decimals come from the bundle. `U256` keeps all 256 bits and is never truncated.
+- **Amounts.** Amounts are base units; decimals come from the bundle. `U256` keeps all 256 bits and is never truncated. A native amount above `2⁵³ − 1` sun is refused, so JS tooling, which reads `int64` fields as JS numbers, shows an approver the same amount the decoder decided on.
 - **Zero recipient.** A token transfer to the zero address is refused. A native transfer to the zero address is left to the policy's recipient allowlist (§11).
 - **Resource use.** The size cap is checked before parsing. Parsing is a single pass over at most 512 bytes.
 - **Refusals reveal only a class.** A refusal carries a code, never input bytes.
@@ -469,7 +474,7 @@ If no check fails, the decoder returns the intent and the sign input:
 
 1. **Native zero-address recipient.** Should the decoder refuse it, as it does for tokens, or leave it to the policy recipient allowlist?
 2. **`Permission_id` reference capture.** `A-003` and `A-019` are constructed bytes. They become reference vectors once a tronweb capture confirms where `Permission_id` is written.
-3. **Finer wire codes.** Several checks share a code (§7.4). Should the registry gain finer codes, appended, so that receipts name the exact check?
+3. **Finer wire codes.** Several checks share a code (§7.4). Should the registry gain finer codes, appended, so that receipts name the exact check? `NATIVE_AMOUNT_OVER_BOUND` uses `TX_VALUE_NOT_ALLOWED` because the registry has no amount-bound code (the fee analogue is `TX_FEE_OVER_BOUND`); one has been requested.
 4. **A ceiling for `max_clock_skew_ms`.** It is bounded in effect by `timestamp ≤ expiration ≤ now_ms + V`. Is a separate ceiling wanted?
 5. **Reference-block freshness.** Should a signer that holds a view of the chain also bound the reference block's age? That needs chain data, which the kernel does not read.
 6. **Where the statement format lives.** §6.3 is informative. Should the approval statement be specified here, or with the approvals design and `POLICY_BUNDLE_V1`?
@@ -478,3 +483,4 @@ If no check fails, the decoder returns the intent and the sign input:
 ## 12. Changelog
 
 - 2026-10-11: First draft (T05-7a), with 146 vectors.
+- 2026-10-16: `NATIVE_AMOUNT_OVER_BOUND`: native amounts above `2⁵³ − 1` sun are refused (owner decision, T05-2b). The vector file is not regenerated yet (§9).
