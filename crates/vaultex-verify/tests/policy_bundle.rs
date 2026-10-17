@@ -30,7 +30,7 @@ use vaultex_verify::breaker::BreakerConfig;
 use vaultex_verify::policy::{
     tightens, AdminSetV1, AdminSignatureV1, AssetRuleV1, Offer, PolicyBundleV1, PolicyRefusal,
     PolicyState, PolicyStore, RecipientsV1, SignedPolicyBundleV1, TierV1, WalletV1,
-    MAX_BUNDLE_BYTES, MAX_LOOSEN_DELAY_MS, MIN_LOOSEN_DELAY_MS,
+    MAX_BUNDLE_BYTES, MAX_LOOSEN_DELAY_MS, MAX_VERSION_STEP, MIN_LOOSEN_DELAY_MS,
 };
 use vaultex_verify::tron::{decode, TronRefusal};
 use vaultex_verify::velocity::{StoreError, WindowLimit};
@@ -1062,11 +1062,22 @@ fn cases() -> Vec<Case> {
             .offer("A-DELAY-OF-ACTIVE/v2", sign(&next(strict(), 2, |b| b.loosen_delay_ms = DAY), &[1, 2]), T1, pending(&next(strict(), 2, |b| b.loosen_delay_ms = DAY), T1 + 2 * DAY))
             .use_version(2, T1 + DAY, refuse(RefusalCode::BUNDLE_NOT_EFFECTIVE, "NotEffective"))
             .use_version(2, T1 + 2 * DAY, in_force(&next(strict(), 2, |b| b.loosen_delay_ms = DAY))),
-        case("A-TIGHTEN-CANCELS", "states (a tightening drops the pending loosening)", Some("A-LOOSEN"), "One admin's tightening replaces both the active bundle and the pending loosening")
+        case("A-SUPERSEDE-MOFN", "offer step 7 (superseding a pending loosening needs M-of-N)", Some("A-LOOSEN"), "A tightening signed 2-of-3 while a loosening is pending takes effect at once and drops the loosening")
             .genesis("genesis", &b)
             .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
-            .offer("A-TIGHTEN-CANCELS/v3-1of3", sign(&tight3, &[3]), T1 + 1, effective(&tight3))
+            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
             .use_version(2, T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
+            .use_version(3, T1 + DAY, in_force(&tight3)),
+        case("A-N1-SEEN", "offer step 3 (the parent is the bundle in force)", Some("A-SUPERSEDE-MOFN"), "A signer that received the loosening and the bundle that cancelled it: the cancelled bundle cannot come back")
+            .genesis("genesis", &b)
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
+            .use_version(3, T1 + DAY, in_force(&tight3)),
+        case("A-N1-MISSED", "offer step 3 (versions that never came into force may be skipped)", Some("A-N1-SEEN"), "A signer that never received the cancelled loosening installs the cancelling bundle directly and ends in the same state")
+            .genesis("genesis", &b)
+            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
             .use_version(3, T1 + DAY, in_force(&tight3)),
         case("A-LOOSEN-REPLACES", "states (a loosening replaces the pending one)", Some("A-LOOSEN"), "A second loosening replaces the first, and its own lock starts at its receipt")
             .genesis("genesis", &b)
@@ -1469,20 +1480,34 @@ fn cases() -> Vec<Case> {
     let rollback = |check| refuse(RefusalCode::BUNDLE_ROLLBACK, check);
     let gap = |b: &PolicyBundleV1| next(b.clone(), u64::MAX, |b| trx_cap(b, 500_000_000));
     out.extend([
-        case("R-VERSION-GAP", "offer step 3", Some("A-TIGHTEN"), "A tightening numbered 3 straight after version 1")
+        case("R-SUPERSEDE-1OFN", "offer step 7 (superseding a pending loosening needs M-of-N)", Some("A-SUPERSEDE-MOFN"), "A tightening signed by one admin while a loosening is pending")
             .genesis("genesis", &b)
-            .offer("A-TIGHTEN-CANCELS/v3-1of3", sign(&tight3, &[3]), T1, invalid("VersionGap")),
+            .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
+            .offer("SUPERSEDE/v3-1of3", sign(&tight3, &[3]), T1 + 1, invalid("Quorum"))
+            .use_version(2, T1 + DAY, in_force(&loose)),
+        case("A-VERSION-AT-K", "offer step 3 (bound)", Some("A-TIGHTEN"), "A tightening numbered h + K (h = 1) takes effect")
+            .genesis("genesis", &b)
+            .offer("A-VERSION-AT-K/v17", sign(&next(tight2.clone(), 1 + MAX_VERSION_STEP, |b| b.parent = base().digest()), &[3]), T1, effective(&next(tight2.clone(), 1 + MAX_VERSION_STEP, |b| b.parent = base().digest()))),
+        case("A-VERSION-GENESIS-AT-K", "offer step 3 (bound)", Some("A-GENESIS"), "A genesis numbered K (h = 0)")
+            .genesis("A-VERSION-GENESIS-AT-K/v16", &edited(base(), |b| b.version = MAX_VERSION_STEP)),
+        case("R-VERSION-PAST-K", "offer step 3 (bound)", Some("A-VERSION-AT-K"), "A tightening numbered h + K + 1 (h = 1)")
+            .genesis("genesis", &b)
+            .offer("R-VERSION-PAST-K/v18", sign(&next(tight2.clone(), 2 + MAX_VERSION_STEP, |b| b.parent = base().digest()), &[3]), T1, invalid("VersionGap")),
         case("R-VERSION-GAP-MAX", "offer step 3", Some("A-TIGHTEN"), "A tightening by one admin numbered 2^64 − 1, which would end the version sequence")
             .genesis("genesis", &b)
             .offer("R-VERSION-GAP-MAX/v-max", sign(&gap(&b), &[3]), T1, invalid("VersionGap")),
-        case("R-VERSION-GAP-GENESIS", "offer step 3 (genesis is version 1)", Some("A-GENESIS"), "A genesis numbered 2")
-            .offer("R-VERSION-GAP-GENESIS/v2", sign(&next(base(), 2, |b| b.parent = [0; 32]), &[1, 2]), T0, invalid("VersionGap")),
+        case("R-VERSION-GAP-GENESIS", "offer step 3 (bound)", Some("A-VERSION-GENESIS-AT-K"), "A genesis numbered K + 1 (h = 0)")
+            .offer("R-VERSION-GAP-GENESIS/v17", sign(&edited(base(), |b| b.version = MAX_VERSION_STEP + 1), &[1, 2]), T0, invalid("VersionGap")),
+        case("R-PARENT-FORK", "offer step 3 (the parent is the bundle in force)", Some("A-N1-MISSED"), "A signer whose bundle in force is another version 2 cannot install a version 3 built on version 1")
+            .genesis("genesis", &b)
+            .offer("A-TIGHTEN/v2-1of3", sign(&tight2, &[3]), T1, effective(&tight2))
+            .offer("SUPERSEDE/v3-2of3", sign(&tight3, &[1, 2]), T1 + 1, rollback("ParentMismatch")),
         case("R-PARENT-GENESIS", "offer step 3 (genesis has a zero parent)", Some("A-GENESIS"), "A genesis that names a parent")
             .offer("R-PARENT-GENESIS/v1", sign(&edited(base(), |b| b.parent = [1; 32]), &[1, 2]), T0, rollback("ParentMismatch")),
         case("R-PARENT-ZERO", "offer step 3 (parent)", Some("A-TIGHTEN"), "A tightening whose parent is all zeros instead of the genesis")
             .genesis("genesis", &b)
             .offer("R-PARENT-ZERO/v2", sign(&next(base(), 2, |b| { trx_cap(b, 500_000_000); b.parent = [0; 32]; }), &[3]), T1, rollback("ParentMismatch")),
-        case("R-PARENT-PENDING", "offer step 3 (the parent is the bundle in force)", Some("A-TIGHTEN-CANCELS"), "A tightening that names the pending loosening, not the bundle in force, as its parent")
+        case("R-PARENT-PENDING", "offer step 3 (the parent is the bundle in force)", Some("A-SUPERSEDE-MOFN"), "A tightening that names the pending loosening, not the bundle in force, as its parent")
             .genesis("genesis", &b)
             .offer("A-LOOSEN/v2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
             .offer("R-PARENT-PENDING/v3", sign(&next(base(), 3, |b| { trx_cap(b, 500_000_000); b.parent = loose.digest(); }), &[3]), T1 + 1, rollback("ParentMismatch")),
@@ -1989,7 +2014,53 @@ fn policy_refuses_no_windows() {
 
 #[test]
 fn policy_refuses_version_gap() {
-    check(&["R-VERSION-GAP"]);
+    check(&["R-VERSION"]);
+}
+
+#[test]
+fn policy_accepts_version_up_to_k() {
+    check(&["A-VERSION"]);
+}
+
+#[test]
+fn policy_supersede_pending_needs_m_of_n() {
+    check(&["R-SUPERSEDE"]);
+}
+
+#[test]
+fn policy_supersede_pending_with_m_of_n() {
+    check(&["A-SUPERSEDE"]);
+}
+
+/// Two signers, one of which never received a loosening that a later bundle cancelled, end with
+/// the same bundle in force, and neither can be given the cancelled one afterwards.
+#[test]
+fn policy_missed_cancelled_loosening_converges() {
+    check(&["A-N1"]);
+    let loose = next(base(), 2, |b| trx_cap(b, 2_000_000_000));
+    let cancel = next(base(), 3, |b| trx_cap(b, 500_000_000));
+    let genesis = PolicyState::default()
+        .offer(&admins(), &sign(&base(), &[1, 2]), T0)
+        .unwrap()
+        .0;
+    let (seen, _) = genesis
+        .offer(&admins(), &sign(&loose, &[1, 3]), T1)
+        .unwrap();
+    let (seen, _) = seen
+        .offer(&admins(), &sign(&cancel, &[1, 2]), T1 + 1)
+        .unwrap();
+    let (missed, _) = genesis
+        .offer(&admins(), &sign(&cancel, &[1, 2]), T1 + 1)
+        .unwrap();
+    for now in [T1 + 1, T1 + DAY, T1 + 30 * DAY] {
+        let digests = [&seen, &missed].map(|s| s.effective(now).map(|b| b.digest()));
+        assert_eq!(digests, [Some(cancel.digest()); 2], "at {now}");
+        assert!(seen.pending().is_none() && missed.pending().is_none());
+    }
+    for state in [&seen, &missed] {
+        let late = state.offer(&admins(), &sign(&loose, &[1, 3]), T1 + 2);
+        assert_eq!(late.map(|_| ()), Err(PolicyRefusal::Rollback));
+    }
 }
 
 #[test]
