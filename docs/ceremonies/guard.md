@@ -211,7 +211,7 @@ Used for scheduled rotation, by [RB-3](../ops/runbooks.md#rb-3-guard-key-comprom
 
 ### CER-R3. Monitor key rotation
 
-1. **Freeze key:** make the new key (CER-3). Add it to the bundle's freeze keys with a tightening bundle (one admin; takes effect at once). Confirm the Guard accepts a freeze from it: on Nile, after CER-7, run drill DR-1 ([runbooks](../ops/runbooks.md) §4), whose freeze is now signed by the new key; it must pass. Then remove the old key with a loosening bundle (M-of-N; time-locked).
+1. **Freeze key:** make the new key (CER-3). Add it to the bundle's freeze keys with a tightening bundle (one admin while no loosening is pending, otherwise M-of-N; takes effect at once). Confirm the Guard accepts a freeze from it: on Nile, after CER-7, run drill DR-1 ([runbooks](../ops/runbooks.md) §4), whose freeze is now signed by the new key; it must pass. Then remove the old key with a loosening bundle (M-of-N; time-locked).
 2. **Evidence key:** make a new key; publish the new `allowed_signers` in a transcript. Packs signed before the change keep verifying against the transcript that was current when they were signed.
 3. **Ack key** (OD-1): make a new key and install its public key in the Guard's configuration.
 
