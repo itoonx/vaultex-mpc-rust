@@ -5,7 +5,9 @@
 //! # Format
 //!
 //! - **Body:** [`PolicyBundleV1`], BCS with field order = declaration order. Its digest is
-//!   `tagged_digest("VAULTEX/POLICY-BUNDLE/v1", body)` ([`PolicyBundleV1::digest`]).
+//!   `tagged_digest("VAULTEX/POLICY-BUNDLE/v1", body)` ([`PolicyBundleV1::digest`]). Versions are
+//!   sequential from 1, and each body names the digest of the bundle it replaces (`parent`; all
+//!   zeros for version 1), so a signer's policy history is a hash chain (THREAT_MODEL_V2 TH15).
 //! - **Signed bundle:** [`SignedPolicyBundleV1`], the body followed by `(admin key, signature)`
 //!   pairs, BCS, at most [`MAX_BUNDLE_BYTES`].
 //! - **Signatures** are Ed25519 over the 32-byte digest, checked with strict verification (RFC 8032
@@ -17,7 +19,7 @@
 //!   permission id, and each asset's token contract and decimals. Anything it does not list is
 //!   refused. Velocity windows are this signer's own limits ([`WindowLimit`]); admin tooling sizes
 //!   them from a group budget with [`per_signer_cap`](crate::velocity::per_signer_cap), rounding
-//!   up (owner decision, 2026-10-16).
+//!   up (`docs/TASKS.md` §3, Kernel defaults: velocity bound rounded up).
 //!
 //! # Verification order
 //!
@@ -30,18 +32,24 @@
 //!    1. admins: `1 ≤ threshold ≤` number of keys (`AdminThreshold`);
 //!    2. the admin, initiator and approver key lists, in that order: strictly ascending
 //!       (`Unsorted`), and every key a valid point not of small order (`WeakKey`);
-//!    3. `loosen_delay_ms ≥` [`MIN_LOOSEN_DELAY_MS`] (`DelayTooShort`);
+//!    3. `loosen_delay_ms ≥` [`MIN_LOOSEN_DELAY_MS`] (`DelayTooShort`) and `≤`
+//!       [`MAX_LOOSEN_DELAY_MS`] (`DelayTooLong`);
 //!    4. wallets strictly ascending by id (`Unsorted`); then each wallet in turn: its network is a
 //!       TRON network (`NotTron`); its address is `0x41 ‖ 20 bytes` (`AddressShape`); every token
 //!       contract is `0x41 ‖ 20 bytes` (`AddressShape`); assets strictly ascending, TRX first and
 //!       tokens by contract (`Unsorted`); then each asset in turn: decimals 6 for TRX and at most
 //!       77 for a token (`Decimals`); listed recipients `0x41 ‖ 20 bytes` (`AddressShape`) and
 //!       strictly ascending (`Unsorted`); tiers strictly ascending by `up_to` (`Unsorted`), the
-//!       last at `max_per_tx` (`LastTier`); windows strictly ascending by length (`Unsorted`);
+//!       last at `max_per_tx` (`LastTier`); at least one window (`NoWindows`: velocity refuses
+//!       every charge without one, so the only way to block an asset is to drop its rule), windows
+//!       strictly ascending by length (`Unsorted`);
 //!    5. `allows_zero_approval` is true exactly when some tier needs 0 approvals
 //!       (`ZeroApprovalFlag`).
-//! 3. **Version.** Greater than every version this signer has accepted, that is the pending
-//!    bundle's or else the effective one's (0 when none): `Rollback` [BUNDLE_ROLLBACK].
+//! 3. **Sequence.** Let `h` be the highest version this signer has accepted: the pending bundle's,
+//!    else the effective one's, else 0. A version `≤ h` is `Rollback` [BUNDLE_ROLLBACK]; any other
+//!    than `h + 1` is `VersionGap` [BUNDLE_INVALID]. The `parent` must be the digest of the bundle
+//!    effective at `now` (all zeros when none): `ParentMismatch` [BUNDLE_ROLLBACK, a fork]. So a
+//!    genesis is version 1 with a zero parent.
 //! 4. **Judge.** The admin set of the bundle effective at `now`. With none installed it is the
 //!    genesis pin configured at setup, and the candidate's own admin set must equal the pin:
 //!    `GenesisAdmins` [BUNDLE_INVALID]. A candidate never judges itself.
@@ -52,8 +60,11 @@
 //! 7. **Quorum.** The distinct judging keys with a signature number at least 1 for a tightening
 //!    with `allows_zero_approval` false, and at least the judge's threshold M otherwise: `Quorum`
 //!    [BUNDLE_INVALID].
-//! 8. **Record.** [`PolicyStore::offer`] replaces the installed file atomically and durably before
-//!    it answers: `Store` [STATE_WRITE_FAILED]. A refusal at any step changes nothing.
+//! 8. **Record.** For a loosening, the end of its time lock (receipt time plus the active
+//!    bundle's delay) must fit in a `u64`: `LockOverflow` [CLOCK_UNTRUSTED]. Then
+//!    [`PolicyStore::offer`] replaces the installed file atomically and durably before it answers:
+//!    `Store` [STATE_WRITE_FAILED]. A refusal at any step changes nothing; after a failed write
+//!    the store refuses every offer until it is reopened, and the file is the truth.
 //!
 //! # States
 //!
@@ -103,8 +114,8 @@
 //! | `asset.max_per_tx` | `new ≤ old` |
 //! | `asset.recipients` | old is `Any`, or both are `Only` and `new ⊆ old` |
 //! | `asset.tiers` | for every amount up to both caps, new approvals `≥` old approvals |
-//! | `asset.windows` | every old window length is in new, with `max_amount`, `max_count` and `max_fee` each `≤` (extra windows are allowed) |
-//! | `version` | not compared (step 3) |
+//! | `asset.windows` | every old window length is in new, with `max_amount`, `max_count` and `max_fee` each `≤` (extra windows are allowed). No old window means nothing is allowed (step 2 refuses it): only no new window tightens that |
+//! | `version`, `parent` | not compared (step 3) |
 //!
 //! # Limits
 //!
@@ -113,7 +124,15 @@
 //!   checked against the active one's admins again. The active bundle's signatures were checked at
 //!   install, against an admin set the file no longer holds. A deleted file reopens genesis; the
 //!   receipt log's `POLICY_ROLLBACK` rule shows the rollback.
-//! - The time lock is only as good as the signer's clock: a clock pushed forward shortens it.
+//! - The time lock is only as good as the signer's clock: a clock pushed forward shortens it, and
+//!   so does a clock that is behind when a loosening arrives. A promotion is recorded only by the
+//!   next offer, so a clock moved back below the end of a lock makes the earlier bundle effective
+//!   again until then. The caller must pass its own clock through the breaker's rollback check.
+//! - Any single admin can stop a pending loosening by installing a tightening first, including an
+//!   admin-set rotation that would remove that admin (TH16). Whether cancelling an admin-set change
+//!   should need M-of-N is an open governance decision (ADR-11).
+//! - Versions are strictly sequential, so every signer must receive every bundle in order,
+//!   including loosenings that a later tightening cancelled.
 //! - The decoder clamps a fee limit or validity above its hard ceilings.
 //! - No receipt records an install yet: receipts record decisions on requests only.
 
@@ -150,6 +169,10 @@ use crate::velocity::{StoreError, WindowLimit};
 pub const MAX_BUNDLE_BYTES: usize = 60 * 1024;
 /// Shortest time lock a bundle may set on the loosening after it: 24 hours.
 pub const MIN_LOOSEN_DELAY_MS: u64 = 86_400_000;
+/// Longest time lock a bundle may set: 30 days. Without a bound one admin could tighten the delay
+/// so far that no loosening, not even an admin rotation, ever takes effect.
+// ponytail: provisional until the owner confirms the value.
+pub const MAX_LOOSEN_DELAY_MS: u64 = 30 * 86_400_000;
 /// 1 TRX = 10^6 sun.
 const TRX_DECIMALS: u8 = 6;
 /// 10^77 is the largest power of ten below 2^256, so every token amount has a decimal rendering.
@@ -167,11 +190,15 @@ pub struct AdminSetV1 {
 /// The body of a policy bundle: what the signer may agree to, and who may change it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyBundleV1 {
-    /// Greater than every version this signer accepted before.
+    /// One more than the highest version this signer accepted before; 1 for a genesis.
     pub version: u64,
+    /// [`digest`](Self::digest) of the bundle in force when this one is offered; all zeros for a
+    /// genesis.
+    pub parent: [u8; 32],
     /// Who judges the next bundle.
     pub admins: AdminSetV1,
-    /// The time lock on the next loosening, in milliseconds; at least [`MIN_LOOSEN_DELAY_MS`].
+    /// The time lock on the next loosening, in milliseconds, from [`MIN_LOOSEN_DELAY_MS`] to
+    /// [`MAX_LOOSEN_DELAY_MS`].
     pub loosen_delay_ms: u64,
     /// States that some tier needs no approval: true exactly when one does.
     pub allows_zero_approval: bool,
@@ -292,6 +319,8 @@ pub enum PolicyRefusal {
     WeakKey,
     /// `loosen_delay_ms` is below [`MIN_LOOSEN_DELAY_MS`].
     DelayTooShort,
+    /// `loosen_delay_ms` is above [`MAX_LOOSEN_DELAY_MS`].
+    DelayTooLong,
     /// A wallet's network is not a TRON network.
     NotTron,
     /// A wallet, token or recipient address is not `0x41 ‖ 20 bytes`.
@@ -300,10 +329,18 @@ pub enum PolicyRefusal {
     Decimals,
     /// The last tier does not end at `max_per_tx`, or there is no tier.
     LastTier,
+    /// An asset rule without a velocity window.
+    NoWindows,
     /// `allows_zero_approval` does not match the tiers.
     ZeroApprovalFlag,
     /// The version is not greater than every version accepted before.
     Rollback,
+    /// The version skips ahead: it is not the highest version accepted plus 1.
+    VersionGap,
+    /// `parent` is not the digest of the bundle in force (a fork).
+    ParentMismatch,
+    /// The time lock of a loosening would end beyond the clock's range.
+    LockOverflow,
     /// A first bundle whose admin set is not the genesis pin.
     GenesisAdmins,
     /// A signature by a judging admin key does not verify.
@@ -342,15 +379,20 @@ impl PolicyRefusal {
             | R::Unsorted
             | R::WeakKey
             | R::DelayTooShort
+            | R::DelayTooLong
             | R::NotTron
             | R::AddressShape
             | R::Decimals
             | R::LastTier
+            | R::NoWindows
             | R::ZeroApprovalFlag
+            | R::VersionGap
             | R::GenesisAdmins
             | R::BadSignature
             | R::Quorum => RefusalCode::BUNDLE_INVALID,
-            R::Rollback => RefusalCode::BUNDLE_ROLLBACK,
+            // KAT plan KAT-12: a fork with the wrong parent digest is a rollback.
+            R::Rollback | R::ParentMismatch => RefusalCode::BUNDLE_ROLLBACK,
+            R::LockOverflow => RefusalCode::CLOCK_UNTRUSTED,
             R::Store(_) => RefusalCode::STATE_WRITE_FAILED,
             R::NoPolicy => RefusalCode::NO_POLICY,
             R::VersionMismatch => RefusalCode::POLICY_VERSION_MISMATCH,
@@ -401,6 +443,9 @@ impl VerifiedBundle {
         }
         if b.loosen_delay_ms < MIN_LOOSEN_DELAY_MS {
             return Err(R::DelayTooShort);
+        }
+        if b.loosen_delay_ms > MAX_LOOSEN_DELAY_MS {
+            return Err(R::DelayTooLong);
         }
         if !ascending(&b.wallets, |x, y| {
             x.wallet_id.as_str().cmp(y.wallet_id.as_str())
@@ -577,6 +622,9 @@ fn asset_rule(rule: &AssetRuleV1) -> Result<(), PolicyRefusal> {
     if rule.tiers.last().map(|t| t.up_to) != Some(rule.max_per_tx) {
         return Err(R::LastTier);
     }
+    if rule.windows.is_empty() {
+        return Err(R::NoWindows);
+    }
     if !ascending(&rule.windows, |x, y| x.window_ms.cmp(&y.window_ms)) {
         return Err(R::Unsorted);
     }
@@ -644,13 +692,26 @@ struct Pending {
     bundle: VerifiedBundle,
     /// This signer's clock when it recorded the bundle.
     received_at_ms: u64,
+    /// The end of the time lock.
+    effective_at_ms: u64,
 }
 
 impl Pending {
-    /// The end of the time lock: this signer's receipt time plus the active bundle's delay.
-    fn effective_at(&self, active: &VerifiedBundle) -> u64 {
-        self.received_at_ms
-            .saturating_add(active.body().loosen_delay_ms)
+    /// A loosening this signer received at `received_at_ms`, in force once `active`'s time lock
+    /// has run from then. The end must fit in a `u64` (step 8).
+    fn new(
+        bundle: VerifiedBundle,
+        received_at_ms: u64,
+        active: &VerifiedBundle,
+    ) -> Result<Self, PolicyRefusal> {
+        let effective_at_ms = received_at_ms
+            .checked_add(active.body().loosen_delay_ms)
+            .ok_or(PolicyRefusal::LockOverflow)?;
+        Ok(Self {
+            bundle,
+            received_at_ms,
+            effective_at_ms,
+        })
     }
 }
 
@@ -676,7 +737,8 @@ pub enum Offer {
 }
 
 impl PolicyState {
-    /// Steps 1 to 7 for the signed bundle `bytes`, received at `now_ms` (this signer's clock).
+    /// Steps 1 to 8 (up to the write) for the signed bundle `bytes`, received at `now_ms` (this
+    /// signer's clock).
     /// Returns the state to record and how the bundle was installed; `self` is unchanged.
     /// `genesis` judges the first bundle.
     pub fn offer(
@@ -703,6 +765,13 @@ impl PolicyState {
         if candidate.version() <= highest {
             return Err(R::Rollback);
         }
+        if Some(candidate.version()) != highest.checked_add(1) {
+            return Err(R::VersionGap);
+        }
+        let parent = base.active.as_ref().map_or([0; 32], VerifiedBundle::digest);
+        if candidate.body().parent != parent {
+            return Err(R::ParentMismatch);
+        }
         let (judge, tighter) = match &base.active {
             Some(active) => (
                 &active.body().admins,
@@ -723,11 +792,8 @@ impl PolicyState {
         let (version, digest) = (candidate.version(), candidate.digest);
         Ok(match base.active {
             Some(active) if !tighter => {
-                let pending = Pending {
-                    bundle: candidate,
-                    received_at_ms: now_ms,
-                };
-                let effective_at_ms = pending.effective_at(&active);
+                let pending = Pending::new(candidate, now_ms, &active)?;
+                let effective_at_ms = pending.effective_at_ms;
                 let next = Self {
                     active: Some(active),
                     pending: Some(pending),
@@ -752,7 +818,7 @@ impl PolicyState {
     /// The bundle in force at `now_ms`, if any.
     pub fn effective(&self, now_ms: u64) -> Option<&VerifiedBundle> {
         match (&self.active, &self.pending) {
-            (Some(active), Some(p)) if now_ms >= p.effective_at(active) => Some(&p.bundle),
+            (Some(_), Some(p)) if now_ms >= p.effective_at_ms => Some(&p.bundle),
             (active, _) => active.as_ref(),
         }
     }
@@ -771,14 +837,14 @@ impl PolicyState {
 
     /// The recorded loosening and the end of its time lock, if any (for status and alerting).
     pub fn pending(&self) -> Option<(&VerifiedBundle, u64)> {
-        let (active, pending) = self.active.as_ref().zip(self.pending.as_ref())?;
-        Some((&pending.bundle, pending.effective_at(active)))
+        let p = self.pending.as_ref()?;
+        Some((&p.bundle, p.effective_at_ms))
     }
 
     /// The state at `now_ms`: a pending bundle whose time lock has ended is active.
     fn at(&self, now_ms: u64) -> Self {
         match (&self.active, &self.pending) {
-            (Some(active), Some(p)) if now_ms >= p.effective_at(active) => Self {
+            (Some(_), Some(p)) if now_ms >= p.effective_at_ms => Self {
                 active: Some(p.bundle.clone()),
                 pending: None,
             },
@@ -832,6 +898,32 @@ mod tests {
         }
     }
 
+    /// "Taming the many EdDSAs" (Chalkias, Garillot, Nikolaenko; ed25519-speccheck `cases.txt`,
+    /// test 3, index 2 in the paper): a mixed-order key and a small-order R. Cofactorless
+    /// verification accepts it; the bundle signature rule must refuse it.
+    #[test]
+    fn speccheck_small_order_r_is_refused() {
+        use ed25519_dalek::Verifier;
+        let key = Ed25519Pub(
+            hex("f7badec5b8abeaf699583992219b7b223f1df3fbbea919844e3f7c554a43dd43")
+                .try_into()
+                .unwrap(),
+        );
+        let msg = hex("aebf3f2601a0c8c5d39cc7d8911642f740b78168218da8471772b35f9d35b9ab");
+        let sig = Sig64(
+            hex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa8c4bd45aecaca5b24fb97bc10ac27ac8751a7dfe1baff8b953ec9f5833ca260e")
+                .try_into()
+                .unwrap(),
+        );
+        let vk = VerifyingKey::from_bytes(&key.0).unwrap();
+        assert!(!vk.is_weak(), "the key alone passes step 2");
+        assert!(
+            vk.verify(&msg, &Signature::from_bytes(&sig.0)).is_ok(),
+            "the vector is valid under cofactorless verification"
+        );
+        assert!(!verify_strict(&key, &msg, &sig));
+    }
+
     #[test]
     fn refusal_codes() {
         use PolicyRefusal as R;
@@ -840,11 +932,14 @@ mod tests {
             R::Unsorted,
             R::WeakKey,
             R::DelayTooShort,
+            R::DelayTooLong,
             R::NotTron,
             R::AddressShape,
             R::Decimals,
             R::LastTier,
+            R::NoWindows,
             R::ZeroApprovalFlag,
+            R::VersionGap,
             R::GenesisAdmins,
             R::BadSignature,
             R::Quorum,
@@ -855,6 +950,8 @@ mod tests {
         let others = [
             (R::Malformed, RefusalCode::MALFORMED),
             (R::Rollback, RefusalCode::BUNDLE_ROLLBACK),
+            (R::ParentMismatch, RefusalCode::BUNDLE_ROLLBACK),
+            (R::LockOverflow, RefusalCode::CLOCK_UNTRUSTED),
             (
                 R::Store(StoreError::Failed),
                 RefusalCode::STATE_WRITE_FAILED,

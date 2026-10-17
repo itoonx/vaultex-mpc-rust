@@ -5,6 +5,8 @@
 //! - **Offer:** the new state is computed in memory ([`PolicyState::offer`]), written whole to
 //!   `<path>.tmp`, synced, renamed over `path`, and the directory entry synced; only then does the
 //!   offer answer and the new state apply. After a crash the file holds the old or the new state.
+//!   After a failed write the store refuses every offer until it is reopened: the rename may have
+//!   happened, so only the file tells which state is installed.
 //! - **One process:** `<path>.lock` is locked exclusively while the store is open.
 //! - **Open:** no file means nothing is installed (every request refuses `NO_POLICY`). A file is
 //!   decoded strictly and re-checked as the [module docs](super#limits) say; a file that fails
@@ -38,6 +40,7 @@ pub struct PolicyStore {
     path: PathBuf,
     genesis: AdminSetV1,
     state: PolicyState,
+    failed: bool,
     _lock: File,
 }
 
@@ -57,6 +60,7 @@ impl PolicyStore {
             path,
             genesis,
             state,
+            failed: false,
             _lock: lock,
         })
     }
@@ -64,8 +68,14 @@ impl PolicyStore {
     /// Offers the signed bundle `bytes`, received at `now_ms` (this signer's clock): checks it,
     /// records the new state durably, and only then answers. A refusal changes nothing.
     pub fn offer(&mut self, bytes: &[u8], now_ms: u64) -> Result<Offer, PolicyRefusal> {
+        if self.failed {
+            return Err(PolicyRefusal::Store(StoreError::Failed));
+        }
         let (next, offer) = self.state.offer(&self.genesis, bytes, now_ms)?;
-        durable::replace(&self.path, &save(&next)?).map_err(|e| PolicyRefusal::Store(io_err(e)))?;
+        if let Err(e) = durable::replace(&self.path, &save(&next)?) {
+            self.failed = true;
+            return Err(PolicyRefusal::Store(io_err(e)));
+        }
         self.state = next;
         Ok(offer)
     }
@@ -90,7 +100,8 @@ fn save(state: &PolicyState) -> Result<Vec<u8>, PolicyRefusal> {
 }
 
 /// Decodes the installed file: both bundles pass step 2, and the pending one, always a loosening,
-/// passes steps 3, 6 and 7 against the active one's admins again.
+/// passes steps 3, 6, 7 and 8 against the active one again. Its version is above the active one's
+/// (by more than 1 when it replaced an earlier pending bundle) and its parent is the active one.
 fn load(bytes: &[u8]) -> Result<PolicyState, PolicyRefusal> {
     let file = from_canonical_strict::<InstalledV1>(bytes).map_err(|_| PolicyRefusal::Malformed)?;
     let active = VerifiedBundle::check(file.active)?;
@@ -101,14 +112,14 @@ fn load(bytes: &[u8]) -> Result<PolicyState, PolicyRefusal> {
             if bundle.version() <= active.version() {
                 return Err(PolicyRefusal::Rollback);
             }
+            if bundle.body().parent != active.digest() {
+                return Err(PolicyRefusal::ParentMismatch);
+            }
             let admins = &active.body().admins;
             if bundle.signers(admins)? < usize::from(admins.threshold) {
                 return Err(PolicyRefusal::Quorum);
             }
-            Some(Pending {
-                bundle,
-                received_at_ms,
-            })
+            Some(Pending::new(bundle, received_at_ms, &active)?)
         }
     };
     Ok(PolicyState {
