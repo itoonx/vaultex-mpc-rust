@@ -1101,13 +1101,13 @@ fn cases() -> Vec<Case> {
             .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
             .use_version(ver(2, 0), T1 + DAY, refuse(RefusalCode::POLICY_VERSION_MISMATCH, "VersionMismatch"))
             .use_version(ver(3, 0), T1 + DAY, in_force(&tight3)),
-        case("A-N1-SEEN", "offer step 3 (no replay of a cancelled pending bundle)", Some("A-SUPERSEDE-MOFN"), "A signer that received the loosening and the bundle that cancelled it: the cancelled bundle cannot come back")
+        case("A-CANCELLED-LOOSENING-SEEN", "offer step 3 (no replay of a cancelled pending bundle)", Some("A-SUPERSEDE-MOFN"), "A signer that received the loosening and the bundle that cancelled it: the cancelled bundle cannot come back")
             .genesis("genesis", &b)
             .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1, pending(&loose, T1 + DAY))
             .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
             .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
             .use_version(ver(3, 0), T1 + DAY, in_force(&tight3)),
-        case("A-N1-MISSED", "offer step 3 (epochs that never came into force may be skipped)", Some("A-N1-SEEN"), "A signer that never received the cancelled loosening installs the cancelling bundle directly and ends in the same state")
+        case("A-MISSED-CANCELLED-LOOSENING", "offer step 3 (epochs that never came into force may be skipped)", Some("A-CANCELLED-LOOSENING-SEEN"), "A signer that never received the cancelled loosening installs the cancelling bundle directly and ends in the same state")
             .genesis("genesis", &b)
             .offer("SUPERSEDE/q3-2of3", sign(&tight3, &[1, 2]), T1 + 1, effective(&tight3))
             .offer("A-LOOSEN/q2", sign(&loose, &[1, 3]), T1 + 2, refuse(RefusalCode::BUNDLE_ROLLBACK, "Rollback"))
@@ -1147,11 +1147,11 @@ fn cases() -> Vec<Case> {
         let last = churn.last().unwrap().clone();
         churn.push(step(&last, |_| {}));
     }
-    let mut n2 = case("A-N2-CHURN", "offer step 3 (a quorum bundle names the anchor)", Some("A-JUDGE-IS-EFFECTIVE"), "Twenty no-op steps by one admin neither invalidate nor delay a rotation signed 2-of-3 against the genesis, and no step lands while it is pending")
+    let mut churn_case = case("A-QUORUM-SURVIVES-STEP-CHURN", "offer step 3 (a quorum bundle names the anchor)", Some("A-JUDGE-IS-EFFECTIVE"), "Twenty no-op steps by one admin neither invalidate nor delay a rotation signed 2-of-3 against the genesis, and no step lands while it is pending")
         .genesis("genesis", &b);
     for (i, s) in churn.iter().enumerate().skip(1) {
-        n2 = n2.offer(
-            &format!("A-N2-CHURN/step-{i}"),
+        churn_case = churn_case.offer(
+            &format!("A-QUORUM-SURVIVES-STEP-CHURN/step-{i}"),
             sign(s, &[3]),
             T1 + i as u64,
             effective(s),
@@ -1159,20 +1159,21 @@ fn cases() -> Vec<Case> {
     }
     let late_step = step(&churn[20], |_| {});
     out.push(
-        n2.offer(
-            "A-JUDGE-IS-EFFECTIVE/q2",
-            sign(&rotated, &[1, 3]),
-            T1 + 100,
-            pending(&rotated, T1 + 100 + DAY),
-        )
-        .offer(
-            "A-N2-CHURN/step-21",
-            sign(&late_step, &[3]),
-            T1 + 101,
-            refuse(RefusalCode::BUNDLE_INVALID, "StepWhilePending"),
-        )
-        .use_version(ver(1, 20), T1 + 100 + DAY - 1, in_force(&churn[20]))
-        .use_version(ver(2, 0), T1 + 100 + DAY, in_force(&rotated)),
+        churn_case
+            .offer(
+                "A-JUDGE-IS-EFFECTIVE/q2",
+                sign(&rotated, &[1, 3]),
+                T1 + 100,
+                pending(&rotated, T1 + 100 + DAY),
+            )
+            .offer(
+                "A-QUORUM-SURVIVES-STEP-CHURN/step-21",
+                sign(&late_step, &[3]),
+                T1 + 101,
+                refuse(RefusalCode::BUNDLE_INVALID, "StepWhilePending"),
+            )
+            .use_version(ver(1, 20), T1 + 100 + DAY - 1, in_force(&churn[20]))
+            .use_version(ver(2, 0), T1 + 100 + DAY, in_force(&rotated)),
     );
     // (b) It is classified against the bundle in force, steps included.
     let same = quorum(&b, 2, |_| {});
@@ -2179,10 +2180,10 @@ fn policy_supersede_pending_needs_m_of_n() {
     check(&["R-SUPERSEDE", "R-QUORUM-SUPERSEDE"]);
 }
 
-/// (a) N2: a quorum bundle signed against the anchor survives twenty no-op steps.
+/// (a) A quorum bundle signed against the anchor survives twenty no-op steps.
 #[test]
 fn policy_quorum_bundle_survives_step_churn() {
-    check(&["A-N2-CHURN"]);
+    check(&["A-QUORUM-SURVIVES-STEP-CHURN"]);
 }
 
 /// (b) A quorum bundle is classified against the bundle in force, steps included.
@@ -2194,7 +2195,11 @@ fn policy_quorum_bundle_classified_against_in_force() {
 /// (c) A cancelled or replaced pending quorum bundle cannot come back.
 #[test]
 fn policy_no_replay_of_cancelled_or_replaced_pending() {
-    check(&["A-N1-SEEN", "A-N1-MISSED", "A-LOOSEN-REPLACES"]);
+    check(&[
+        "A-CANCELLED-LOOSENING-SEEN",
+        "A-MISSED-CANCELLED-LOOSENING",
+        "A-LOOSEN-REPLACES",
+    ]);
 }
 
 /// (e) One admin can neither end the step sequence nor move the epoch.
@@ -2229,7 +2234,7 @@ fn policy_supersede_pending_with_m_of_n() {
 /// the same bundle in force, and neither can be given the cancelled one afterwards.
 #[test]
 fn policy_missed_cancelled_loosening_converges() {
-    check(&["A-N1"]);
+    check(&["A-CANCELLED-LOOSENING-SEEN", "A-MISSED-CANCELLED-LOOSENING"]);
     let loose = quorum(&base(), 2, |b| trx_cap(b, 2_000_000_000));
     let cancel = quorum(&base(), 3, |b| trx_cap(b, 500_000_000));
     let genesis = PolicyState::default()
