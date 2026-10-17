@@ -88,7 +88,7 @@ Answer in any form, for example "ADR-03: delete". Each row lists the tasks it un
 | **ADR-01** | Capacity scenario | (a) solo + agents · (b) + contract applied cryptographer · (c) team of 3 | (b) at minimum | T00-17, G-MPC path, T12-2 | Day 14 | (b) + contract applied cryptographer |
 | **ADR-02** | Licence | MIT OR Apache-2.0 · Apache-2.0 · AGPL/BSL | MIT OR Apache-2.0 + NOTICE, after author consent (T00-5) | T01-5, T01-11b | Day 3 | MIT OR Apache-2.0 + NOTICE (after T00-5) |
 | **ADR-03** | Legacy hand-rolled crypto | Delete · Quarantine | Delete in M5 (after pre-cut tag, balance check, crypto-shred) | T04-6, T04-7, T04-8, T14-3 | Day 7 | Delete in M5 |
-| **ADR-04** | v1 support matrix | TRON-only · TRON + EVM · multi-chain · FROST/Solana first | TRON (TRX + TRC-20) on pinned `cggmp24`; others quarantined | T04-7, scope of WS-05 beyond TRON | Day 7 | Provisional: TRON on `cggmp24`; re-confirm after the TKeeper teardown (teardown done 2026-10-17; owner to confirm) |
+| **ADR-04** | v1 support matrix | TRON-only · TRON + EVM · multi-chain · FROST/Solana first | TRON (TRX + TRC-20) on pinned `cggmp24`; others quarantined | T04-7, scope of WS-05 beyond TRON | Day 7 | TRON on `cggmp24`, confirmed with changes after the TKeeper teardown (2026-10-17) |
 | **ADR-05** | Real-funds rule | RF-1..RF-4 · audit before any funds · other | Adopt RF-1..RF-4 | T06-8, M7 Rung 2 | Day 7 | Adopt RF-1..RF-4 |
 | **ADR-06** | First-funds host for Rung 2 | Project-owned float · other float with counsel clearance · none until audit | Project-owned float | T06-8, M7 Rung 2 | Day 7 | Project-owned float |
 | **ADR-07** | MPC engine swap | Always · conditional on G-MPC · never (kernel-only) | Conditional on G-MPC | T03-4, T08-2, T09-2, T10-2 | wk 16 | Conditional on G-MPC |
@@ -110,7 +110,7 @@ Answer in any form, for example "ADR-03: delete". Each row lists the tasks it un
 | **Q-RUN-4** ★ | CODEOWNERS handle(s): which GitHub account(s) are yours? | — | — | final value in T02-10 (draft uses `@OWNER`) | Day 1 | @itoonx |
 | **Q-RUN-5** ★ | New crates not yet in `Cargo.lock`: approve per request | Approve list · deny | Reviewed per request in the run log | any task the run log lists as dep-blocked | Rolling | Approved: async-nats 0.47 (+ tokio-stream), libfuzzer-sys + arbitrary (fuzz workspace only), prometheus without default features; advisory and licence exceptions signed off |
 
-Answered in the Claude Code session of 2026-10-16. Accepted ADRs quote the answers in `docs/adr/`; ADR-04 stays OPEN until the owner confirms it; the TKeeper teardown it waited for was done on 2026-10-17.
+Answered in the Claude Code session of 2026-10-16. Accepted ADRs quote the answers in `docs/adr/`; ADR-04 was confirmed with changes on 2026-10-17, after the TKeeper teardown.
 
 Other decisions from the same session:
 - Competitor watch DN-1 (TKeeper vs kill criterion K9): an agent does a teardown of at most 1 day (code reading, no build) before ADR-04 is confirmed.
@@ -120,10 +120,9 @@ Other decisions from the same session:
 - Monitor providers: keyless public providers on testnet; choose providers and create keys before Rung 2.
 - T00-8 canary PR: the orchestrator may push a throwaway branch and open, then close, the canary PR.
 
-Open for the owner (from the 2026-10-17 run; ADR-11 follow-ups):
-- Policy-bundle supersession: today a single admin can cancel a pending loosening, including an admin-set change that would remove that admin, by installing a 1-of-N tightening first ("tightening takes 1-of-N"). Keep this, or require M-of-N for any bundle that supersedes a pending one?
-- Confirm the ceiling on the loosening time lock (provisional: 30 days).
-- Version rule: strict `installed + 1` (current) or a bounded window `(h, h+K]` relying on the parent-digest link, so signers that missed a cancelled loosening do not diverge.
+Answered 2026-10-17 (ADR-11 follow-ups, recorded in `docs/adr/ADR-11-policy-distribution.md`):
+- While a loosening is pending, any bundle that supersedes it needs M-of-N.
+- Versions in `(h, h+K]` with K = 16 (provisional), ordered by the parent-digest link; loosening time lock capped at 30 days.
 
 Private decisions (business and owner-only, D-1..D-11) are in the private task list.
 
@@ -246,6 +245,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T05-2 | Port the TRON strict decoder (private G4 prototype) into `vaultex-verify` + negative tests + fuzz target skeleton | 05 | M6 | A | DONE 2026-10-11 | M |
 | T05-2b | Decoder refuses native TRX amounts above 2^53−1 sun (kernel default) | 05 | M6 | A | DONE 2026-10-17 | S |
 | T05-3 | Policy bundle v1 + vectors | 05 | M6 | A | DONE 2026-10-17 | M |
+| T05-3b | Policy bundle: M-of-N to supersede a pending bundle; version window `(h, h+K]`; 30-day lock cap (ADR-11 follow-ups) | 05 | M6 | A | READY | S |
 | T05-4 | Approvals v1 + vectors | 05 | M6 | A | READY | M |
 | T05-5 | Velocity store + breaker (fsync'd reservation, calibration helper, auto-pause, `kill -9` tests) | 05 | M6 | A | DONE 2026-10-11 | M |
 | T05-6 | Receipts v1 (signed, hash-chained, accept + refuse) + offline verifier | 05 | M6 | A | DONE 2026-10-11 | S |
