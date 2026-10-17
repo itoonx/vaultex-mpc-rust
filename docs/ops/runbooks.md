@@ -135,7 +135,7 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 2. Create a new host at the monitor domain's provider and apply the [host baseline](host-baseline.md).
 3. Restore `monitor.toml` from backup; its SHA-256 must match the latest ceremony or change record.
 4. Keys:
-   - Freeze key lost: make a new one ([CER-3](../ceremonies/guard.md#cer-3-monitor-keys)), add it with a tightening bundle (one admin while no loosening is pending, otherwise M-of-N; immediate), and remove the old one later with a loosening bundle (M-of-N, time-locked) ([CER-R3](../ceremonies/guard.md#cer-r3-monitor-key-rotation)).
+   - Freeze key lost: make a new one ([CER-3](../ceremonies/guard.md#cer-3-monitor-keys)), add it with a tightening bundle (one admin while no loosening is pending, otherwise M-of-N; immediate; the v1 bundle has no freeze-key field yet), and remove the old one later with a loosening bundle (M-of-N, time-locked) ([CER-R3](../ceremonies/guard.md#cer-r3-monitor-key-rotation)).
    - Evidence or ack key lost: make new ones and record them (CER-R3).
 5. Rebuild the receipt copy: pull the Guard's export from the receipt after the last evidence pack's head for the current receipt key (sequence numbers count per key; [evidence-pack.md](evidence-pack.md) §4), and verify that it extends that head. The anchors taken since that pack are lost with the host, so a rewrite inside that window would go unseen; record the gap in the incident record.
 6. Rescan the chain from the last solidified height in the last evidence pack, so nothing in the outage window is missed.
