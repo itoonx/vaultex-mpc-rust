@@ -247,7 +247,7 @@ ESTIMATE: Waves 1–3 ≈ 12–16 agent-weeks of work. Review load for the owner
 | T05-2b | Decoder refuses native TRX amounts above 2^53−1 sun (kernel default) | 05 | M6 | A | DONE 2026-10-17 | S |
 | T05-3 | Policy bundle v1 + vectors | 05 | M6 | A | DONE 2026-10-17 | M |
 | T05-3b | Policy bundle: M-of-N to supersede a pending bundle; version window `(h, h+K]`; 30-day lock cap (ADR-11 follow-ups) | 05 | M6 | A | DONE 2026-10-18 | S |
-| T05-3c | Policy bundle: quorum bundles anchor to the last quorum bundle (ADR-11 follow-up, 2026-10-18) | 05 | M6 | A | READY | S |
+| T05-3c | Policy bundle: quorum bundles anchor to the last quorum bundle (ADR-11 follow-up, 2026-10-18) | 05 | M6 | A | DONE 2026-10-18 | S |
 | T05-4 | Approvals v1 + vectors | 05 | M6 | A | READY | M |
 | T05-5 | Velocity store + breaker (fsync'd reservation, calibration helper, auto-pause, `kill -9` tests) | 05 | M6 | A | DONE 2026-10-11 | M |
 | T05-6 | Receipts v1 (signed, hash-chained, accept + refuse) + offline verifier | 05 | M6 | A | DONE 2026-10-11 | S |
