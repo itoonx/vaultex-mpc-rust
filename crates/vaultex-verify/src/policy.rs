@@ -110,7 +110,9 @@
 //!   it. Either way it takes M-of-N: no single admin can stop a pending change, such as an
 //!   admin-set rotation.
 //! - Steps cannot change the time lock (table below), so the lock a quorum loosening waits out is
-//!   the one the last quorum bundle set: steps can neither invalidate nor delay a quorum change.
+//!   the one the last quorum bundle set: steps cannot invalidate a quorum change or change its
+//!   lock. A step can still turn a quorum tightening into a loosening that waits the lock; the
+//!   quorum then re-signs against the bundle in force.
 //!
 //! **Using the policy.** [`PolicyState::for_version`] gives the bundle a request names: none
 //! installed is `NoPolicy` [NO_POLICY]; the pending version before its lock ends is `NotEffective`

@@ -35,7 +35,7 @@ From the security review of the policy bundle v1 (T05-3), answered by the owner 
 - **Superseding a pending bundle:** "ต้อง M-of-N ถ้ามี bundle รออยู่ (แนะนำ)". While a loosening is pending, any bundle that supersedes it needs M-of-N admin signatures, even a tightening. A single admin can no longer cancel a pending change, such as an admin-set rotation.
 - **Version rule and time lock:** "ช่วง (h, h+K] + lock ไม่เกิน 30 วัน (แนะนำ)". A candidate's version must lie in `(h, h+K]`, where `h` is the highest accepted version and K = 16 (provisional); order comes from the parent-digest link. The loosening time lock is capped at 30 days.
 
-- **Quorum bundles anchor to quorum bundles:** "Anchor กับ bundle M-of-N (แนะนำ)" (2026-10-18). An M-of-N bundle names the last M-of-N bundle as its parent and is not held to the version window, so 1-of-N tightenings issued in between can neither invalidate nor delay a quorum-signed change. It is still classified against the bundle in force, so a loosening keeps its time lock.
+- **Quorum bundles anchor to quorum bundles:** "Anchor กับ bundle M-of-N (แนะนำ)" (2026-10-18). An M-of-N bundle names the last M-of-N bundle as its parent and is not held to the version window, so 1-of-N tightenings issued in between cannot invalidate a quorum-signed change or change its time lock. It is still classified against the bundle in force, so a loosening keeps its time lock.
 
 ## Consequences
 

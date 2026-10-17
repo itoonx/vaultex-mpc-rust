@@ -231,7 +231,7 @@ Each row is one threat category. **Lands in** is the milestone whose exit criter
 | TH10 | Forged, duplicate or replayed approvals; approvals by keys without the approver role | AC2, AC3, AC8 | Approver keys only from the bundle; strict signature verification; one counted approval per key and per principal, and a duplicate is refused rather than deduplicated; expiry and TTL bounds | M6 #4 | Vectors; incident-replay cases |
 | TH11 | Self-approval by the initiator; collusion below the quorum | AC8 | The initiator's principal must differ from every approving principal; k-of-n by amount tier | M6 #4 | Incident-replay case |
 | TH12 | "The back office said yes": a missing initiator, or approvals asserted by a gateway | AC3 | Every signer verifies the initiator signature itself; a zero-approval tier must be explicit and quorum-signed | M6 #3–#4; M9 #2 | Incident-replay case |
-| TH13 | A compromised approver key | AC8, AC1 | Immediate freeze (1-of-N); removal through a later, time-locked bundle; hardware-held approver keys recommended | M6 #3, #5; M7 #4 | Runbook; drill log |
+| TH13 | A compromised approver key | AC8, AC1 | Immediate freeze (1-of-N); removal through a later bundle (removing an approver is a tightening: one admin while no loosening is pending, M-of-N otherwise); hardware-held approver keys recommended | M6 #3, #5; M7 #4 | Runbook; drill log |
 
 ### 6.3 Governance: policy bundle, admin set and orders
 
