@@ -53,15 +53,15 @@ impl NatsTlsConfig {
     /// Loads the CA cert, client cert, and client key from the configured paths.
     /// The client key bytes are zeroized after use (SEC-004 pattern).
     pub fn build_rustls_config(&self) -> Result<rustls::ClientConfig, CoreError> {
-        use std::io::BufReader;
+        use rustls::pki_types::pem::{self, PemObject};
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
         use zeroize::Zeroize;
 
         // 1. Load CA cert
         let ca_pem = std::fs::read(&self.ca_cert_path).map_err(|e| {
             CoreError::Transport(format!("read CA cert {}: {e}", self.ca_cert_path.display()))
         })?;
-        let mut ca_reader = BufReader::new(ca_pem.as_slice());
-        let ca_certs: Vec<_> = rustls_pemfile::certs(&mut ca_reader)
+        let ca_certs: Vec<_> = CertificateDer::pem_slice_iter(&ca_pem)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| CoreError::Transport(format!("parse CA cert: {e}")))?;
 
@@ -85,8 +85,7 @@ impl NatsTlsConfig {
                 self.client_cert_path.display()
             ))
         })?;
-        let mut client_reader = BufReader::new(client_pem.as_slice());
-        let client_certs: Vec<_> = rustls_pemfile::certs(&mut client_reader)
+        let client_certs: Vec<_> = CertificateDer::pem_slice_iter(&client_pem)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| CoreError::Transport(format!("parse client cert: {e}")))?;
 
@@ -97,10 +96,12 @@ impl NatsTlsConfig {
                 self.client_key_path.display()
             ))
         })?;
-        let mut key_reader = BufReader::new(key_pem.as_slice());
-        let client_key = rustls_pemfile::private_key(&mut key_reader)
-            .map_err(|e| CoreError::Transport(format!("parse client key: {e}")))?
-            .ok_or_else(|| CoreError::Transport("no private key found in PEM file".into()))?;
+        let client_key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| match e {
+            pem::Error::NoItemsFound => {
+                CoreError::Transport("no private key found in PEM file".into())
+            }
+            e => CoreError::Transport(format!("parse client key: {e}")),
+        })?;
         key_pem.zeroize(); // SEC-004 pattern: zeroize key bytes
 
         // 4. Build rustls config — TLS 1.2+ with default safe cipher suites

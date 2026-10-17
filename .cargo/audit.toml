@@ -4,9 +4,9 @@
 # (per shipped target, and with `--target all --all-features -e all` for "compiled at all") and with
 # a search of the workspace code.
 #
-# Every entry is an exception PENDING OWNER SIGN-OFF and carries "expires YYYY-MM-DD". The daily
-# workflow (.github/workflows/audit.yml) fails once that date has passed. Renew an entry only after a
-# fresh reachability review.
+# Every entry is an exception signed off by the owner 2026-10-16 (Q-RUN-5) and carries
+# "expires YYYY-MM-DD". The daily workflow (.github/workflows/audit.yml) fails once that date has
+# passed. Renew an entry only after a fresh reachability review.
 #
 # Verdicts:
 #   NOT COMPILED  only in Cargo.lock: an optional dependency that Cargo locks through a weak feature,
@@ -17,32 +17,17 @@
 #
 # RUSTSEC-2026-0220 (ruint < 1.20, compiled via alloy-primitives) is fixed by the lockfile-only bump to
 # ruint 1.20.1 (owner-approved 2026-10-13). The ark-* 0.6 entries it locks are never compiled.
+#
+# Closed 2026-10-16 (T02-4b), the crates have left Cargo.lock: RUSTSEC-2026-0049/0098/0099/0104
+# (rustls-webpki 0.102, by async-nats 0.47), RUSTSEC-2024-0437 (protobuf 2, by building prometheus
+# without default features) and RUSTSEC-2025-0134 (rustls-pemfile, replaced by the rustls-pki-types
+# PEM decoder).
 
 [advisories]
 ignore = [
-    # rustls-webpki 0.102.8. Only async-nats 0.38 depends on it. We pass async-nats a complete rustls
-    # ClientConfig, so certificates are verified by rustls 0.23 with the patched rustls-webpki 0.103.
-    # async-nats uses 0.102 only for type re-exports and for a root-store builder we never call.
-    # Fix: async-nats >= 0.47 (rustls-webpki ^0.103.10, no rustls-pemfile). That upgrade needs one
-    # crate not yet in Cargo.lock plus an async-nats API migration, so it waits for approval.
-    "RUSTSEC-2026-0049", # CRL distribution points; UNREACHED; sign-off pending; expires 2026-12-14
-    "RUSTSEC-2026-0098", # URI name constraints; UNREACHED; sign-off pending; expires 2026-12-14
-    "RUSTSEC-2026-0099", # wildcard name constraints; UNREACHED; sign-off pending; expires 2026-12-14
-    "RUSTSEC-2026-0104", # CRL parsing panic; UNREACHED; sign-off pending; expires 2026-12-14
-
-    # protobuf 2.28 via prometheus 0.13 (gateway metrics). The flaw is a recursion crash when parsing
-    # untrusted protobuf. The gateway only renders the text exposition format and never parses
-    # protobuf. Fix without new crates: build prometheus with default features off, which drops
-    # protobuf (prometheus 0.14 would add a new crate).
-    "RUSTSEC-2024-0437", # UNREACHED; sign-off pending; expires 2026-12-14
-
-    # rustls-pemfile 2.2 (unmaintained). It reads operator-supplied PEM files for NATS mTLS.
-    # Fix: use the PEM decoder in rustls-pki-types (already in Cargo.lock), then async-nats >= 0.46.
-    "RUSTSEC-2025-0134", # IN USE; sign-off pending; expires 2026-12-14
-
     # Unmaintained, and only an upstream release can fix them.
-    "RUSTSEC-2024-0436", # paste (alloy-primitives); BUILD-TIME; sign-off pending; expires 2026-12-14
-    "RUSTSEC-2023-0089", # atomic-polyfill (frost-core > postcard > heapless 0.7), only for targets without native atomics; NOT COMPILED; sign-off pending; expires 2026-12-14
-    "RUSTSEC-2024-0388", # derivative (ruint's optional ark-ff 0.3/0.4); NOT COMPILED; sign-off pending; expires 2026-12-14
-    "RUSTSEC-2026-0173", # proc-macro-error2 (alloy-sol-macro); NOT COMPILED; sign-off pending; expires 2026-12-14
+    "RUSTSEC-2024-0436", # paste (alloy-primitives); BUILD-TIME; signed off by the owner 2026-10-16 (Q-RUN-5); expires 2026-12-14
+    "RUSTSEC-2023-0089", # atomic-polyfill (frost-core > postcard > heapless 0.7), only for targets without native atomics; NOT COMPILED; signed off by the owner 2026-10-16 (Q-RUN-5); expires 2026-12-14
+    "RUSTSEC-2024-0388", # derivative (ruint's optional ark-ff 0.3/0.4); NOT COMPILED; signed off by the owner 2026-10-16 (Q-RUN-5); expires 2026-12-14
+    "RUSTSEC-2026-0173", # proc-macro-error2 (alloy-sol-macro); NOT COMPILED; signed off by the owner 2026-10-16 (Q-RUN-5); expires 2026-12-14
 ]
