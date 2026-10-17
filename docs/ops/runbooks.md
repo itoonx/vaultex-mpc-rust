@@ -42,7 +42,7 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 | MR-13 | Solvency at solidified height: the balance change differs from inflows − outflows − fees over every transaction the monitor observed, so something moved that the monitor did not see. Matching is MR-04's job | 1 | Yes | RB-1 |
 | MR-14 | The account's permissions differ from the expected set (keys, thresholds, operations, permission count). During a ceremony it is expected until `monitor.toml` is updated | 1 | Yes | RB-3 or RB-8, unless it is the ceremony's own change |
 | MR-15 | A token issuer action: deprecation, or blacklisting of the float (Sev-1, freezes); pause or a fee-parameter change (Sev-2) | 1 or 2 | Sev-1 cases | RB-12 |
-| MR-16 | Guard lifecycle: a **loosening** policy bundle offered (Sev-1 page inside its time-lock, no freeze); tightening, activation, state changes, key rotations (Sev-2). The changes a declared ceremony makes are expected (ceremony rule 2) | 1 or 2 | No | RB-1: confirm an admin intended it. Any admin cancels a pending loosening by issuing a tightening |
+| MR-16 | Guard lifecycle: a **loosening** policy bundle offered (Sev-1 page inside its time-lock, no freeze); tightening, activation, state changes, key rotations (Sev-2). The changes a declared ceremony makes are expected (ceremony rule 2) | 1 or 2 | No | RB-1: confirm an admin intended it. A pending loosening is superseded only by an M-of-N bundle; any admin can freeze |
 | MR-17 | An accept receipt whose transaction never appeared by its expiry plus 2 minutes | Info; Sev-2 above 5 a day | No | — |
 | MR-18 | A possible double pay: the same recipient, asset and amount within 24 h | 2 | No | RB-1 (reconcile with the operator) |
 | MR-19 | Spoofable noise: dust, zero-value transfers, zero-value `Approval` events, and events from unlisted contracts naming the float. Only a donation that takes the float past its MR-12 headroom can freeze, and that costs the sender real funds | Info | **Never** | — |
@@ -135,7 +135,7 @@ The monitor implements these rules in T07-3. IDs are append-only and never reuse
 2. Create a new host at the monitor domain's provider and apply the [host baseline](host-baseline.md).
 3. Restore `monitor.toml` from backup; its SHA-256 must match the latest ceremony or change record.
 4. Keys:
-   - Freeze key lost: make a new one ([CER-3](../ceremonies/guard.md#cer-3-monitor-keys)), add it with a tightening bundle (one admin, immediate), and remove the old one later with a loosening bundle (M-of-N, time-locked) ([CER-R3](../ceremonies/guard.md#cer-r3-monitor-key-rotation)).
+   - Freeze key lost: make a new one ([CER-3](../ceremonies/guard.md#cer-3-monitor-keys)), add it with a tightening bundle (one admin while no loosening is pending, otherwise M-of-N; immediate), and remove the old one later with a loosening bundle (M-of-N, time-locked) ([CER-R3](../ceremonies/guard.md#cer-r3-monitor-key-rotation)).
    - Evidence or ack key lost: make new ones and record them (CER-R3).
 5. Rebuild the receipt copy: pull the Guard's export from the receipt after the last evidence pack's head for the current receipt key (sequence numbers count per key; [evidence-pack.md](evidence-pack.md) §4), and verify that it extends that head. The anchors taken since that pack are lost with the host, so a rewrite inside that window would go unseen; record the gap in the incident record.
 6. Rescan the chain from the last solidified height in the last evidence pack, so nothing in the outage window is missed.
@@ -190,7 +190,7 @@ A refill that arrives without a matching PASS report pages Sev-2. **Evidence:** 
 **Trigger:** a change in the permission-update fee (#22), the multi-signature fee (#23) or the energy price.
 
 1. Re-check the fee-limit bounds in the policy bundle and the monitor's fee caps against the new values.
-2. Tighten (one admin, immediate) or loosen (M-of-N, time-locked) as needed.
+2. Tighten (one admin while no loosening is pending, otherwise M-of-N; immediate) or loosen (M-of-N, time-locked) as needed.
 3. Update the TRX reserve rule (RB-3 step 1) and the ceremony fee estimates.
 
 **Evidence:** the bundle digest.
@@ -206,7 +206,7 @@ A refill that arrives without a matching PASS report pages Sev-2. **Evidence:** 
 
 ### RB-13. Policy admin key lost or compromised
 
-1. A single admin key can freeze (availability) and can count towards a loosening, which is time-locked and pages Sev-1 (MR-16). If compromise is suspected, freeze and cancel any pending loosening by issuing a tightening.
+1. A single admin key can freeze (availability) and can count towards a loosening, which is time-locked and pages Sev-1 (MR-16). If compromise is suspected, freeze, and have the admin quorum supersede any pending loosening with an M-of-N bundle.
 2. The admin set is pinned in local configuration at a ceremony and is never changed by a network message. Replace the key with [CER-R5](../ceremonies/guard.md#cer-r5-admin-key-replacement).
 3. If the loss leaves fewer than M usable admin keys, no unfreeze or loosening is possible until CER-R5 completes. That is the intended failure mode.
 
